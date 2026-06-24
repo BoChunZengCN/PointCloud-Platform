@@ -1,0 +1,15 @@
+[project]
+name = "pc-system"
+version = "0.1.0"
+description = "Phase 1 point cloud LAS/LAZ processing system"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+pc-system = "pc_system.cli:main"
+
+[project.optional-dependencies]
+las = ["laspy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
