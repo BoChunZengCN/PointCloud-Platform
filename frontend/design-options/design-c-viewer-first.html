@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>C 查看器优先型</title>
+    <link rel="stylesheet" href="design-options.css" />
+  </head>
+  <body class="theme-viewer" data-design="viewer-first">
+    <main class="viewer-shell" aria-label="查看器优先型设计">
+      <nav class="option-nav compact floating" aria-label="设计版本导航">
+        <a href="index.html">总览</a>
+        <a href="design-a-production-workbench.html">A 生产工作台型</a>
+        <a href="design-b-project-dashboard.html">B 项目驾驶舱型</a>
+        <a aria-current="page" href="design-c-viewer-first.html">C 查看器优先型</a>
+      </nav>
+
+      <section class="immersive-viewer" aria-labelledby="viewer-title">
+        <div class="point-cloud-stage viewer-cloud" aria-label="三维点云展示区域">
+          <div class="axis x-axis"></div>
+          <div class="axis y-axis"></div>
+          <span class="cloud-dot d1"></span>
+          <span class="cloud-dot d2"></span>
+          <span class="cloud-dot d3"></span>
+          <span class="cloud-dot d4"></span>
+          <span class="cloud-dot d5"></span>
+          <span class="cloud-dot d6"></span>
+        </div>
+        <header class="viewer-title-block">
+          <p class="eyebrow">Viewer First</p>
+          <h1 id="viewer-title">site-a-las 三维成果查看器</h1>
+          <p>默认进入可观察成果，任务状态、图层和报告作为查看器覆盖面板。</p>
+        </header>
+      </section>
+
+      <aside class="viewer-control-panel" aria-label="图层与任务控制">
+        <section>
+          <h2>图层</h2>
+          <label><input type="checkbox" checked /> RGB 点云</label>
+          <label><input type="checkbox" checked /> 分割类别</label>
+          <label><input type="checkbox" /> 高斯泼溅预览</label>
+          <label><input type="checkbox" /> QA 异常标记</label>
+        </section>
+        <section>
+          <h2>当前资产</h2>
+          <dl>
+            <dt>格式</dt><dd>LAS/RGB</dd>
+            <dt>点数</dt><dd>12,840,000</dd>
+            <dt>状态</dt><dd>Viewer Ready</dd>
+          </dl>
+        </section>
+        <section>
+          <h2>任务</h2>
+          <div class="mini-status done">QA 完成</div>
+          <div class="mini-status active">Viewer 发布中</div>
+          <div class="mini-status">生产报告待确认</div>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>

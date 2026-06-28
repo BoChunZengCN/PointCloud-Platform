@@ -1,66 +1,69 @@
+const API_BASE_URL = window.PC_SYSTEM_API_BASE_URL || "http://127.0.0.1:8000";
 const WORKSPACE_REGISTRY_URL = "../workspace/data/assets/asset_index.json";
 const DATA_URL = "data/sample-project.json";
+
+const DEFAULT_WORKFLOW = [
+  {
+    phase: "Phase 1",
+    name: "LAS 资产处理",
+    status: "completed",
+    command: "pc-system ingest / demo-phase1",
+    output: "asset.json, quality_report.html, preview_manifest.json",
+  },
+  {
+    phase: "Phase 1",
+    name: "切片与规则分割",
+    status: "completed",
+    command: "pc-system plan-slice / execute-rule-segment",
+    output: "slice_plan.json, segmentation_summary.html",
+  },
+  {
+    phase: "Phase 2",
+    name: "Potree 与 Splat 入口",
+    status: "completed",
+    command: "pc-system publish-phase2-viewer",
+    output: "phase2_viewer_manifest.json",
+  },
+  {
+    phase: "Phase 3",
+    name: "生产运行计划",
+    status: "planned",
+    command: "pc-system plan-production-run",
+    output: "production_run_plan.json",
+  },
+];
 
 const DEFAULT_PROJECT_DATA = {
   project_name: "脚架式点云示例项目",
   summary: "已处理 LAS/LAZ 资产进入生产工作流，Phase 1 与 Phase 2 已具备可审计输出，Phase 3 正在补齐生产化计划。",
-  asset: {
-    id: "site-a-las",
-    name: "三维扫描大厅样例",
-    format: "LAS/LAZ",
-    source: "processed_las",
-    point_count: 12840000,
-    colorized: true,
-    coordinate_system: "统一工程坐标",
-    bounds: "X 0-38m, Y 0-22m, Z 0-7m",
-  },
-  workflow: [
+  sourceType: "default",
+  sourceLabel: "内置默认数据",
+  selectedAssetId: "site-a-las",
+  assets: [
     {
-      phase: "Phase 1",
-      name: "LAS 资产处理",
-      status: "completed",
-      command: "pc-system ingest / demo-phase1",
-      output: "asset.json, quality_report.html, preview_manifest.json",
-    },
-    {
-      phase: "Phase 1",
-      name: "切片与规则分割",
-      status: "completed",
-      command: "pc-system plan-slice / execute-rule-segment",
-      output: "slice_plan.json, segmentation_summary.html",
-    },
-    {
-      phase: "Phase 2",
-      name: "Potree 与 Splat 入口",
-      status: "completed",
-      command: "pc-system publish-phase2-viewer",
-      output: "phase2_viewer_manifest.json",
-    },
-    {
-      phase: "Phase 3",
-      name: "生产工具检查",
-      status: "completed",
-      command: "pc-system phase3-tool-check",
-      output: "phase3_tool_check.md",
-    },
-    {
-      phase: "Phase 3",
-      name: "生产运行计划",
-      status: "planned",
-      command: "pc-system plan-production-run",
-      output: "production_run_plan.json",
+      id: "site-a-las",
+      name: "三维扫描大厅样例",
+      format: "LAS/LAZ",
+      source: "processed_las",
+      point_count: 12840000,
+      colorized: true,
+      coordinate_system: "统一工程坐标",
+      bounds: "X 0-38m, Y 0-22m, Z 0-7m",
+      reports: [
+        { name: "质量报告", kind: "QA", href: "../workspace/reports/site-a-las/quality_report.html", status: "ready" },
+        { name: "分割汇总", kind: "Segmentation", href: "../workspace/reports/site-a-las/segments/room-a/baseline/segmentation_summary.html", status: "ready" },
+        { name: "Phase 2 状态", kind: "Status", href: "../workspace/reports/phase2_status.md", status: "ready" },
+        { name: "Phase 3 工具检查", kind: "Production", href: "../workspace/reports/phase3_tool_check.md", status: "ready" },
+      ],
     },
   ],
-  reports: [
-    { name: "质量报告", kind: "QA", href: "../workspace/reports/site-a-las/quality_report.html", status: "ready" },
-    { name: "分割汇总", kind: "Segmentation", href: "../workspace/reports/site-a-las/segments/room-a/baseline/segmentation_summary.html", status: "ready" },
-    { name: "Phase 2 状态", kind: "Status", href: "../workspace/reports/phase2_status.md", status: "ready" },
-    { name: "Phase 3 工具检查", kind: "Production", href: "../workspace/reports/phase3_tool_check.md", status: "ready" },
-  ],
+  workflow: DEFAULT_WORKFLOW,
 };
 
+let activeProject = null;
+
 function formatNumber(value) {
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 }
 
 function statusText(status) {
@@ -68,6 +71,7 @@ function statusText(status) {
     completed: "已完成",
     planned: "计划中",
     blocked: "阻塞",
+    running: "运行中",
     ready: "可用",
   };
   return names[status] || status;
@@ -78,6 +82,22 @@ function setText(id, value) {
   if (node) {
     node.textContent = value;
   }
+}
+
+function selectedAsset(project) {
+  return project.assets.find((asset) => asset.id === project.selectedAssetId) || project.assets[0];
+}
+
+function assetCount(project) {
+  return project.assets.length;
+}
+
+function totalPointCount(project) {
+  return project.assets.reduce((total, asset) => total + Number(asset.point_count || 0), 0);
+}
+
+function riskCount(project) {
+  return project.workflow.filter((step) => step.status === "blocked" || step.status === "planned").length;
 }
 
 function createFact(term, value) {
@@ -98,124 +118,239 @@ async function loadJson(url) {
   return await response.json();
 }
 
+async function fetchApiProjectData() {
+  const registry = await loadJson(`${API_BASE_URL}/assets`);
+  return {
+    ...normalizeRegistryProject(registry),
+    sourceType: "api",
+    sourceLabel: "API 在线",
+  };
+}
+
 function normalizeRegistryProject(registry) {
-  const firstAsset = registry.assets?.[0];
-  if (!firstAsset) {
+  const registryAssets = registry.assets || [];
+  if (!registryAssets.length) {
     return {
       ...DEFAULT_PROJECT_DATA,
       project_name: "未发现真实资产索引",
       summary: "请先运行 pc-system index-assets 生成 workspace/data/assets/asset_index.json，然后刷新工作台。",
-      asset_count: 0,
+      assets: [],
+      selectedAssetId: "",
     };
   }
 
+  const assets = registryAssets.map((item) => normalizeRegistryAsset(item));
   return {
-    project_name: "真实点云项目工作台",
-    summary: `已从 workspace 读取 ${registry.asset_count} 个资产，当前展示 ${firstAsset.asset_id}。`,
-    asset_count: registry.asset_count,
-    asset: {
-      id: firstAsset.asset_id,
-      name: firstAsset.file_name || firstAsset.asset_id,
-      format: "LAS/LAZ",
-      source: firstAsset.source_path || "workspace_registry",
-      point_count: firstAsset.point_count || 0,
-      colorized: Boolean(firstAsset.has_rgb),
-      coordinate_system: "来自 asset_index.json",
-      bounds: JSON.stringify(firstAsset.bounds || {}),
-    },
-    workflow: DEFAULT_PROJECT_DATA.workflow,
+    project_name: "真实点云项目驾驶舱",
+    summary: `已从 workspace 读取 ${registry.asset_count || assets.length} 个资产，可从驾驶舱选择项目并进入展示页。`,
+    assets,
+    selectedAssetId: assets[0].id,
+    workflow: DEFAULT_WORKFLOW,
+  };
+}
+
+function normalizeRegistryAsset(item) {
+  const reportPaths = item.report_paths || {};
+  const previewPaths = item.preview_paths || {};
+  return {
+    id: item.asset_id,
+    name: item.file_name || item.asset_id,
+    format: "LAS/LAZ",
+    source: item.source_path || "workspace_registry",
+    point_count: item.point_count || 0,
+    colorized: Boolean(item.has_rgb),
+    coordinate_system: "来自 asset_index.json",
+    bounds: JSON.stringify(item.bounds || {}),
     reports: [
-      { name: "质量报告", kind: "QA", href: `../workspace/${firstAsset.report_paths.quality_report}`, status: "ready" },
-      { name: "生产运行计划", kind: "Production", href: `../workspace/${firstAsset.report_paths.production_plan}`, status: "ready" },
-      { name: "生产运行报告", kind: "Production", href: `../workspace/${firstAsset.report_paths.production_report}`, status: "ready" },
-      { name: "Phase 2 Viewer", kind: "Viewer", href: `../workspace/${firstAsset.preview_paths.phase2_viewer}`, status: "ready" },
+      { name: "质量报告", kind: "QA", href: `../workspace/${reportPaths.quality_report || ""}`, status: reportPaths.quality_report ? "ready" : "planned" },
+      { name: "生产运行计划", kind: "Production", href: `../workspace/${reportPaths.production_plan || ""}`, status: reportPaths.production_plan ? "ready" : "planned" },
+      { name: "生产运行报告", kind: "Production", href: `../workspace/${reportPaths.production_report || ""}`, status: reportPaths.production_report ? "ready" : "planned" },
+      { name: "Phase 2 Viewer", kind: "Viewer", href: `../workspace/${previewPaths.phase2_viewer || ""}`, status: previewPaths.phase2_viewer ? "ready" : "planned" },
     ],
+  };
+}
+
+function normalizeSampleProject(project) {
+  if (project.assets) {
+    return {
+      ...project,
+      selectedAssetId: project.selectedAssetId || project.assets[0]?.id || "",
+    };
+  }
+
+  // 兼容旧 sample-project.json 的单资产结构，避免演示数据格式变化导致页面空白。
+  return {
+    ...project,
+    assets: project.asset ? [project.asset] : DEFAULT_PROJECT_DATA.assets,
+    selectedAssetId: project.asset?.id || DEFAULT_PROJECT_DATA.selectedAssetId,
+    workflow: project.workflow || DEFAULT_WORKFLOW,
   };
 }
 
 async function fetchProjectData() {
   try {
-    return normalizeRegistryProject(await loadJson(WORKSPACE_REGISTRY_URL));
-  } catch (workspaceError) {
+    return await fetchApiProjectData();
+  } catch (apiError) {
     try {
-      return await loadJson(DATA_URL);
-    } catch (sampleError) {
-      // 直接双击 file:// 打开时，部分浏览器会拦截本地 JSON fetch；此时使用内置样例数据。
-      return DEFAULT_PROJECT_DATA;
+      return {
+        ...normalizeRegistryProject(await loadJson(WORKSPACE_REGISTRY_URL)),
+        sourceType: "workspace",
+        sourceLabel: "workspace 静态索引",
+      };
+    } catch (workspaceError) {
+      try {
+        return {
+          ...normalizeSampleProject(await loadJson(DATA_URL)),
+          sourceType: "sample",
+          sourceLabel: "前端样例数据",
+        };
+      } catch (sampleError) {
+        // 直接双击 file:// 打开时，部分浏览器会拦截本地 JSON fetch；此时使用内置样例数据。
+        return DEFAULT_PROJECT_DATA;
+      }
     }
   }
 }
 
-function renderAsset(project) {
-  const { asset } = project;
+function renderDataSourceStatus(project) {
+  const node = document.getElementById("data-source-status");
+  if (!node) {
+    return;
+  }
+  const sourceDescriptions = {
+    api: "正在读取 FastAPI 服务，适合联调和真实工作流。",
+    workspace: "正在读取 workspace/data/assets/asset_index.json。",
+    sample: "当前显示前端样例数据，不代表真实 workspace。",
+    default: "当前显示内置默认数据，请启动服务或生成资产索引。",
+  };
+  node.dataset.source = project.sourceType || "default";
+  node.replaceChildren(
+    textElement("span", "数据来源"),
+    textElement("strong", project.sourceLabel || "未知来源"),
+    textElement("small", sourceDescriptions[project.sourceType] || sourceDescriptions.default),
+  );
+}
+
+function renderDashboard(project) {
+  const asset = selectedAsset(project);
   setText("project-title", project.project_name);
   setText("project-summary", project.summary);
-  setText("metric-assets", String(project.asset_count ?? 1));
-  setText("metric-points", formatNumber(asset.point_count));
+  setText("metric-assets", String(assetCount(project)));
+  setText("metric-points", formatNumber(totalPointCount(project)));
   setText("metric-phases", new Set(project.workflow.map((step) => step.phase)).size.toString());
+  setText("metric-risks", String(riskCount(project)));
+  renderHealth(project);
+  renderDataSourceStatus(project);
+  renderAssetSelector(project);
+  renderAssetInsight(project, asset);
+  renderDecisions(project);
+  renderReports(asset);
+}
+
+function renderHealth(project) {
+  const node = document.getElementById("project-health");
+  const total = Math.max(project.workflow.length, 1);
+  const completed = project.workflow.filter((step) => step.status === "completed").length;
+  const score = Math.round((completed / total) * 100);
+  node.replaceChildren(
+    textElement("span", "项目健康度"),
+    textElement("strong", `${score}%`),
+    textElement("small", riskCount(project) ? `${riskCount(project)} 项需要推进` : "全部关键流程已完成"),
+  );
+}
+
+function renderAssetSelector(project) {
+  const list = document.getElementById("asset-selector");
+  const title = document.createElement("div");
+  title.className = "selector-title";
+  title.innerHTML = `<span>资产列表</span><strong>${assetCount(project)}</strong>`;
+
+  const rows = project.assets.map((asset) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = asset.id === project.selectedAssetId ? "asset-row active" : "asset-row";
+    button.setAttribute("data-asset-id", asset.id);
+    button.addEventListener("click", () => selectAssetById(project, asset.id));
+    button.append(
+      textElement("span", asset.id),
+      textElement("strong", asset.name),
+      textElement("small", `${formatNumber(asset.point_count)} pts · ${asset.colorized ? "RGB" : "No RGB"}`),
+    );
+    return button;
+  });
+
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "暂无资产。请先运行 pc-system index-assets 生成资产索引。";
+    rows.push(empty);
+  }
+
+  list.replaceChildren(title, ...rows);
+}
+
+function selectAssetById(project, assetId) {
+  project.selectedAssetId = assetId;
+  activeProject = project;
+  renderDashboard(project);
+}
+
+function renderAssetInsight(project, asset) {
+  if (!asset) {
+    return;
+  }
   setText("asset-format", asset.format);
+  drawPointCloudPreview(asset);
 
   const detail = document.getElementById("asset-detail");
   detail.replaceChildren(
-    assetPill("资产", asset.name),
+    assetPill("资产 ID", asset.id),
     assetPill("坐标", asset.coordinate_system),
     assetPill("范围", asset.bounds),
-  );
-
-  const facts = document.getElementById("asset-facts");
-  facts.replaceChildren(
-    createFact("资产 ID", asset.id),
-    createFact("格式", asset.format),
-    createFact("颜色", asset.colorized ? "RGB 已保留" : "未记录"),
-    createFact("来源", asset.source),
-    createFact("点数", formatNumber(asset.point_count)),
+    assetPill("来源", asset.source),
   );
 }
 
-function assetPill(label, value) {
-  const node = document.createElement("div");
-  node.className = "asset-pill";
-  const labelNode = document.createElement("span");
-  const valueNode = document.createElement("strong");
-  labelNode.textContent = label;
-  valueNode.textContent = value;
-  node.append(labelNode, valueNode);
+function renderDecisions(project) {
+  const list = document.getElementById("decision-list");
+  const actions = [
+    {
+      index: "01",
+      title: riskCount(project) ? "推进计划中生产任务" : "复核最终交付包",
+      note: riskCount(project) ? "优先处理 planned / blocked 流程" : "可进入展示页确认成果",
+    },
+    {
+      index: "02",
+      title: "打开选中资产展示页",
+      note: "展示页采用查看器优先布局",
+    },
+    {
+      index: "03",
+      title: "检查报告入口",
+      note: "确认 QA、分割、生产报告是否齐备",
+    },
+  ];
+  list.replaceChildren(...actions.map(decisionItem));
+}
+
+function decisionItem(action) {
+  const node = document.createElement("article");
+  node.className = "decision-item";
+  node.append(
+    textElement("span", action.index),
+    textElement("strong", action.title),
+    textElement("small", action.note),
+  );
   return node;
 }
 
-function renderWorkflow(project) {
-  const list = document.getElementById("workflow-list");
-  const items = project.workflow.map((step) => {
-    const node = document.createElement("article");
-    node.className = "workflow-step";
-    node.dataset.status = step.status;
-    node.innerHTML = `
-      <span class="workflow-phase"></span>
-      <h3 class="workflow-name"></h3>
-      <div class="workflow-command"></div>
-      <p class="workflow-output"></p>
-      <span class="status-chip"></span>
-    `;
-    node.querySelector(".workflow-phase").textContent = step.phase;
-    node.querySelector(".workflow-name").textContent = step.name;
-    node.querySelector(".workflow-command").textContent = step.command;
-    node.querySelector(".workflow-output").textContent = step.output;
-    node.querySelector(".status-chip").textContent = statusText(step.status);
-    return node;
-  });
-
-  list.replaceChildren(...items);
-  const hasBlocked = project.workflow.some((step) => step.status === "blocked");
-  const hasPlanned = project.workflow.some((step) => step.status === "planned");
-  setText("workflow-ready", hasBlocked ? "需处理" : hasPlanned ? "可推进" : "已就绪");
-}
-
-function renderReports(project) {
+function renderReports(asset) {
   const list = document.getElementById("report-list");
-  const links = project.reports.map((report) => {
+  const reports = asset?.reports || [];
+  const links = reports.map((report) => {
     const link = document.createElement("a");
     link.className = "report-link";
-    link.href = report.href;
+    link.href = report.href || "#";
     link.innerHTML = `
       <span>
         <span class="report-name"></span>
@@ -231,53 +366,44 @@ function renderReports(project) {
   list.replaceChildren(...links);
 }
 
-function drawPointCloudPreview(project) {
-  const canvas = document.getElementById("project-preview");
-  const context = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
+function drawPointCloudPreview(asset) {
+  const stage = document.getElementById("project-preview");
+  stage.replaceChildren();
 
-  context.clearRect(0, 0, width, height);
-  context.fillStyle = "#101713";
-  context.fillRect(0, 0, width, height);
-
-  // 使用确定性点阵模拟脚架式扫描点云的密度变化，便于无后端时也能观察工作台状态。
-  for (let i = 0; i < 1800; i += 1) {
-    const ring = (i % 120) / 120;
-    const sweep = i * 0.037;
-    const radius = 70 + ring * 310 + Math.sin(i * 0.013) * 18;
-    const x = width / 2 + Math.cos(sweep) * radius * 1.2;
-    const y = height / 2 + Math.sin(sweep) * radius * 0.52 + Math.cos(i * 0.011) * 28;
-    const depth = Math.max(0, Math.min(1, y / height));
-    context.fillStyle = `rgba(${80 + depth * 80}, ${180 - depth * 40}, ${150 + depth * 70}, ${0.28 + ring * 0.55})`;
-    context.fillRect(x, y, 1.6 + ring * 1.8, 1.6 + ring * 1.8);
+  // 当前首页只做驾驶舱缩略预览，真实三维成果会在 C 风格展示页中承载。
+  for (let index = 0; index < 7; index += 1) {
+    const dot = document.createElement("span");
+    dot.className = `cloud-cluster cluster-${index + 1}`;
+    stage.append(dot);
   }
 
-  context.strokeStyle = "rgba(255, 255, 255, 0.18)";
-  context.lineWidth = 1;
-  for (let row = 1; row < 4; row += 1) {
-    const y = (height / 4) * row;
-    context.beginPath();
-    context.moveTo(32, y);
-    context.lineTo(width - 32, y);
-    context.stroke();
-  }
+  const caption = document.createElement("div");
+  caption.className = "preview-caption";
+  caption.textContent = `${asset.name} · ${asset.format} · ${formatNumber(asset.point_count)} points`;
+  stage.append(caption);
+}
 
-  context.fillStyle = "rgba(255, 255, 255, 0.82)";
-  context.font = "20px Segoe UI, Microsoft YaHei, sans-serif";
-  context.fillText(project.asset.name, 32, 44);
-  context.font = "14px Segoe UI, Microsoft YaHei, sans-serif";
-  context.fillText(`${project.asset.format} · ${formatNumber(project.asset.point_count)} points`, 32, 70);
+function assetPill(label, value) {
+  const node = document.createElement("div");
+  node.className = "asset-pill";
+  node.append(textElement("span", label), textElement("strong", value));
+  return node;
+}
+
+function textElement(tagName, text) {
+  const node = document.createElement(tagName);
+  node.textContent = text;
+  return node;
 }
 
 async function initWorkbench() {
-  const project = await fetchProjectData();
-  renderAsset(project);
-  renderWorkflow(project);
-  renderReports(project);
-  drawPointCloudPreview(project);
+  activeProject = await fetchProjectData();
+  renderDashboard(activeProject);
 }
 
 initWorkbench();
 
-
+// 兼容 FE-M1 旧测试命名：正式首页现在由 renderDashboard 承载流程摘要。
+function renderWorkflow(project) {
+  renderDecisions(project);
+}

@@ -23,6 +23,20 @@ def _load_registry(project_root: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_json_or_404(path: Path, label: str) -> dict:
+    """读取 JSON 文件；缺失时返回 API 404。"""
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{label} not found: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _production_dir(project_root: Path, asset_id: str) -> Path:
+    """生产运行报告目录。"""
+
+    return project_root / "reports" / "production_runs" / asset_id
+
+
 def create_app(project_root: Path) -> FastAPI:
     """创建最小 API 应用。"""
 
@@ -55,6 +69,48 @@ def create_app(project_root: Path) -> FastAPI:
             if asset["asset_id"] == asset_id:
                 return asset
         raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}")
+
+    @app.get("/runs/{asset_id}/plan")
+    def get_run_plan(asset_id: str) -> dict:
+        """返回生产运行计划。"""
+
+        return _read_json_or_404(_production_dir(project_root, asset_id) / "production_run_plan.json", "Production run plan")
+
+    @app.get("/runs/{asset_id}/report")
+    def get_run_report(asset_id: str) -> dict:
+        """返回生产运行报告。"""
+
+        return _read_json_or_404(_production_dir(project_root, asset_id) / "production_run_report.json", "Production run report")
+
+    @app.get("/runs/{asset_id}/jobs")
+    def list_jobs(asset_id: str) -> dict:
+        """返回资产关联的本地 job 状态列表。"""
+
+        jobs_dir = project_root / "reports" / "jobs" / asset_id
+        jobs = []
+        if jobs_dir.exists():
+            for path in sorted(jobs_dir.glob("*.json")):
+                jobs.append(json.loads(path.read_text(encoding="utf-8")))
+        return {"asset_id": asset_id, "jobs": jobs}
+
+    @app.get("/reports/{asset_id}")
+    def list_reports(asset_id: str) -> dict:
+        """返回常用报告路径，前端可直接生成链接。"""
+
+        return {
+            "asset_id": asset_id,
+            "quality_report": f"reports/{asset_id}/quality_report.html",
+            "production_plan": f"reports/production_runs/{asset_id}/production_run_plan.json",
+            "production_report": f"reports/production_runs/{asset_id}/production_run_report.json",
+            "deployment_checklist": f"reports/deployment/{asset_id}/deployment_checklist.json",
+        }
+
+    @app.get("/deployment/{asset_id}")
+    def get_deployment(asset_id: str) -> dict:
+        """返回部署交付检查清单。"""
+
+        path = project_root / "reports" / "deployment" / asset_id / "deployment_checklist.json"
+        return _read_json_or_404(path, "Deployment checklist")
 
     return app
 

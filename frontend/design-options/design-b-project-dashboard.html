@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B 项目驾驶舱型</title>
+    <link rel="stylesheet" href="design-options.css" />
+  </head>
+  <body class="theme-dashboard" data-design="project-dashboard">
+    <main class="app-frame dashboard-frame" aria-label="项目驾驶舱型设计">
+      <nav class="option-nav compact" aria-label="设计版本导航">
+        <a href="index.html">总览</a>
+        <a href="design-a-production-workbench.html">A 生产工作台型</a>
+        <a aria-current="page" href="design-b-project-dashboard.html">B 项目驾驶舱型</a>
+        <a href="design-c-viewer-first.html">C 查看器优先型</a>
+      </nav>
+
+      <header class="dashboard-hero" aria-labelledby="dashboard-title">
+        <div>
+          <p class="eyebrow">Executive Dashboard</p>
+          <h1 id="dashboard-title">点云项目驾驶舱</h1>
+          <p>面向项目经理和客户汇报，优先呈现规模、质量、交付风险和下一步决策。</p>
+        </div>
+        <div class="health-gauge" aria-label="项目健康度">
+          <span>项目健康度</span>
+          <strong>86%</strong>
+          <small>2 项风险需要确认</small>
+        </div>
+      </header>
+
+      <section class="kpi-grid" aria-label="项目关键指标">
+        <article><span>总资产</span><strong>3</strong><small>2 个已发布</small></article>
+        <article><span>总点数</span><strong>23.2M</strong><small>RGB 保留率 100%</small></article>
+        <article><span>任务完成</span><strong>72%</strong><small>Phase 3 进行中</small></article>
+        <article><span>交付风险</span><strong>2</strong><small>报告缺失 / Viewer 待发布</small></article>
+      </section>
+
+      <section class="dashboard-main">
+        <section class="portfolio-map" aria-label="资产组合概览">
+          <div class="map-card high"><strong>site-a-las</strong><span>Ready</span></div>
+          <div class="map-card medium"><strong>atrium-scan</strong><span>Segmenting</span></div>
+          <div class="map-card low"><strong>floor-03</strong><span>Blocked</span></div>
+          <div class="map-card high"><strong>phase2-viewer</strong><span>Published</span></div>
+        </section>
+        <aside class="decision-panel" aria-label="决策事项">
+          <h2>下一步决策</h2>
+          <div class="decision-item priority">
+            <span>01</span>
+            <strong>确认分割规则是否进入生产运行</strong>
+            <small>影响 production_run_plan.json</small>
+          </div>
+          <div class="decision-item">
+            <span>02</span>
+            <strong>选择 Potree 或 Gaussian Splatting 作为默认展示入口</strong>
+            <small>影响客户交付页面</small>
+          </div>
+          <div class="decision-item">
+            <span>03</span>
+            <strong>补齐 tower-floor-03 的 QA 报告</strong>
+            <small>当前阻塞发布</small>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

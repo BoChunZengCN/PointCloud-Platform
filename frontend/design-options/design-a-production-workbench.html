@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A 生产工作台型</title>
+    <link rel="stylesheet" href="design-options.css" />
+  </head>
+  <body class="theme-workbench" data-design="production-workbench">
+    <main class="app-frame workbench-frame" aria-label="生产工作台型设计">
+      <nav class="option-nav compact" aria-label="设计版本导航">
+        <a href="index.html">总览</a>
+        <a aria-current="page" href="design-a-production-workbench.html">A 生产工作台型</a>
+        <a href="design-b-project-dashboard.html">B 项目驾驶舱型</a>
+        <a href="design-c-viewer-first.html">C 查看器优先型</a>
+      </nav>
+
+      <header class="top-command-bar" aria-label="项目状态">
+        <div>
+          <p class="eyebrow">Production Workbench</p>
+          <h1>脚架式点云生产工作台</h1>
+        </div>
+        <div class="source-strip" aria-label="数据来源">
+          <span>数据来源</span>
+          <strong>API 在线</strong>
+          <small>workspace/data/assets 已同步</small>
+        </div>
+      </header>
+
+      <section class="workbench-layout">
+        <aside class="asset-rail" aria-label="资产选择器">
+          <div class="rail-title">
+            <span>资产</span>
+            <strong>3</strong>
+          </div>
+          <button class="asset-row active">
+            <span>site-a-las</span>
+            <strong>12,840,000 pts</strong>
+            <small>LAS/RGB/已就绪</small>
+          </button>
+          <button class="asset-row">
+            <span>atrium-scan</span>
+            <strong>8,270,000 pts</strong>
+            <small>LAZ/待分割</small>
+          </button>
+          <button class="asset-row warning">
+            <span>tower-floor-03</span>
+            <strong>2,110,000 pts</strong>
+            <small>报告缺失</small>
+          </button>
+        </aside>
+
+        <section class="operator-stage" aria-labelledby="operator-title">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Preview</p>
+              <h2 id="operator-title">点云处理视窗</h2>
+            </div>
+            <span class="status-pill ready">生产可推进</span>
+          </div>
+          <div class="point-cloud-stage workbench-cloud" aria-label="点云预览图">
+            <div class="scan-line"></div>
+            <span class="cloud-dot d1"></span>
+            <span class="cloud-dot d2"></span>
+            <span class="cloud-dot d3"></span>
+            <span class="cloud-dot d4"></span>
+            <span class="cloud-dot d5"></span>
+          </div>
+          <div class="action-row" aria-label="推荐动作">
+            <button>生成生产计划</button>
+            <button>查看质量报告</button>
+            <button>打开 Potree 预览</button>
+          </div>
+        </section>
+
+        <aside class="task-panel" aria-label="任务与报告">
+          <section>
+            <h2>生产流程</h2>
+            <ol class="step-list">
+              <li class="done"><span>01</span><strong>资产入库</strong><small>已完成</small></li>
+              <li class="done"><span>02</span><strong>质量检查</strong><small>已完成</small></li>
+              <li class="active"><span>03</span><strong>切片与分割</strong><small>运行中</small></li>
+              <li><span>04</span><strong>发布查看器</strong><small>等待</small></li>
+            </ol>
+          </section>
+          <section>
+            <h2>报告</h2>
+            <div class="report-stack">
+              <a href="#">quality_report.html</a>
+              <a href="#">production_run_plan.json</a>
+              <a href="#">segmentation_summary.html</a>
+            </div>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

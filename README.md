@@ -85,6 +85,12 @@ python -m pytest tests -q -p no:cacheprovider
 python -m pip install laspy
 ```
 
+
+Job Runner / 本地作业状态:
+
+Job Runner 当前以文件方式记录生产计划的执行状态，适合作为后续异步任务队列的轻量地基。API 会从 `reports/jobs/<asset_id>/*.json` 读取 job 状态。
+
+The Job Runner currently records production-plan execution state as local JSON files. This keeps the first execution model simple and prepares the API for a later async queue.
 ## 前端工作台 / Frontend Workbench
 
 FE-M1 已提供静态点云项目工作台，入口文件位于 `frontend/index.html`。第一版使用 `frontend/data/sample-project.json` 作为样例项目数据，并在浏览器限制本地 JSON 读取时回退到脚本内置样例数据。
@@ -97,9 +103,9 @@ FE-M1 provides a static point-cloud project workbench at `frontend/index.html`. 
 .\frontend\index.html
 ```
 
-当前工作台包含项目概览、资产总览、canvas 点云预览、Phase 1/2/3 流程轨道和报告入口。FE-M2 已优先读取 `workspace/data/assets/asset_index.json`，没有真实索引时回退到样例数据。
+当前工作台包含项目概览、资产总览、canvas 点云预览、Phase 1/2/3 流程轨道和报告入口。FE-M2 已优先读取 FastAPI `/assets`，API 不可用时再读取 `workspace/data/assets/asset_index.json`，没有真实索引时回退到样例数据。
 
-The current workbench includes project summary, asset facts, a canvas point-cloud preview, Phase 1/2/3 workflow steps, and report links. FE-M2 now prefers `workspace/data/assets/asset_index.json` and falls back to sample data when no real registry exists.
+The current workbench includes project summary, asset facts, a canvas point-cloud preview, Phase 1/2/3 workflow steps, and report links. FE-M2 now prefers the FastAPI `/assets` endpoint, falls back to `workspace/data/assets/asset_index.json`, and finally uses sample data when no real registry exists.
 
 展示型查看器入口 / Showcase viewer:
 
@@ -374,6 +380,7 @@ workspace/
 - `docs/phase1-development-plan.md`
 - `docs/phase2-development-plan.md`
 - `docs/phase3-development-plan.md`
+
 
 
 

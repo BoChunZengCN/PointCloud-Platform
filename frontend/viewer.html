@@ -3,20 +3,58 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>展示型查看器入口 / Showcase Viewer</title>
+    <title>展示型查看器入口 / 点云项目展示页 / Viewer First Showcase</title>
     <link rel="stylesheet" href="viewer.css" />
   </head>
   <body>
-    <main class="showcase-shell">
-      <section class="showcase-hero">
-        <p class="eyebrow">Delivery Viewer</p>
-        <h1>展示型查看器入口</h1>
-        <p id="showcase-summary">加载点云交付成果...</p>
+    <main class="viewer-shell" data-view="viewer-first" aria-label="点云项目查看器优先展示页">
+      <nav class="viewer-nav" aria-label="展示页导航">
+        <a href="index.html">项目驾驶舱</a>
+        <a aria-current="page" href="viewer.html">项目展示页</a>
+      </nav>
+
+      <section class="immersive-viewer" aria-labelledby="viewer-title">
+        <div class="viewer-frame-panel" aria-label="嵌入查看器">
+          <iframe id="viewer-frame" title="点云成果嵌入查看器"></iframe>
+          <div id="viewer-placeholder" class="viewer-placeholder" aria-hidden="true">
+            <span class="cloud-dot d1"></span>
+            <span class="cloud-dot d2"></span>
+            <span class="cloud-dot d3"></span>
+            <span class="cloud-dot d4"></span>
+            <span class="cloud-dot d5"></span>
+          </div>
+        </div>
+        <header class="viewer-title-block">
+          <p class="eyebrow">Viewer First</p>
+          <h1 id="viewer-title">点云项目展示页</h1>
+          <p id="showcase-summary">加载点云交付成果...</p>
+        </header>
       </section>
 
-      <section id="showcase-links" class="showcase-links" aria-label="成果入口"></section>
+      <aside class="viewer-control-panel" aria-label="图层、任务与报告">
+        <section class="control-section" aria-labelledby="layer-title">
+          <h2 id="layer-title">图层</h2>
+          <div id="layer-controls" class="layer-controls"></div>
+        </section>
+
+        <section class="control-section" aria-labelledby="asset-title">
+          <h2 id="asset-title">当前资产</h2>
+          <dl id="asset-facts" class="asset-facts"></dl>
+        </section>
+
+        <section class="control-section" aria-labelledby="task-title">
+          <h2 id="task-title">任务</h2>
+          <div id="viewer-task-list" class="viewer-task-list"></div>
+        </section>
+
+        <section class="control-section" aria-labelledby="report-title">
+          <h2 id="report-title">报告与成果</h2>
+          <div id="showcase-links" class="showcase-links" aria-label="成果入口"></div>
+        </section>
+      </aside>
     </main>
 
     <script src="viewer.js" defer></script>
   </body>
 </html>
+

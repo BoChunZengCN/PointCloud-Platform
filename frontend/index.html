@@ -3,51 +3,79 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>点云项目工作台 / Point Cloud Workbench</title>
+    <title>点云项目工作台 / 点云项目驾驶舱 / Point Cloud Dashboard</title>
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <main class="project-shell" aria-label="点云项目工作台">
-      <section class="hero-panel" aria-labelledby="project-title">
-        <div class="project-heading">
-          <p class="eyebrow">Point Cloud Platform</p>
-          <h1 id="project-title">点云项目工作台</h1>
+    <main class="project-dashboard-shell" data-view="project-dashboard" aria-label="点云项目工作台与点云项目驾驶舱">
+      <nav class="top-nav" aria-label="主导航">
+        <a aria-current="page" href="index.html">项目驾驶舱</a>
+        <a href="viewer.html">展示页</a>
+        <a href="design-options/index.html">设计候选</a>
+      </nav>
+
+      <section class="dashboard-hero" aria-labelledby="project-title">
+        <div>
+          <p class="eyebrow">Point Cloud Dashboard</p>
+          <h1 id="project-title">点云项目驾驶舱</h1>
           <p id="project-summary" class="summary-line">加载项目状态...</p>
         </div>
-        <div class="project-metrics" aria-label="项目指标">
-          <div class="metric-block">
-            <span class="metric-label">资产</span>
-            <strong id="metric-assets">-</strong>
-          </div>
-          <div class="metric-block">
-            <span class="metric-label">点数</span>
-            <strong id="metric-points">-</strong>
-          </div>
-          <div class="metric-block">
-            <span class="metric-label">阶段</span>
-            <strong id="metric-phases">-</strong>
-          </div>
+        <div id="project-health" class="health-card" aria-label="项目健康度">
+          <span>项目健康度</span>
+          <strong>-</strong>
+          <small>等待数据</small>
         </div>
       </section>
 
-      <section class="workspace-grid">
-        <section class="viewport-panel" aria-labelledby="preview-title">
+      <section id="data-source-status" class="data-source-status" aria-label="数据来源状态">
+        <span>数据来源</span>
+        <strong>检查中</strong>
+        <small>正在读取 API 或 workspace 数据</small>
+      </section>
+
+      <section class="kpi-grid" aria-label="项目关键指标">
+        <article>
+          <span>资产</span>
+          <strong id="metric-assets">-</strong>
+          <small>当前 workspace</small>
+        </article>
+        <article>
+          <span>点数</span>
+          <strong id="metric-points">-</strong>
+          <small>已登记点云</small>
+        </article>
+        <article>
+          <span>流程</span>
+          <strong id="metric-phases">-</strong>
+          <small>生产阶段</small>
+        </article>
+        <article>
+          <span>风险</span>
+          <strong id="metric-risks">-</strong>
+          <small>阻塞与计划项</small>
+        </article>
+      </section>
+
+      <section class="dashboard-main" aria-label="项目驾驶舱主体">
+        <section id="asset-selector" class="asset-selector" aria-label="资产选择"></section>
+
+        <section class="project-insight-panel" aria-labelledby="insight-title">
           <div class="section-title-row">
             <div>
-              <p class="eyebrow">Preview</p>
-              <h2 id="preview-title">点云视窗</h2>
+              <p class="eyebrow">Selected Asset</p>
+              <h2 id="insight-title">资产概览</h2>
             </div>
             <span id="asset-format" class="status-chip">LAS/LAZ</span>
           </div>
-          <canvas id="project-preview" width="920" height="520" aria-label="点云预览画布"></canvas>
+          <div id="project-preview" class="point-cloud-preview" aria-label="点云项目预览"></div>
           <div id="asset-detail" class="asset-detail"></div>
         </section>
 
-        <aside class="side-panel" aria-label="项目侧栏">
-          <section class="info-card" aria-labelledby="asset-title">
-            <p class="eyebrow">Asset</p>
-            <h2 id="asset-title">资产总览</h2>
-            <dl id="asset-facts" class="fact-list"></dl>
+        <aside class="decision-panel" aria-label="下一步决策">
+          <section class="info-card" aria-labelledby="decision-title">
+            <p class="eyebrow">Next Actions</p>
+            <h2 id="decision-title">下一步决策</h2>
+            <div id="decision-list" class="decision-list"></div>
           </section>
 
           <section class="info-card" aria-labelledby="reports-title">
@@ -57,19 +85,9 @@
           </section>
         </aside>
       </section>
-
-      <section class="workflow-panel" aria-labelledby="workflow-title">
-        <div class="section-title-row">
-          <div>
-            <p class="eyebrow">Workflow</p>
-            <h2 id="workflow-title">生产流程</h2>
-          </div>
-          <span id="workflow-ready" class="status-chip">检查中</span>
-        </div>
-        <div id="workflow-list" class="workflow-list"></div>
-      </section>
     </main>
 
     <script src="app.js" defer></script>
   </body>
 </html>
+
