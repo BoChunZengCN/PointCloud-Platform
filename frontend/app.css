@@ -466,3 +466,40 @@ h2 {
 }
 
 /* Compatibility markers for earlier FE-M1 contracts: project-shell, workflow-step. */
+
+.asset-row-shell {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  overflow: hidden;
+}
+
+.asset-row-shell.active {
+  border-color: var(--cyan);
+  box-shadow: inset 4px 0 0 var(--cyan);
+}
+
+.asset-row-shell .asset-row {
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.asset-viewer-link {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px 10px;
+  color: var(--cyan);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.asset-viewer-link:hover,
+.asset-viewer-link:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}

@@ -16,6 +16,7 @@
       <section class="immersive-viewer" aria-labelledby="viewer-title">
         <div class="viewer-frame-panel" aria-label="嵌入查看器">
           <iframe id="viewer-frame" title="点云成果嵌入查看器"></iframe>
+                    <div id="viewer-empty-state" class="viewer-empty-state" aria-live="polite"></div>
           <div id="viewer-placeholder" class="viewer-placeholder" aria-hidden="true">
             <span class="cloud-dot d1"></span>
             <span class="cloud-dot d2"></span>
@@ -24,6 +25,11 @@
             <span class="cloud-dot d5"></span>
           </div>
         </div>
+                <div id="viewer-status-bar" class="viewer-status-bar" data-viewer-status="empty" aria-label="当前查看器状态">
+          <span id="viewer-status-title">当前查看器</span>
+          <strong>未自动加载</strong>
+          <small id="viewer-status-detail">等待可嵌入 HTML 查看器</small>
+        </div>
         <header class="viewer-title-block">
           <p class="eyebrow">Viewer First</p>
           <h1 id="viewer-title">点云项目展示页</h1>
@@ -31,7 +37,11 @@
         </header>
       </section>
 
-      <aside class="viewer-control-panel" aria-label="图层、任务与报告">
+            <aside class="viewer-control-panel" aria-label="图层、任务与报告">
+        <section class="control-section" aria-labelledby="switcher-title">
+          <h2 id="switcher-title">资产切换</h2>
+          <div id="showcase-asset-switcher" class="asset-switcher-list" aria-label="展示页资产切换"></div>
+        </section>
         <section class="control-section" aria-labelledby="layer-title">
           <h2 id="layer-title">图层</h2>
           <div id="layer-controls" class="layer-controls"></div>
@@ -57,4 +67,7 @@
     <script src="viewer.js" defer></script>
   </body>
 </html>
+
+
+
 

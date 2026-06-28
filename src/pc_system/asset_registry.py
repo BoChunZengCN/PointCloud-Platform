@@ -39,6 +39,13 @@ def _asset_entry(metadata: dict) -> dict:
             "potree_manifest": f"previews/{asset_id}/potree_manifest.json",
             "phase2_viewer": f"previews/{asset_id}/phase2_viewer_manifest.json",
         },
+        "viewer_paths": {
+            "viewer_url": f"previews/{asset_id}/phase2_viewer.html",
+            "viewer_html_path": f"previews/{asset_id}/phase2_viewer.html",
+            "manifest_path": f"previews/{asset_id}/phase2_viewer_manifest.json",
+            "potree_manifest_path": f"previews/{asset_id}/potree_manifest.json",
+            "report_path": f"reports/production_runs/{asset_id}/production_run_report.md",
+        },
         "report_paths": {
             "quality_report": f"reports/{asset_id}/quality_report.html",
             "production_plan": f"reports/production_runs/{asset_id}/production_run_plan.md",
@@ -82,3 +89,4 @@ def write_asset_registry(registry: dict, output_dir: Path) -> dict[str, Path]:
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(_render_markdown(registry), encoding="utf-8")
     return {"json": json_path, "markdown": markdown_path}
+

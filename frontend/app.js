@@ -84,6 +84,10 @@ function setText(id, value) {
   }
 }
 
+function viewerUrlForAsset(asset) {
+  return `viewer.html?asset_id=${encodeURIComponent(asset.id)}`;
+}
+
 function selectedAsset(project) {
   return project.assets.find((asset) => asset.id === project.selectedAssetId) || project.assets[0];
 }
@@ -266,9 +270,12 @@ function renderAssetSelector(project) {
   title.innerHTML = `<span>资产列表</span><strong>${assetCount(project)}</strong>`;
 
   const rows = project.assets.map((asset) => {
+    const row = document.createElement("article");
+    row.className = asset.id === project.selectedAssetId ? "asset-row-shell active" : "asset-row-shell";
+
     const button = document.createElement("button");
     button.type = "button";
-    button.className = asset.id === project.selectedAssetId ? "asset-row active" : "asset-row";
+    button.className = "asset-row";
     button.setAttribute("data-asset-id", asset.id);
     button.addEventListener("click", () => selectAssetById(project, asset.id));
     button.append(
@@ -276,7 +283,13 @@ function renderAssetSelector(project) {
       textElement("strong", asset.name),
       textElement("small", `${formatNumber(asset.point_count)} pts · ${asset.colorized ? "RGB" : "No RGB"}`),
     );
-    return button;
+
+    const viewerLink = document.createElement("a");
+    viewerLink.className = "asset-viewer-link";
+    viewerLink.href = viewerUrlForAsset(asset);
+    viewerLink.textContent = "打开展示页";
+    row.append(button, viewerLink);
+    return row;
   });
 
   if (!rows.length) {
@@ -407,3 +420,6 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
+
+

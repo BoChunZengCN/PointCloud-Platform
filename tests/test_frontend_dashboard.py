@@ -53,3 +53,107 @@ def test_project_showcase_uses_viewer_first_contract():
     assert "renderLayerControls" in script
     assert "renderViewerTasks" in script
     assert ".viewer-shell" in css
+
+
+def test_dashboard_links_selected_assets_to_viewer_route():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+
+    assert "viewerUrlForAsset" in script
+    assert "viewer.html?asset_id=" in script
+    assert "encodeURIComponent(asset.id)" in script
+    assert "打开展示页" in script
+
+
+def test_viewer_selects_asset_from_url_parameter():
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+
+    assert "selectedAssetIdFromUrl" in script
+    assert "new URLSearchParams(window.location.search)" in script
+    assert "selectShowcaseAsset" in script
+    assert "asset.asset_id === selectedAssetId" in script
+
+
+def test_viewer_has_asset_switcher_inside_showcase():
+    html = (FRONTEND / "viewer.html").read_text(encoding="utf-8")
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    assert "showcase-asset-switcher" in html
+    assert "renderShowcaseAssetSwitcher" in script
+    assert "switchShowcaseAsset" in script
+    assert "viewer.html?asset_id=" in script
+    assert "asset-switcher-list" in css
+    assert "showcase-asset-button" in css
+
+
+def test_viewer_delivery_items_explain_embed_status_and_missing_outputs():
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    assert "deliveryItemStatus" in script
+    assert "isEmbeddableViewer" in script
+    assert "manifest" in script
+    assert "missing" in script
+    assert "data-status" in script
+    assert "可嵌入" in script
+    assert "Manifest" in script
+    assert "缺失" in script
+    assert "showcase-status" in css
+    assert "data-status=\"missing\"" in css
+
+
+def test_viewer_status_bar_reports_current_viewer_state():
+    html = (FRONTEND / "viewer.html").read_text(encoding="utf-8")
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    assert "viewer-status-bar" in html
+    assert "viewer-status-title" in html
+    assert "viewer-status-detail" in html
+    assert "renderViewerStatus" in script
+    assert "当前查看器" in script
+    assert "未自动加载" in script
+    assert "data-viewer-status" in script
+    assert ".viewer-status-bar" in css
+    assert "viewer-status-detail" in css
+
+
+def test_viewer_marks_active_delivery_item():
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    assert "setActiveDeliveryItem" in script
+    assert "data-delivery-id" in script
+    assert "activeDeliveryId" in script
+    assert "showcase-card active" in script
+    assert ".showcase-card.active" in css
+
+
+def test_viewer_empty_state_explains_next_cli_actions():
+    html = (FRONTEND / "viewer.html").read_text(encoding="utf-8")
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    assert "viewer-empty-state" in html
+    assert "renderViewerEmptyState" in script
+    assert "pc-system publish-phase2-viewer" in script
+    assert "pc-system plan-production-run" in script
+    assert "viewer-empty-state" in css
+
+
+def test_viewer_status_bar_mobile_rules_override_base_styles():
+    css = (FRONTEND / "viewer.css").read_text(encoding="utf-8")
+
+    base_index = css.index(".viewer-status-bar {")
+    mobile_index = css.rindex("@media (max-width: 560px)")
+    assert mobile_index > base_index
+
+
+def test_viewer_prefers_api_delivery_status_over_extension_guessing():
+    script = (FRONTEND / "viewer.js").read_text(encoding="utf-8")
+
+    assert "API_BASE_URL" in script
+    assert "/delivery/" in script
+    assert "fetchDeliveryStatus" in script
+    assert "applyDeliveryStatus" in script
+    assert "statusByPath" in script

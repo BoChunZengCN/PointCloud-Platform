@@ -33,3 +33,39 @@ def test_api_exposes_runs_reports_and_deployment_resources():
     assert client.get("/runs/scan/jobs").json()["jobs"][0]["job_id"] == "job-scan"
     assert client.get("/reports/scan").json()["production_report"].endswith("production_run_report.json")
     assert client.get("/deployment/scan").json()["ready"] is True
+
+
+def test_api_reports_delivery_output_status_and_file_kinds():
+    project = case_dir("api-delivery-status") / "workspace"
+    write_json(
+        project / "data" / "assets" / "asset_index.json",
+        {
+            "schema_version": "1.0",
+            "asset_count": 1,
+            "assets": [
+                {
+                    "asset_id": "scan",
+                    "viewer_paths": {
+                        "viewer_url": "previews/scan/phase2_viewer.html",
+                        "manifest_path": "previews/scan/phase2_viewer_manifest.json",
+                        "report_path": "reports/production_runs/scan/production_run_report.md",
+                    },
+                    "report_paths": {"quality_report": "reports/scan/quality_report.html"},
+                }
+            ],
+        },
+    )
+    (project / "previews" / "scan").mkdir(parents=True)
+    (project / "previews" / "scan" / "phase2_viewer.html").write_text("<html></html>", encoding="utf-8")
+    (project / "previews" / "scan" / "phase2_viewer_manifest.json").write_text("{}", encoding="utf-8")
+
+    client = TestClient(create_app(project))
+    response = client.get("/delivery/scan/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["asset_id"] == "scan"
+    assert payload["outputs"]["viewer_url"]["exists"] is True
+    assert payload["outputs"]["viewer_url"]["kind"] == "html"
+    assert payload["outputs"]["manifest_path"]["kind"] == "manifest"
+    assert payload["outputs"]["report_path"]["exists"] is False

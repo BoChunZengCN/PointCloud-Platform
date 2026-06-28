@@ -92,3 +92,19 @@ def test_cli_index_assets_writes_project_registry():
     assert exit_code == 0
     assert payload["asset_count"] == 2
     assert (assets_dir / "asset_index.md").exists()
+
+
+def test_build_asset_registry_includes_normalized_viewer_paths():
+    registry = build_asset_registry([
+        {
+            "asset_id": "scan-a",
+            "file": {"path": "C:/data/scan-a.las", "name": "scan-a.las"},
+            "las": {"point_count": 10, "bounds": {"min": [0, 0, 0], "max": [1, 1, 1]}, "has_rgb": True},
+        }
+    ])
+
+    viewer_paths = registry["assets"][0]["viewer_paths"]
+    assert viewer_paths["viewer_url"].endswith("phase2_viewer.html")
+    assert viewer_paths["viewer_html_path"].endswith("phase2_viewer.html")
+    assert viewer_paths["manifest_path"].endswith("phase2_viewer_manifest.json")
+    assert viewer_paths["report_path"].endswith("production_run_report.md")
