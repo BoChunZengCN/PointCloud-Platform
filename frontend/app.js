@@ -72,6 +72,7 @@ function statusText(status) {
     planned: "计划中",
     blocked: "阻塞",
     running: "运行中",
+    failed: "失败",
     ready: "可用",
   };
   return names[status] || status;
@@ -249,6 +250,12 @@ function renderDashboard(project) {
   renderAssetInsight(project, asset);
   renderDecisions(project);
   renderReports(asset);
+  renderJobSummary(asset, null);
+  if (project.sourceType === "api" && asset) {
+    fetchJobSummary(asset.id)
+      .then((summary) => renderJobSummary(asset, summary))
+      .catch(() => renderJobSummary(asset, { job_count: 0, latest_job: null, status_summary: {} }));
+  }
 }
 
 function renderHealth(project) {
@@ -379,6 +386,42 @@ function renderReports(asset) {
   list.replaceChildren(...links);
 }
 
+
+async function fetchJobSummary(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
+}
+
+function renderJobSummary(asset, summary) {
+  const node = document.getElementById("job-status-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.replaceChildren(textElement("span", "暂无资产"));
+    return;
+  }
+  if (!summary) {
+    node.replaceChildren(
+      textElement("span", "生产任务"),
+      textElement("strong", "读取中"),
+      textElement("small", "正在检查 Phase 4 job 状态"),
+    );
+    return;
+  }
+
+  const latestJob = summary.latest_job;
+  const statusSummary = summary.status_summary || {};
+  const detail = Object.entries(statusSummary)
+    .map(([status, count]) => `${statusText(status)} ${count}`)
+    .join(" · ") || "暂无 job 状态";
+  node.replaceChildren(
+    textElement("span", `${asset.id} · ${summary.job_count || 0} 个 job`),
+    textElement("strong", latestJob ? statusText(latestJob.status) : "暂无任务"),
+    textElement("small", latestJob ? `${latestJob.job_id} · ${detail}` : "请先创建 production job"),
+  );
+}
+
 function drawPointCloudPreview(asset) {
   const stage = document.getElementById("project-preview");
   stage.replaceChildren();
@@ -420,6 +463,8 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
+
 
 
 

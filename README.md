@@ -34,6 +34,8 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 3 | P3-M3 生产运行报告 / Production run report | 已完成 / Done | 根据计划输出运行状态报告。 |
 | Phase 3 | P3-M4 部署包检查 / Deployment package checklist | 已完成 / Done | 检查交付所需关键产物是否齐备。 |
 | Phase 3 | P3-M5 交付包导出 / Delivery package export | 已完成 / Done | 复制 ready 文件并输出交付 manifest。 |
+| Phase 4 | P4-M1 任务生命周期 / Job lifecycle CLI | 已完成 / Done | 从生产计划创建 job，并更新 step 状态。 |
+| Phase 4 | P4-M2 Job 状态 API 与驾驶舱 / Job status API and dashboard | 已完成 / Done | API 汇总 job 状态，并在前端驾驶舱展示最新生产任务。 |
 
 ## 技术路线 / Technical Routes
 
@@ -92,9 +94,9 @@ python -m pip install laspy
 
 Job Runner / 本地作业状态:
 
-Job Runner 当前以文件方式记录生产计划的执行状态，适合作为后续异步任务队列的轻量地基。API 会从 `reports/jobs/<asset_id>/*.json` 读取 job 状态。
+Job Runner 当前以文件方式记录生产计划的执行状态，适合作为后续异步任务队列的轻量地基。API 会从 `reports/jobs/<asset_id>/*.json` 读取 job 状态，并返回 `job_count`、`latest_job`、`status_summary` 给前端驾驶舱。
 
-The Job Runner currently records production-plan execution state as local JSON files. This keeps the first execution model simple and prepares the API for a later async queue.
+The Job Runner currently records production-plan execution state as local JSON files. The API exposes `job_count`, `latest_job`, and `status_summary` so the dashboard can show read-only production progress before a later async queue is added.
 ## 前端工作台 / Frontend Workbench
 
 FE-M1 已提供静态点云项目工作台，入口文件位于 `frontend/index.html`。第一版使用 `frontend/data/sample-project.json` 作为样例项目数据，并在浏览器限制本地 JSON 读取时回退到脚本内置样例数据。
@@ -346,6 +348,34 @@ $env:PYTHONPATH="src"; python -m pc_system.cli export-delivery-package `
   --zip
 ```
 
+## Phase 4 命令 / Phase 4 Commands
+
+创建生产 job / Create a production job:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli create-production-job `
+  --project-root .\workspace `
+  --asset-id sample `
+  --job-id job-sample-prod
+```
+
+读取 job 状态 / Read job status:
+
+```text
+GET /runs/<asset_id>/jobs
+``` 
+
+更新 job step 状态 / Update a job step status:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli update-job-step `
+  --project-root .\workspace `
+  --asset-id sample `
+  --job-id job-sample-prod `
+  --step-id ingest `
+  --status completed `
+  --message "LAS metadata ready"
+```
 ## 输出结构 / Output Structure
 
 ```text
@@ -374,6 +404,7 @@ workspace/
   reports/phase3_tool_check.md
   reports/deployment/<asset_id>/deployment_checklist.json
   reports/deployment/<asset_id>/deployment_checklist.md
+  reports/jobs/<asset_id>/<job_id>.json
   delivery/<asset_id>/delivery_manifest.json
   delivery/<asset_id>/delivery_manifest.md
   delivery/<asset_id>/files/...
@@ -398,4 +429,6 @@ workspace/
 - `docs/phase1-development-plan.md`
 - `docs/phase2-development-plan.md`
 - `docs/phase3-development-plan.md`
+- `docs/phase4-development-plan.md`
+
 

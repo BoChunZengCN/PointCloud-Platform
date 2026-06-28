@@ -71,6 +71,20 @@ def _delivery_output(project_root: Path, relative_path: str | None) -> dict:
     return {"path": relative_path, "exists": path.exists(), "kind": _file_kind(path)}
 
 
+
+def _summarize_jobs(jobs: list[dict]) -> dict:
+    """汇总 job 列表，给前端提供可直接渲染的只读状态。"""
+
+    status_summary: dict[str, int] = {}
+    for job in jobs:
+        status = job.get("status", "unknown")
+        status_summary[status] = status_summary.get(status, 0) + 1
+    return {
+        "job_count": len(jobs),
+        "latest_job": jobs[-1] if jobs else None,
+        "status_summary": status_summary,
+    }
+
 def create_app(project_root: Path) -> FastAPI:
     """创建最小 API 应用。"""
 
@@ -114,14 +128,14 @@ def create_app(project_root: Path) -> FastAPI:
 
     @app.get("/runs/{asset_id}/jobs")
     def list_jobs(asset_id: str) -> dict:
-        """返回资产关联的本地 job 状态列表。"""
+        """返回资产关联的本地 job 状态列表和前端汇总。"""
 
         jobs_dir = project_root / "reports" / "jobs" / asset_id
         jobs = []
         if jobs_dir.exists():
             for path in sorted(jobs_dir.glob("*.json")):
                 jobs.append(json.loads(path.read_text(encoding="utf-8")))
-        return {"asset_id": asset_id, "jobs": jobs}
+        return {"asset_id": asset_id, "jobs": jobs, **_summarize_jobs(jobs)}
 
     @app.get("/reports/{asset_id}")
     def list_reports(asset_id: str) -> dict:
@@ -163,3 +177,4 @@ def create_app(project_root: Path) -> FastAPI:
 
 
 app = create_app(Path(os.environ.get("PC_SYSTEM_PROJECT_ROOT", "workspace")))
+

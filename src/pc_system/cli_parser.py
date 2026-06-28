@@ -136,5 +136,18 @@ def build_parser() -> argparse.ArgumentParser:
     export_delivery.add_argument("--project-root", required=True, type=Path)
     export_delivery.add_argument("--asset-id", required=True)
     export_delivery.add_argument("--zip", action="store_true", dest="make_zip")
+
+    create_job = subparsers.add_parser("create-production-job", help="Create a Phase 4 production job from a run plan.")
+    create_job.add_argument("--project-root", required=True, type=Path)
+    create_job.add_argument("--asset-id", required=True)
+    create_job.add_argument("--job-id")
+
+    update_job = subparsers.add_parser("update-job-step", help="Update a Phase 4 production job step status.")
+    update_job.add_argument("--project-root", required=True, type=Path)
+    update_job.add_argument("--asset-id", required=True)
+    update_job.add_argument("--job-id", required=True)
+    update_job.add_argument("--step-id", required=True)
+    update_job.add_argument("--status", required=True, choices=["planned", "running", "completed", "failed", "blocked"])
+    update_job.add_argument("--message", default="")
     return parser
 

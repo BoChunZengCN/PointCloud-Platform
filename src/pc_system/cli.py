@@ -22,6 +22,7 @@ from pc_system.commands.phase2 import (
     run_plan_gaussian_splat,
     run_publish_phase2_viewer,
 )
+from pc_system.commands.phase4 import run_create_production_job, run_update_job_step
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -145,6 +146,17 @@ def main(
             return run_check_deployment_package(args.project_root, args.asset_id)
         if args.command == "export-delivery-package":
             return run_export_delivery_package(args.project_root, args.asset_id, args.make_zip)
+        if args.command == "create-production-job":
+            return run_create_production_job(args.project_root, args.asset_id, args.job_id)
+        if args.command == "update-job-step":
+            return run_update_job_step(
+                args.project_root,
+                args.asset_id,
+                args.job_id,
+                args.step_id,
+                args.status,
+                args.message,
+            )
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

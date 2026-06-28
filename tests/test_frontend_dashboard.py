@@ -157,3 +157,17 @@ def test_viewer_prefers_api_delivery_status_over_extension_guessing():
     assert "fetchDeliveryStatus" in script
     assert "applyDeliveryStatus" in script
     assert "statusByPath" in script
+
+def test_dashboard_fetches_and_renders_phase4_job_summary():
+    html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "app.css").read_text(encoding="utf-8")
+
+    assert "job-status-panel" in html
+    assert "fetchJobSummary" in script
+    assert "/runs/" in script
+    assert "renderJobSummary" in script
+    assert "latest_job" in script
+    assert "生产任务" in script
+    assert ".job-status-panel" in css
+

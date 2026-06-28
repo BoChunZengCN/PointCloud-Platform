@@ -503,3 +503,30 @@ h2 {
   text-decoration: underline;
   outline: none;
 }
+.job-status-panel {
+  border-color: rgba(23, 111, 122, 0.36);
+}
+
+.job-status-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.job-status-summary span,
+.job-status-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.job-status-summary strong {
+  color: var(--cyan);
+  font-size: 22px;
+  line-height: 1.15;
+}
+

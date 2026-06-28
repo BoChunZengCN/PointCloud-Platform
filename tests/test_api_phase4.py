@@ -35,6 +35,36 @@ def test_api_exposes_runs_reports_and_deployment_resources():
     assert client.get("/deployment/scan").json()["ready"] is True
 
 
+
+def test_api_job_list_includes_read_only_summary_for_frontend():
+    project = case_dir("api-job-summary") / "workspace"
+    write_json(
+        project / "reports" / "jobs" / "scan" / "job-a.json",
+        {
+            "job_id": "job-a",
+            "asset_id": "scan",
+            "status": "completed",
+            "summary": {"planned": 0, "running": 0, "completed": 2, "failed": 0, "blocked": 0, "total": 2},
+        },
+    )
+    write_json(
+        project / "reports" / "jobs" / "scan" / "job-b.json",
+        {
+            "job_id": "job-b",
+            "asset_id": "scan",
+            "status": "running",
+            "summary": {"planned": 1, "running": 1, "completed": 1, "failed": 0, "blocked": 0, "total": 3},
+        },
+    )
+
+    client = TestClient(create_app(project))
+    payload = client.get("/runs/scan/jobs").json()
+
+    assert payload["asset_id"] == "scan"
+    assert payload["job_count"] == 2
+    assert payload["latest_job"]["job_id"] == "job-b"
+    assert payload["status_summary"] == {"completed": 1, "running": 1}
+
 def test_api_reports_delivery_output_status_and_file_kinds():
     project = case_dir("api-delivery-status") / "workspace"
     write_json(
@@ -69,3 +99,5 @@ def test_api_reports_delivery_output_status_and_file_kinds():
     assert payload["outputs"]["viewer_url"]["kind"] == "html"
     assert payload["outputs"]["manifest_path"]["kind"] == "manifest"
     assert payload["outputs"]["report_path"]["exists"] is False
+
+
