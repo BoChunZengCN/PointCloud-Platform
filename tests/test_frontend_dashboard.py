@@ -171,3 +171,30 @@ def test_dashboard_fetches_and_renders_phase4_job_summary():
     assert "生产任务" in script
     assert ".job-status-panel" in css
 
+def test_phase4_docs_describe_controlled_job_write_api():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    phase4 = (ROOT / "docs" / "phase4-development-plan.md").read_text(encoding="utf-8")
+
+    assert "P4-M3" in readme
+    assert "POST /runs/<asset_id>/jobs" in readme
+    assert "PATCH /runs/<asset_id>/jobs/<job_id>/steps/<step_id>" in readme
+    assert "P4-M3 Controlled Job Write API" in phase4
+    assert "controlled write" in phase4
+
+def test_dashboard_ex1_has_job_operation_panel_contract():
+    html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "app.css").read_text(encoding="utf-8")
+
+    assert "job-action-panel" in html
+    assert "job-create-button" in html
+    assert "job-step-status-select" in html
+    assert "createProductionJob" in script
+    assert "updateProductionJobStep" in script
+    assert "renderJobActions" in script
+    assert "refreshJobSummary" in script
+    assert "POST" in script
+    assert "PATCH" in script
+    assert ".job-action-panel" in css
+    assert ".job-action-row" in css
+

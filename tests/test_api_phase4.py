@@ -13,6 +13,31 @@ def case_dir(name: str) -> Path:
     return path
 
 
+
+def sample_plan(asset_id: str = "scan") -> dict:
+    return {
+        "schema_version": "1.0",
+        "asset_id": asset_id,
+        "steps": [
+            {
+                "step_id": "ingest",
+                "phase": "phase1",
+                "name": "Ingest asset",
+                "status": "planned",
+                "command": ["pc-system", "ingest"],
+                "outputs": ["asset.json"],
+            },
+            {
+                "step_id": "publish_viewer",
+                "phase": "phase2",
+                "name": "Publish viewer",
+                "status": "planned",
+                "command": ["pc-system", "publish-phase2-viewer"],
+                "outputs": ["phase2_viewer.html"],
+            },
+        ],
+    }
+
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -100,4 +125,102 @@ def test_api_reports_delivery_output_status_and_file_kinds():
     assert payload["outputs"]["manifest_path"]["kind"] == "manifest"
     assert payload["outputs"]["report_path"]["exists"] is False
 
+def test_api_can_create_production_job_from_plan():
+    project = case_dir("api-create-job") / "workspace"
+    write_json(project / "reports" / "production_runs" / "scan" / "production_run_plan.json", sample_plan())
+
+    client = TestClient(create_app(project))
+    response = client.post("/runs/scan/jobs", json={"job_id": "job-scan-prod"})
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["job_id"] == "job-scan-prod"
+    assert payload["asset_id"] == "scan"
+    assert payload["summary"]["planned"] == 2
+    assert (project / "reports" / "jobs" / "scan" / "job-scan-prod.json").exists()
+
+
+def test_api_can_update_production_job_step_status():
+    project = case_dir("api-update-job-step") / "workspace"
+    write_json(project / "reports" / "production_runs" / "scan" / "production_run_plan.json", sample_plan())
+
+    client = TestClient(create_app(project))
+    client.post("/runs/scan/jobs", json={"job_id": "job-scan-prod"})
+    response = client.patch(
+        "/runs/scan/jobs/job-scan-prod/steps/ingest",
+        json={"status": "completed", "message": "LAS metadata ready"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert payload["summary"]["completed"] == 1
+    assert payload["steps"][0]["status"] == "completed"
+    assert payload["steps"][0]["message"] == "LAS metadata ready"
+
+    saved = json.loads((project / "reports" / "jobs" / "scan" / "job-scan-prod.json").read_text(encoding="utf-8"))
+    assert saved["steps"][0]["status"] == "completed"
+
+
+def test_api_job_write_routes_return_clear_errors():
+    project = case_dir("api-job-write-errors") / "workspace"
+    client = TestClient(create_app(project))
+
+    missing_plan = client.post("/runs/scan/jobs", json={"job_id": "job-scan-prod"})
+    missing_job = client.patch(
+        "/runs/scan/jobs/job-missing/steps/ingest",
+        json={"status": "completed", "message": "done"},
+    )
+
+    assert missing_plan.status_code == 404
+    assert "Production run plan not found" in missing_plan.json()["detail"]
+    assert missing_job.status_code == 404
+    assert "Job not found" in missing_job.json()["detail"]
+
+def test_api_job_writes_audit_events_for_create_and_update():
+    project = case_dir("api-job-events") / "workspace"
+    write_json(project / "reports" / "production_runs" / "scan" / "production_run_plan.json", sample_plan())
+
+    client = TestClient(create_app(project))
+    client.post("/runs/scan/jobs", json={"job_id": "job-scan-prod"})
+    client.patch(
+        "/runs/scan/jobs/job-scan-prod/steps/ingest",
+        json={"status": "completed", "message": "LAS metadata ready"},
+    )
+
+    events_path = project / "reports" / "jobs" / "scan" / "job-scan-prod.events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+
+    assert [event["action"] for event in events] == ["job_created", "step_status_updated"]
+    assert events[0]["actor"] == "api"
+    assert events[1]["step_id"] == "ingest"
+    assert events[1]["old_status"] == "planned"
+    assert events[1]["new_status"] == "completed"
+
+def test_api_can_read_single_job_with_events():
+    project = case_dir("api-job-detail") / "workspace"
+    write_json(project / "reports" / "production_runs" / "scan" / "production_run_plan.json", sample_plan())
+
+    client = TestClient(create_app(project))
+    client.post("/runs/scan/jobs", json={"job_id": "job-scan-prod"})
+    client.patch(
+        "/runs/scan/jobs/job-scan-prod/steps/ingest",
+        json={"status": "running", "message": "started"},
+    )
+    response = client.get("/runs/scan/jobs/job-scan-prod")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["job_id"] == "job-scan-prod"
+    assert [event["action"] for event in payload["events"]] == ["job_created", "step_status_updated"]
+
+
+def test_api_single_job_returns_404_when_missing():
+    project = case_dir("api-job-detail-missing") / "workspace"
+    client = TestClient(create_app(project))
+
+    response = client.get("/runs/scan/jobs/job-missing")
+
+    assert response.status_code == 404
+    assert "Job not found" in response.json()["detail"]
 

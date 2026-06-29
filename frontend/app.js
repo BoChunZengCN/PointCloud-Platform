@@ -387,6 +387,97 @@ function renderReports(asset) {
 }
 
 
+
+async function sendJson(url, options) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to call ${url}`);
+  }
+  return await response.json();
+}
+
+async function createProductionJob(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  const jobId = `job-${assetId}-dashboard`;
+  return await sendJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`, {
+    method: "POST",
+    body: JSON.stringify({ job_id: jobId }),
+  });
+}
+
+async function updateProductionJobStep(assetId, jobId, stepId, status, message) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  const encodedJobId = encodeURIComponent(jobId);
+  const encodedStepId = encodeURIComponent(stepId);
+  return await sendJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs/${encodedJobId}/steps/${encodedStepId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, message }),
+  });
+}
+
+async function refreshJobSummary(asset) {
+  const summary = await fetchJobSummary(asset.id);
+  renderJobSummary(asset, summary);
+  return summary;
+}
+
+function setJobActionFeedback(message) {
+  const feedback = document.getElementById("job-action-feedback");
+  if (feedback) {
+    feedback.textContent = message;
+  }
+}
+
+function renderJobActions(project, asset) {
+  const panel = document.getElementById("job-action-panel");
+  const createButton = document.getElementById("job-create-button");
+  const updateButton = document.getElementById("job-step-update-button");
+  if (!panel || !createButton || !updateButton) {
+    return;
+  }
+
+  const apiEnabled = Boolean(asset && project.sourceType === "api");
+  panel.dataset.enabled = apiEnabled ? "true" : "false";
+  createButton.disabled = !apiEnabled;
+  updateButton.disabled = !apiEnabled;
+  setJobActionFeedback(apiEnabled ? "可通过 API 操作生产任务" : "启动 API 后可操作生产任务");
+
+  createButton.onclick = async () => {
+    try {
+      setJobActionFeedback("正在创建 job...");
+      await createProductionJob(asset.id);
+      await refreshJobSummary(asset);
+      setJobActionFeedback("job 已创建");
+    } catch (error) {
+      setJobActionFeedback(`创建失败：${error.message}`);
+    }
+  };
+
+  updateButton.onclick = async () => {
+    try {
+      setJobActionFeedback("正在更新 step...");
+      const summary = await fetchJobSummary(asset.id);
+      const latestJob = summary.latest_job;
+      if (!latestJob) {
+        setJobActionFeedback("请先创建 job");
+        return;
+      }
+      const stepId = document.getElementById("job-step-id-input").value || "ingest";
+      const status = document.getElementById("job-step-status-select").value;
+      const message = document.getElementById("job-step-message-input").value;
+      await updateProductionJobStep(asset.id, latestJob.job_id, stepId, status, message);
+      await refreshJobSummary(asset);
+      setJobActionFeedback("step 已更新");
+    } catch (error) {
+      setJobActionFeedback(`更新失败：${error.message}`);
+    }
+  };
+}
+
 async function fetchJobSummary(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
@@ -463,6 +554,7 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
 
 
 

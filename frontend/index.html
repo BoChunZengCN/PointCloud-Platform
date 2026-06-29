@@ -84,6 +84,29 @@
             <div id="job-status-summary" class="job-status-summary">
               <span>等待数据</span>
             </div>
+            <div id="job-action-panel" class="job-action-panel" aria-label="生产任务操作">
+              <button id="job-create-button" type="button">创建 Job</button>
+              <label class="job-action-row">
+                <span>Step</span>
+                <input id="job-step-id-input" type="text" value="ingest" />
+              </label>
+              <label class="job-action-row">
+                <span>状态</span>
+                <select id="job-step-status-select">
+                  <option value="running">运行中</option>
+                  <option value="completed">已完成</option>
+                  <option value="failed">失败</option>
+                  <option value="blocked">阻塞</option>
+                  <option value="planned">计划中</option>
+                </select>
+              </label>
+              <label class="job-action-row">
+                <span>备注</span>
+                <input id="job-step-message-input" type="text" value="" />
+              </label>
+              <button id="job-step-update-button" type="button">更新 Step</button>
+              <p id="job-action-feedback" class="job-action-feedback">等待操作</p>
+            </div>
           </section>
           <section class="info-card" aria-labelledby="reports-title">
             <p class="eyebrow">Reports</p>
@@ -97,5 +120,6 @@
     <script src="app.js" defer></script>
   </body>
 </html>
+
 
 

@@ -36,6 +36,13 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 3 | P3-M5 交付包导出 / Delivery package export | 已完成 / Done | 复制 ready 文件并输出交付 manifest。 |
 | Phase 4 | P4-M1 任务生命周期 / Job lifecycle CLI | 已完成 / Done | 从生产计划创建 job，并更新 step 状态。 |
 | Phase 4 | P4-M2 Job 状态 API 与驾驶舱 / Job status API and dashboard | 已完成 / Done | API 汇总 job 状态，并在前端驾驶舱展示最新生产任务。 |
+| Phase 4 | P4-M3 受控 Job 写入 API / Controlled Job Write API | 已完成 / Done | 通过 API 创建 job，并更新 step 状态。 |
+| Phase 4 Extension | P4-EX1 前端 Job 操作面板 / Frontend job operation panel | 已完成 / Done | 在驾驶舱创建 job、更新 step 状态。 |
+| Phase 4 Extension | P4-EX2 Job 操作审计 / Job audit event log | 已完成 / Done | 为创建和状态更新写入 JSONL 事件。 |
+| Phase 4 Extension | P4-EX3 Job 详情 API / Job detail API | 已完成 / Done | 返回单个 job 和审计事件。 |
+| Phase 4 Extension | P4-EX4 Retry/Block/Fail 语义 / Retry, block, fail semantics | 已完成 / Done | 记录 attempt、last_error、updated_at。 |
+| Phase 4 Extension | P4-EX5 轻量执行适配器 / Lightweight execution adapter | 已完成 / Done | 提供不执行 shell 的本地状态推进适配器。 |
+| Phase 4 Extension | P4-EX6 队列接口预留 / Async queue interface reservation | 已完成 / Done | 以 JSONL 形式预留 enqueue/list 队列接口。 |
 
 ## 技术路线 / Technical Routes
 
@@ -94,9 +101,9 @@ python -m pip install laspy
 
 Job Runner / 本地作业状态:
 
-Job Runner 当前以文件方式记录生产计划的执行状态，适合作为后续异步任务队列的轻量地基。API 会从 `reports/jobs/<asset_id>/*.json` 读取 job 状态，并返回 `job_count`、`latest_job`、`status_summary` 给前端驾驶舱。
+Job Runner 当前以文件方式记录生产计划的执行状态，适合作为后续异步任务队列的轻量地基。API 会从 `reports/jobs/<asset_id>/*.json` 读取 job 状态，并返回 `job_count`、`latest_job`、`status_summary` 给前端驾驶舱；也可以通过受控写入 API 创建 job、更新 step 状态。扩展模块已加入前端操作面板、JSONL 审计事件、单 job 详情 API、retry 语义、轻量执行适配器和本地队列接口。
 
-The Job Runner currently records production-plan execution state as local JSON files. The API exposes `job_count`, `latest_job`, and `status_summary` so the dashboard can show read-only production progress before a later async queue is added.
+The Job Runner currently records production-plan execution state as local JSON files. The API exposes `job_count`, `latest_job`, and `status_summary` for dashboard progress, controlled write endpoints can create jobs or update step status, and the extension modules add frontend controls, JSONL audit events, job detail reads, retry semantics, a lightweight execution adapter, and a local queue contract.
 ## 前端工作台 / Frontend Workbench
 
 FE-M1 已提供静态点云项目工作台，入口文件位于 `frontend/index.html`。第一版使用 `frontend/data/sample-project.json` 作为样例项目数据，并在浏览器限制本地 JSON 读取时回退到脚本内置样例数据。
@@ -365,6 +372,19 @@ $env:PYTHONPATH="src"; python -m pc_system.cli create-production-job `
 GET /runs/<asset_id>/jobs
 ``` 
 
+API 创建 job / Create a job through API:
+
+```text
+POST /runs/<asset_id>/jobs
+Body: {"job_id": "job-sample-prod"}
+```
+
+API 更新 step / Update a step through API:
+
+```text
+PATCH /runs/<asset_id>/jobs/<job_id>/steps/<step_id>
+Body: {"status": "completed", "message": "LAS metadata ready"}
+```
 更新 job step 状态 / Update a job step status:
 
 ```powershell
@@ -430,5 +450,7 @@ workspace/
 - `docs/phase2-development-plan.md`
 - `docs/phase3-development-plan.md`
 - `docs/phase4-development-plan.md`
+
+
 
 

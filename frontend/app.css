@@ -529,4 +529,59 @@ h2 {
   font-size: 22px;
   line-height: 1.15;
 }
+.job-action-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.job-action-panel button,
+.job-action-panel input,
+.job-action-panel select {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.job-action-panel button {
+  background: var(--cyan);
+  color: #ffffff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.job-action-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.job-action-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.job-action-row span,
+.job-action-feedback {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.job-action-row input,
+.job-action-row select {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.job-action-feedback {
+  min-height: 18px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 
