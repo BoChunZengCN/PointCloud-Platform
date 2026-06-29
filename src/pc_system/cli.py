@@ -23,6 +23,7 @@ from pc_system.commands.phase2 import (
     run_publish_phase2_viewer,
 )
 from pc_system.commands.phase4 import run_create_production_job, run_update_job_step
+from pc_system.commands.phase5 import run_check_consistency, run_serve_api
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -157,6 +158,10 @@ def main(
                 args.status,
                 args.message,
             )
+        if args.command == "serve-api":
+            return run_serve_api(args.project_root, args.host, args.port, args.api_key, args.mode, dry_run=args.dry_run)
+        if args.command == "check-consistency":
+            return run_check_consistency(args.project_root, args.asset_id)
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
@@ -168,4 +173,6 @@ def main(
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 

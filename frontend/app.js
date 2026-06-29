@@ -1,4 +1,5 @@
 const API_BASE_URL = window.PC_SYSTEM_API_BASE_URL || "http://127.0.0.1:8000";
+const API_KEY = window.PC_SYSTEM_API_KEY || "";
 const WORKSPACE_REGISTRY_URL = "../workspace/data/assets/asset_index.json";
 const DATA_URL = "data/sample-project.json";
 
@@ -115,12 +116,20 @@ function createFact(term, value) {
   return fragment;
 }
 
+function apiHeaders() {
+  return API_KEY ? { "x-api-key": API_KEY } : {};
+}
+
 async function loadJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Failed to load ${url}`);
   }
   return await response.json();
+}
+
+async function fetchApiHealth() {
+  return await loadJson(`${API_BASE_URL}/health`);
 }
 
 async function fetchApiProjectData() {
@@ -217,6 +226,24 @@ async function fetchProjectData() {
   }
 }
 
+
+function renderApiHealthStatus(health) {
+  const node = document.getElementById("api-health-status");
+  if (!node) {
+    return;
+  }
+  if (!health) {
+    node.dataset.status = "offline";
+    node.replaceChildren(textElement("span", "API"), textElement("strong", "离线"), textElement("small", "未连接 FastAPI 服务"));
+    return;
+  }
+  node.dataset.status = "online";
+  node.replaceChildren(
+    textElement("span", health.run_mode || "API"),
+    textElement("strong", health.status === "ok" ? "在线" : "异常"),
+    textElement("small", `写入保护：${health.write_protection || "unknown"}`),
+  );
+}
 function renderDataSourceStatus(project) {
   const node = document.getElementById("data-source-status");
   if (!node) {
@@ -246,6 +273,7 @@ function renderDashboard(project) {
   setText("metric-risks", String(riskCount(project)));
   renderHealth(project);
   renderDataSourceStatus(project);
+  fetchApiHealth().then(renderApiHealthStatus).catch(() => renderApiHealthStatus(null));
   renderAssetSelector(project);
   renderAssetInsight(project, asset);
   renderDecisions(project);
@@ -391,7 +419,7 @@ function renderReports(asset) {
 async function sendJson(url, options) {
   const response = await fetch(url, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+    headers: { "Content-Type": "application/json", ...apiHeaders(), ...(options?.headers || {}) },
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -554,6 +582,7 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
 
 
 

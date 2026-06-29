@@ -149,5 +149,18 @@ def build_parser() -> argparse.ArgumentParser:
     update_job.add_argument("--step-id", required=True)
     update_job.add_argument("--status", required=True, choices=["planned", "running", "completed", "failed", "blocked"])
     update_job.add_argument("--message", default="")
+
+    serve_api = subparsers.add_parser("serve-api", help="Start the FastAPI service for a workspace.")
+    serve_api.add_argument("--project-root", required=True, type=Path)
+    serve_api.add_argument("--host", default="127.0.0.1")
+    serve_api.add_argument("--port", default=8000, type=int)
+    serve_api.add_argument("--api-key")
+    serve_api.add_argument("--mode", default="development", choices=["development", "production"])
+    serve_api.add_argument("--dry-run", action="store_true")
+
+    consistency = subparsers.add_parser("check-consistency", help="Write a Phase 5 workspace consistency report.")
+    consistency.add_argument("--project-root", required=True, type=Path)
+    consistency.add_argument("--asset-id", required=True)
     return parser
+
 

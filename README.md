@@ -43,6 +43,12 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 4 Extension | P4-EX4 Retry/Block/Fail 语义 / Retry, block, fail semantics | 已完成 / Done | 记录 attempt、last_error、updated_at。 |
 | Phase 4 Extension | P4-EX5 轻量执行适配器 / Lightweight execution adapter | 已完成 / Done | 提供不执行 shell 的本地状态推进适配器。 |
 | Phase 4 Extension | P4-EX6 队列接口预留 / Async queue interface reservation | 已完成 / Done | 以 JSONL 形式预留 enqueue/list 队列接口。 |
+| Phase 5 | P5-M1 API 写入保护 / API write protection | 已完成 / Done | 写入路由支持 API Key 保护。 |
+| Phase 5 | P5-M2 运行模式 / Configured run modes | 已完成 / Done | 支持 development / production 模式。 |
+| Phase 5 | P5-M3 API 启动 CLI / API service CLI | 已完成 / Done | 新增 serve-api 命令。 |
+| Phase 5 | P5-M4 前端 API 状态 / Frontend API health status | 已完成 / Done | 驾驶舱显示 API 在线状态和写入保护。 |
+| Phase 5 | P5-M5 一致性检查 / Workspace consistency report | 已完成 / Done | 输出 asset/plan/job/events 一致性报告。 |
+| Phase 5 | P5-M6 部署文档 / Deployment docs | 已完成 / Done | 新增最小生产部署说明。 |
 
 ## 技术路线 / Technical Routes
 
@@ -396,6 +402,34 @@ $env:PYTHONPATH="src"; python -m pc_system.cli update-job-step `
   --status completed `
   --message "LAS metadata ready"
 ```
+
+## Phase 5 命令 / Phase 5 Commands
+
+启动 API 服务 / Start API service:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli serve-api `
+  --project-root .\workspace `
+  --host 127.0.0.1 `
+  --port 8000 `
+  --mode production `
+  --api-key <secret>
+```
+
+检查 workspace 一致性 / Check workspace consistency:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli check-consistency `
+  --project-root .\workspace `
+  --asset-id sample
+```
+
+生产环境写入保护 / Production write protection:
+
+```powershell
+$env:PC_SYSTEM_API_KEY="<secret>"
+$env:PC_SYSTEM_RUN_MODE="production"
+```
 ## 输出结构 / Output Structure
 
 ```text
@@ -450,6 +484,8 @@ workspace/
 - `docs/phase2-development-plan.md`
 - `docs/phase3-development-plan.md`
 - `docs/phase4-development-plan.md`
+- `docs/phase5-production-hardening.md`
+
 
 
 

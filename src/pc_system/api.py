@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from pc_system.config import ProjectConfig
@@ -98,22 +98,38 @@ def _summarize_jobs(jobs: list[dict]) -> dict:
         "status_summary": status_summary,
     }
 
-def create_app(project_root: Path) -> FastAPI:
+def create_app(project_root: Path, api_key: str | None = None, run_mode: str | None = None) -> FastAPI:
     """创建最小 API 应用。"""
 
+    resolved_run_mode = run_mode or os.environ.get("PC_SYSTEM_RUN_MODE", "development")
+    resolved_api_key = api_key if api_key is not None else os.environ.get("PC_SYSTEM_API_KEY")
+    cors_origins = [] if resolved_run_mode == "production" else ["*"]
     app = FastAPI(title="Point Cloud Platform API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+    def require_write_key(x_api_key: str | None) -> None:
+        """保护写入接口；未配置 API Key 时保持开发模式兼容。"""
+
+        if resolved_api_key and x_api_key != resolved_api_key:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     @app.get("/health")
     def health() -> dict:
         """健康检查，返回当前绑定的项目目录。"""
 
-        return {"status": "ok", "project_root": str(project_root)}
+        return {
+            "status": "ok",
+            "project_root": str(project_root),
+            "run_mode": resolved_run_mode,
+            "write_protection": "api_key" if resolved_api_key else "none",
+            "cors_origins": cors_origins,
+        }
 
     @app.get("/assets")
     def list_assets() -> dict:
@@ -151,9 +167,10 @@ def create_app(project_root: Path) -> FastAPI:
         return {"asset_id": asset_id, "jobs": jobs, **_summarize_jobs(jobs)}
 
     @app.post("/runs/{asset_id}/jobs", status_code=status.HTTP_201_CREATED)
-    def create_job(asset_id: str, payload: dict | None = None) -> dict:
+    def create_job(asset_id: str, payload: dict | None = None, x_api_key: str | None = Header(default=None)) -> dict:
         """从生产运行计划创建 job，供前端或自动化流程受控触发。"""
 
+        require_write_key(x_api_key)
         ProjectConfig(project_root=project_root).ensure_directories()
         plan_path = _production_dir(project_root, asset_id) / "production_run_plan.json"
         if not plan_path.exists():
@@ -167,9 +184,10 @@ def create_app(project_root: Path) -> FastAPI:
         return job
 
     @app.patch("/runs/{asset_id}/jobs/{job_id}/steps/{step_id}")
-    def update_job_step(asset_id: str, job_id: str, step_id: str, payload: dict) -> dict:
+    def update_job_step(asset_id: str, job_id: str, step_id: str, payload: dict, x_api_key: str | None = Header(default=None)) -> dict:
         """更新单个 job step 状态，写回本地 job JSON。"""
 
+        require_write_key(x_api_key)
         status_value = payload.get("status")
         message = payload.get("message", "")
         if status_value not in JOB_STATUSES:
@@ -249,6 +267,9 @@ def create_app(project_root: Path) -> FastAPI:
 
 
 app = create_app(Path(os.environ.get("PC_SYSTEM_PROJECT_ROOT", "workspace")))
+
+
+
 
 
 
