@@ -49,6 +49,12 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 5 | P5-M4 前端 API 状态 / Frontend API health status | 已完成 / Done | 驾驶舱显示 API 在线状态和写入保护。 |
 | Phase 5 | P5-M5 一致性检查 / Workspace consistency report | 已完成 / Done | 输出 asset/plan/job/events 一致性报告。 |
 | Phase 5 | P5-M6 部署文档 / Deployment docs | 已完成 / Done | 新增最小生产部署说明。 |
+| Phase 6 | P6-M1 点云深度统计模型 / Point-cloud analysis model | 已完成 / Done | 统计点数、边界、密度、RGB 覆盖率和分类分布。 |
+| Phase 6 | P6-M2 采样与空间网格统计 / Sampling and spatial grid stats | 已完成 / Done | 基于轻量点记录生成空间网格和单元统计。 |
+| Phase 6 | P6-M3 质量异常检测报告 / Quality findings report | 已完成 / Done | 输出 RGB 缺失、高程跨度和低密度网格提示。 |
+| Phase 6 | P6-M4 分析 CLI / Analysis CLI | 已完成 / Done | 新增 analyze-point-cloud 命令写入分析报告。 |
+| Phase 6 | P6-M5 分析 API / Analysis API | 已完成 / Done | 新增 GET /analysis/<asset_id> 读取分析结果。 |
+| Phase 6 | P6-M6 前端质量洞察 / Frontend quality insights | 已完成 / Done | 驾驶舱展示 RGB 覆盖率、网格数量和质量提示。 |
 
 ## 技术路线 / Technical Routes
 
@@ -424,6 +430,27 @@ $env:PYTHONPATH="src"; python -m pc_system.cli check-consistency `
   --asset-id sample
 ```
 
+## Phase 6 命令 / Phase 6 Commands
+
+生成点云分析报告 / Generate a point-cloud analysis report:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli analyze-point-cloud `
+  --project-root .\workspace `
+  --asset-id sample `
+  --points-json .\samples\sample_points.json `
+  --grid-cell-size 5
+```
+
+读取点云分析结果 / Read point-cloud analysis result:
+
+```text
+GET /analysis/<asset_id>
+```
+
+分析报告会输出 `point_count`、`bounds`、`density`、`rgb_coverage`、`classification_distribution`、`grid` 和 `findings`，供 API 与前端质量洞察面板复用。
+
+The analysis report writes `point_count`, `bounds`, `density`, `rgb_coverage`, `classification_distribution`, `grid`, and `findings` for the API and frontend quality-insight panel.
 生产环境写入保护 / Production write protection:
 
 ```powershell
@@ -459,6 +486,8 @@ workspace/
   reports/deployment/<asset_id>/deployment_checklist.json
   reports/deployment/<asset_id>/deployment_checklist.md
   reports/jobs/<asset_id>/<job_id>.json
+  reports/analysis/<asset_id>/point_cloud_analysis.json
+  reports/analysis/<asset_id>/point_cloud_analysis.md
   delivery/<asset_id>/delivery_manifest.json
   delivery/<asset_id>/delivery_manifest.md
   delivery/<asset_id>/files/...
@@ -485,8 +514,6 @@ workspace/
 - `docs/phase3-development-plan.md`
 - `docs/phase4-development-plan.md`
 - `docs/phase5-production-hardening.md`
-
-
-
+- `docs/phase6-point-cloud-analysis.md`
 
 

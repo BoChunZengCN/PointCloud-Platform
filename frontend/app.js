@@ -279,10 +279,14 @@ function renderDashboard(project) {
   renderDecisions(project);
   renderReports(asset);
   renderJobSummary(asset, null);
+  renderQualityInsights(asset, null);
   if (project.sourceType === "api" && asset) {
     fetchJobSummary(asset.id)
       .then((summary) => renderJobSummary(asset, summary))
       .catch(() => renderJobSummary(asset, { job_count: 0, latest_job: null, status_summary: {} }));
+    fetchPointCloudAnalysis(asset.id)
+      .then((analysis) => renderQualityInsights(asset, analysis))
+      .catch(() => renderQualityInsights(asset, { point_count: 0, rgb_coverage: 0, grid: { cell_count: 0 }, findings: [] }));
   }
 }
 
@@ -511,6 +515,39 @@ async function fetchJobSummary(assetId) {
   return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
 }
 
+async function fetchPointCloudAnalysis(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/analysis/${encodedAssetId}`);
+}
+
+function renderQualityInsights(asset, analysis) {
+  const node = document.getElementById("quality-insight-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.replaceChildren(textElement("span", "暂无资产"));
+    return;
+  }
+  if (!analysis) {
+    node.replaceChildren(
+      textElement("span", "质量洞察"),
+      textElement("strong", "读取中"),
+      textElement("small", "正在读取 Phase 6 分析报告"),
+    );
+    return;
+  }
+
+  const findingCount = (analysis.findings || []).length;
+  const gridCount = analysis.grid?.cell_count || 0;
+  const rgbPercent = Math.round(Number(analysis.rgb_coverage || 0) * 100);
+  node.replaceChildren(
+    textElement("span", `${asset.id} · ${formatNumber(analysis.point_count || 0)} points`),
+    textElement("strong", `${rgbPercent}% RGB`),
+    textElement("small", `${gridCount} 个网格 · ${findingCount} 项质量提示`),
+  );
+}
+
 function renderJobSummary(asset, summary) {
   const node = document.getElementById("job-status-summary");
   if (!node) {
@@ -582,10 +619,4 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
-
-
-
-
-
-
 

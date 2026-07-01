@@ -614,3 +614,31 @@ h2 {
   background: #fff8ea;
 }
 
+
+.quality-insight-panel {
+  border-color: rgba(164, 102, 25, 0.36);
+}
+
+.quality-insight-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.quality-insight-summary span,
+.quality-insight-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quality-insight-summary strong {
+  color: var(--amber);
+  font-size: 22px;
+  line-height: 1.15;
+}
+

@@ -256,6 +256,14 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         }
         return {"asset_id": asset_id, "outputs": outputs}
 
+
+    @app.get("/analysis/{asset_id}")
+    def get_point_cloud_analysis(asset_id: str) -> dict:
+        """返回 Phase 6 点云分析报告。"""
+
+        path = project_root / "reports" / "analysis" / asset_id / "point_cloud_analysis.json"
+        return _read_json_or_404(path, "Point cloud analysis")
+
     @app.get("/deployment/{asset_id}")
     def get_deployment(asset_id: str) -> dict:
         """返回部署交付检查清单。"""
@@ -267,11 +275,4 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
 
 
 app = create_app(Path(os.environ.get("PC_SYSTEM_PROJECT_ROOT", "workspace")))
-
-
-
-
-
-
-
 

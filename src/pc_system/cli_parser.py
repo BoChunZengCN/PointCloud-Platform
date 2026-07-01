@@ -161,6 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
     consistency = subparsers.add_parser("check-consistency", help="Write a Phase 5 workspace consistency report.")
     consistency.add_argument("--project-root", required=True, type=Path)
     consistency.add_argument("--asset-id", required=True)
-    return parser
 
+    analyze_cloud = subparsers.add_parser("analyze-point-cloud", help="Analyze point cloud sample records for Phase 6 quality insights.")
+    analyze_cloud.add_argument("--project-root", required=True, type=Path)
+    analyze_cloud.add_argument("--asset-id", required=True)
+    analyze_cloud.add_argument("--points-json", required=True, type=Path)
+    analyze_cloud.add_argument("--grid-cell-size", default=5.0, type=float)
+    return parser
 
