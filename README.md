@@ -55,6 +55,12 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 6 | P6-M4 分析 CLI / Analysis CLI | 已完成 / Done | 新增 analyze-point-cloud 命令写入分析报告。 |
 | Phase 6 | P6-M5 分析 API / Analysis API | 已完成 / Done | 新增 GET /analysis/<asset_id> 读取分析结果。 |
 | Phase 6 | P6-M6 前端质量洞察 / Frontend quality insights | 已完成 / Done | 驾驶舱展示 RGB 覆盖率、网格数量和质量提示。 |
+| Phase 7 | P7-M1 LAS/LAZ 采样适配器 / LAS/LAZ sampling adapter | 已完成 / Done | 从轻量点记录或真实 LAS/LAZ 源采样点记录。 |
+| Phase 7 | P7-M2 analyze-asset CLI | 已完成 / Done | 按 workspace 资产 ID 直接生成分析报告。 |
+| Phase 7 | P7-M3 资产索引分析状态 / Asset registry analysis status | 已完成 / Done | asset_index 增加 analysis_status 和分析报告路径。 |
+| Phase 7 | P7-M4 分析概览 API / Analysis overview API | 已完成 / Done | 新增 GET /analysis 汇总所有分析报告。 |
+| Phase 7 | P7-M5 前端分析概览 / Frontend analysis overview | 已完成 / Done | 驾驶舱展示已分析资产数量。 |
+| Phase 7 | P7-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 7 文档和测试约束。 |
 
 ## 技术路线 / Technical Routes
 
@@ -451,6 +457,27 @@ GET /analysis/<asset_id>
 分析报告会输出 `point_count`、`bounds`、`density`、`rgb_coverage`、`classification_distribution`、`grid` 和 `findings`，供 API 与前端质量洞察面板复用。
 
 The analysis report writes `point_count`, `bounds`, `density`, `rgb_coverage`, `classification_distribution`, `grid`, and `findings` for the API and frontend quality-insight panel.
+## Phase 7 命令 / Phase 7 Commands
+
+按资产 ID 分析真实 workspace 源点云 / Analyze an existing workspace asset source:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli analyze-asset `
+  --project-root .\workspace `
+  --asset-id sample `
+  --max-points 10000 `
+  --grid-cell-size 5
+```
+
+读取全部分析概览 / Read the analysis overview:
+
+```text
+GET /analysis
+```
+
+Phase 7 会从 `data/assets/<asset_id>/asset.json` 的 `file.path` 读取源点云，采样后复用 Phase 6 分析模型，并在资产索引中写入 `analysis_status` 和报告路径。
+
+Phase 7 reads the source path from `data/assets/<asset_id>/asset.json`, samples points, reuses the Phase 6 analysis model, and records `analysis_status` plus report paths in the asset registry.
 生产环境写入保护 / Production write protection:
 
 ```powershell
@@ -515,5 +542,8 @@ workspace/
 - `docs/phase4-development-plan.md`
 - `docs/phase5-production-hardening.md`
 - `docs/phase6-point-cloud-analysis.md`
+- `docs/phase7-real-las-analysis.md`
+
+
 
 

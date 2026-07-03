@@ -20,12 +20,26 @@ def discover_asset_metadata(assets_dir: Path) -> list[dict]:
     return assets
 
 
-def _asset_entry(metadata: dict) -> dict:
+def _analysis_paths(project_root: Path | None, asset_id: str) -> dict:
+    """根据分析报告是否存在，生成资产索引里的分析状态。"""
+
+    json_rel = f"reports/analysis/{asset_id}/point_cloud_analysis.json"
+    md_rel = f"reports/analysis/{asset_id}/point_cloud_analysis.md"
+    ready = bool(project_root and (project_root / json_rel).exists())
+    return {
+        "analysis_status": "ready" if ready else "missing",
+        "analysis_report_path": json_rel if ready else "",
+        "analysis_markdown_path": md_rel if ready else "",
+    }
+
+
+def _asset_entry(metadata: dict, project_root: Path | None = None) -> dict:
     """把完整 asset.json 压缩成前端/API 常用的索引条目。"""
 
     asset_id = metadata["asset_id"]
     file_info = metadata.get("file", {})
     las_info = metadata.get("las", {})
+    analysis_paths = _analysis_paths(project_root, asset_id)
     return {
         "asset_id": asset_id,
         "file_name": file_info.get("name", ""),
@@ -33,6 +47,8 @@ def _asset_entry(metadata: dict) -> dict:
         "point_count": las_info.get("point_count", 0),
         "bounds": las_info.get("bounds", {}),
         "has_rgb": las_info.get("has_rgb", metadata.get("has_rgb", False)),
+        "analysis_status": analysis_paths["analysis_status"],
+        "analysis_report_path": analysis_paths["analysis_report_path"],
         "metadata_path": f"data/assets/{asset_id}/asset.json",
         "preview_paths": {
             "preview_manifest": f"previews/{asset_id}/preview_manifest.json",
@@ -50,14 +66,15 @@ def _asset_entry(metadata: dict) -> dict:
             "quality_report": f"reports/{asset_id}/quality_report.html",
             "production_plan": f"reports/production_runs/{asset_id}/production_run_plan.md",
             "production_report": f"reports/production_runs/{asset_id}/production_run_report.md",
+            "analysis_report": analysis_paths["analysis_markdown_path"],
         },
     }
 
 
-def build_asset_registry(asset_metadata: list[dict]) -> dict:
+def build_asset_registry(asset_metadata: list[dict], project_root: Path | None = None) -> dict:
     """构建项目级资产索引，供前端工作台和 API 读取。"""
 
-    entries = [_asset_entry(metadata) for metadata in sorted(asset_metadata, key=lambda item: item["asset_id"])]
+    entries = [_asset_entry(metadata, project_root) for metadata in sorted(asset_metadata, key=lambda item: item["asset_id"])]
     return {
         "schema_version": SCHEMA_VERSION,
         "asset_count": len(entries),
@@ -89,4 +106,6 @@ def write_asset_registry(registry: dict, output_dir: Path) -> dict[str, Path]:
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(_render_markdown(registry), encoding="utf-8")
     return {"json": json_path, "markdown": markdown_path}
+
+
 

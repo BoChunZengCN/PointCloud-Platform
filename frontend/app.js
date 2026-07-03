@@ -280,6 +280,7 @@ function renderDashboard(project) {
   renderReports(asset);
   renderJobSummary(asset, null);
   renderQualityInsights(asset, null);
+  renderAnalysisOverview(project, null);
   if (project.sourceType === "api" && asset) {
     fetchJobSummary(asset.id)
       .then((summary) => renderJobSummary(asset, summary))
@@ -287,6 +288,9 @@ function renderDashboard(project) {
     fetchPointCloudAnalysis(asset.id)
       .then((analysis) => renderQualityInsights(asset, analysis))
       .catch(() => renderQualityInsights(asset, { point_count: 0, rgb_coverage: 0, grid: { cell_count: 0 }, findings: [] }));
+    fetchAnalysisOverview()
+      .then((overview) => renderAnalysisOverview(project, overview))
+      .catch(() => renderAnalysisOverview(project, null));
   }
 }
 
@@ -515,6 +519,30 @@ async function fetchJobSummary(assetId) {
   return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
 }
 
+async function fetchAnalysisOverview() {
+  return await loadJson(`${API_BASE_URL}/analysis`);
+}
+
+function renderAnalysisOverview(project, overview) {
+  const node = document.getElementById("analysis-overview-summary");
+  if (!node) {
+    return;
+  }
+  const readyFromRegistry = project.assets.filter((asset) => asset.analysis_status === "ready").length;
+  if (!overview) {
+    node.replaceChildren(
+      textElement("span", "分析状态"),
+      textElement("strong", `${readyFromRegistry}/${project.assets.length}`),
+      textElement("small", readyFromRegistry ? "来自资产索引" : "等待 Phase 7 分析报告"),
+    );
+    return;
+  }
+  node.replaceChildren(
+    textElement("span", "已生成分析报告"),
+    textElement("strong", `${overview.asset_count || 0}`),
+    textElement("small", `${project.assets.length} 个资产 · API 汇总在线`),
+  );
+}
 async function fetchPointCloudAnalysis(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/analysis/${encodedAssetId}`);
@@ -619,4 +647,5 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
 

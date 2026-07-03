@@ -167,5 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_cloud.add_argument("--asset-id", required=True)
     analyze_cloud.add_argument("--points-json", required=True, type=Path)
     analyze_cloud.add_argument("--grid-cell-size", default=5.0, type=float)
+    analyze_asset = subparsers.add_parser("analyze-asset", help="Analyze an existing workspace asset source for Phase 7 quality insights.")
+    analyze_asset.add_argument("--project-root", required=True, type=Path)
+    analyze_asset.add_argument("--asset-id", required=True)
+    analyze_asset.add_argument("--max-points", default=10000, type=int)
+    analyze_asset.add_argument("--grid-cell-size", default=5.0, type=float)
     return parser
+
 

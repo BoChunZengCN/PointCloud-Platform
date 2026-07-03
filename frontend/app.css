@@ -642,3 +642,30 @@ h2 {
   line-height: 1.15;
 }
 
+
+.analysis-overview-panel {
+  border-color: rgba(31, 122, 77, 0.36);
+}
+
+.analysis-overview-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.analysis-overview-summary span,
+.analysis-overview-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analysis-overview-summary strong {
+  color: var(--green);
+  font-size: 22px;
+  line-height: 1.15;
+}

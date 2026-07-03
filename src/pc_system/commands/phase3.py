@@ -81,7 +81,7 @@ def run_index_assets(project_root: Path) -> int:
 
     paths = ProjectConfig(project_root=project_root).ensure_directories()
     assets = discover_asset_metadata(paths["assets"])
-    registry = build_asset_registry(assets)
+    registry = build_asset_registry(assets, project_root=project_root)
     write_asset_registry(registry, paths["assets"])
     return 0
 
@@ -109,4 +109,5 @@ def run_export_delivery_package(project_root: Path, asset_id: str, make_zip: boo
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     export_delivery_package(project_root, registry, asset_id, project_root / "delivery" / asset_id, make_zip=make_zip)
     return 0
+
 

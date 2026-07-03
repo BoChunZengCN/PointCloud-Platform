@@ -257,6 +257,23 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         return {"asset_id": asset_id, "outputs": outputs}
 
 
+    @app.get("/analysis")
+    def list_point_cloud_analysis() -> dict:
+        """返回所有 Phase 7 点云分析报告的轻量汇总。"""
+
+        analysis_root = project_root / "reports" / "analysis"
+        rows = []
+        if analysis_root.exists():
+            for report_path in sorted(analysis_root.glob("*/point_cloud_analysis.json"), key=lambda path: path.parent.name):
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                rows.append({
+                    "asset_id": report.get("asset_id", report_path.parent.name),
+                    "point_count": report.get("point_count", 0),
+                    "rgb_coverage": report.get("rgb_coverage", 0.0),
+                    "finding_count": len(report.get("findings", [])),
+                })
+        return {"asset_count": len(rows), "analyses": rows}
+
     @app.get("/analysis/{asset_id}")
     def get_point_cloud_analysis(asset_id: str) -> dict:
         """返回 Phase 6 点云分析报告。"""
@@ -275,4 +292,5 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
 
 
 app = create_app(Path(os.environ.get("PC_SYSTEM_PROJECT_ROOT", "workspace")))
+
 
