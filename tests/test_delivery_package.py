@@ -18,6 +18,13 @@ def write_file(path: Path, content: str = "ok") -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def write_passed_quality_gate(project: Path, asset_id: str = "scan") -> None:
+    write_file(
+        project / "reports" / "quality_gates" / asset_id / "quality_gate.json",
+        json.dumps({"asset_id": asset_id, "status": "passed", "severity": "info", "finding_count": 0, "actions": []}),
+    )
+
+
 def sample_registry(asset_id: str = "scan") -> dict:
     return {
         "schema_version": "1.0",
@@ -117,6 +124,7 @@ def test_cli_export_delivery_package_reads_registry_and_writes_package():
     write_file(project / "data" / "assets" / "asset_index.json", json.dumps(registry))
     write_file(project / "data" / "assets" / "scan" / "asset.json", "{\"asset_id\":\"scan\"}")
     write_file(project / "previews" / "scan" / "phase2_viewer.html", "<html></html>")
+    write_passed_quality_gate(project)
 
     exit_code = main([
         "export-delivery-package",
@@ -138,7 +146,9 @@ def test_cli_export_delivery_package_can_write_zip_archive():
     registry = sample_registry()
     write_file(project / "data" / "assets" / "asset_index.json", json.dumps(registry))
     write_file(project / "data" / "assets" / "scan" / "asset.json", "{\"asset_id\":\"scan\"}")
+    write_passed_quality_gate(project)
     write_file(project / "previews" / "scan" / "phase2_viewer.html", "<html></html>")
+    write_passed_quality_gate(project)
 
     exit_code = main([
         "export-delivery-package",
@@ -151,4 +161,5 @@ def test_cli_export_delivery_package_can_write_zip_archive():
 
     assert exit_code == 0
     assert (project / "delivery" / "scan.zip").exists()
+
 

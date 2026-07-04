@@ -26,6 +26,7 @@ from pc_system.commands.phase4 import run_create_production_job, run_update_job_
 from pc_system.commands.phase5 import run_check_consistency, run_serve_api
 from pc_system.commands.phase6 import run_analyze_asset, run_analyze_point_cloud
 from pc_system.commands.phase8 import run_check_quality_gate
+from pc_system.commands.phase10 import run_segment_objects
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -148,7 +149,7 @@ def main(
         if args.command == "check-deployment-package":
             return run_check_deployment_package(args.project_root, args.asset_id)
         if args.command == "export-delivery-package":
-            return run_export_delivery_package(args.project_root, args.asset_id, args.make_zip)
+            return run_export_delivery_package(args.project_root, args.asset_id, args.make_zip, args.allow_review_required)
         if args.command == "create-production-job":
             return run_create_production_job(args.project_root, args.asset_id, args.job_id)
         if args.command == "update-job-step":
@@ -170,6 +171,8 @@ def main(
             return run_analyze_asset(args.project_root, args.asset_id, args.max_points, args.grid_cell_size)
         if args.command == "check-quality-gate":
             return run_check_quality_gate(args.project_root, args.asset_id)
+        if args.command == "segment-objects":
+            return run_segment_objects(args.project_root, args.asset_id, args.points_json, args.distance_threshold, args.min_points)
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
@@ -181,6 +184,7 @@ def main(
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

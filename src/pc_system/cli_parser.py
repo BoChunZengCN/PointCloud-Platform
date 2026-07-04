@@ -136,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_delivery.add_argument("--project-root", required=True, type=Path)
     export_delivery.add_argument("--asset-id", required=True)
     export_delivery.add_argument("--zip", action="store_true", dest="make_zip")
+    export_delivery.add_argument("--allow-review-required", action="store_true", dest="allow_review_required")
 
     create_job = subparsers.add_parser("create-production-job", help="Create a Phase 4 production job from a run plan.")
     create_job.add_argument("--project-root", required=True, type=Path)
@@ -175,7 +176,15 @@ def build_parser() -> argparse.ArgumentParser:
     quality_gate = subparsers.add_parser("check-quality-gate", help="Build a Phase 8 quality gate report from analysis findings.")
     quality_gate.add_argument("--project-root", required=True, type=Path)
     quality_gate.add_argument("--asset-id", required=True)
+    segment_objects = subparsers.add_parser("segment-objects", help="Create a Phase 10 object segmentation report from point records.")
+    segment_objects.add_argument("--project-root", required=True, type=Path)
+    segment_objects.add_argument("--asset-id", required=True)
+    segment_objects.add_argument("--points-json", required=True, type=Path)
+    segment_objects.add_argument("--distance-threshold", default=1.0, type=float)
+    segment_objects.add_argument("--min-points", default=10, type=int)
     return parser
+
+
 
 
 

@@ -67,6 +67,18 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 8 | P8-M4 质量门禁 API / Quality gate API | 已完成 / Done | 新增 GET /quality-gates/<asset_id>。 |
 | Phase 8 | P8-M5 前端质量门禁状态条 / Frontend quality gate status bar | 已完成 / Done | 驾驶舱展示可交付、需复核、阻塞状态。 |
 | Phase 8 | P8-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 8 文档和测试约束。 |
+| Phase 9 | P9-M1 交付门禁策略 / Delivery gate policy | 已完成 / Done | 判断 passed、review_required、blocked 是否允许导出。 |
+| Phase 9 | P9-M2 阻止 blocked 导出 / Block blocked delivery export | 已完成 / Done | export-delivery-package 会阻止 blocked 资产导出。 |
+| Phase 9 | P9-M3 复核态显式放行 / Review override | 已完成 / Done | 新增 --allow-review-required 放行 review_required。 |
+| Phase 9 | P9-M4 部署检查门禁状态 / Deployment checklist gate status | 已完成 / Done | 部署检查清单纳入 quality_gate required item。 |
+| Phase 9 | P9-M5 前端交付提示 / Frontend delivery gate notice | 已完成 / Done | 驾驶舱显示可导出、需复核、不可导出。 |
+| Phase 9 | P9-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 9 文档和测试约束。 |
+| Phase 10 | P10-M1 物体候选分割模型 / Object candidate model | 已完成 / Done | 从点记录聚类生成 object_segments.json。 |
+| Phase 10 | P10-M2 分割报告写出 / Segmentation report output | 已完成 / Done | 输出 object_segments.json 与 object_segments.md。 |
+| Phase 10 | P10-M3 segment-objects CLI | 已完成 / Done | 从轻量 points JSON 生成物体分割报告。 |
+| Phase 10 | P10-M4 物体分割 API / Object segmentation API | 已完成 / Done | 新增 GET /segments/<asset_id>/objects。 |
+| Phase 10 | P10-M5 前端物体分割面板 / Frontend object segmentation panel | 已完成 / Done | 驾驶舱展示物体数量、噪声点和首个候选对象。 |
+| Phase 10 | P10-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 10 文档和测试约束。 |
 
 ## 技术路线 / Technical Routes
 
@@ -484,6 +496,28 @@ GET /analysis
 Phase 7 会从 `data/assets/<asset_id>/asset.json` 的 `file.path` 读取源点云，采样后复用 Phase 6 分析模型，并在资产索引中写入 `analysis_status` 和报告路径。
 
 Phase 7 reads the source path from `data/assets/<asset_id>/asset.json`, samples points, reuses the Phase 6 analysis model, and records `analysis_status` plus report paths in the asset registry.
+## Phase 9 命令 / Phase 9 Commands
+
+交付包导出会读取质量门禁 / Delivery export reads the quality gate:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli export-delivery-package `
+  --project-root .\workspace `
+  --asset-id sample
+```
+
+复核态显式放行 / Explicitly allow review-required assets:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli export-delivery-package `
+  --project-root .\workspace `
+  --asset-id sample `
+  --allow-review-required
+```
+
+`blocked` 状态不会被 `--allow-review-required` 放行；只有 `review_required` 可以通过显式参数导出。
+
+`blocked` is never released by `--allow-review-required`; only `review_required` can be exported through the explicit override.
 ## Phase 8 命令 / Phase 8 Commands
 
 从分析报告生成质量门禁 / Build a quality gate from analysis findings:
@@ -571,9 +605,36 @@ workspace/
 - `docs/phase6-point-cloud-analysis.md`
 - `docs/phase7-real-las-analysis.md`
 - `docs/phase8-quality-gates.md`
+- `docs/phase9-delivery-gates.md`
 
 
 
 
 
 
+
+
+
+### Phase 10 物体分割 / Phase 10 Object Segmentation
+
+从轻量点记录生成物体候选分割 / Build object candidate segmentation from point records:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli segment-objects `
+  --project-root workspace `
+  --asset-id site-a-las `
+  --points-json workspace/samples/site-a.points.json `
+  --distance-threshold 1.0 `
+  --min-points 10
+```
+
+读取物体分割结果 / Read object segmentation result:
+
+```text
+GET /segments/<asset_id>/objects
+```
+
+输出文件 / Outputs:
+
+- `reports/object_segments/<asset_id>/object_segments.json`
+- `reports/object_segments/<asset_id>/object_segments.md`

@@ -281,6 +281,13 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         path = project_root / "reports" / "analysis" / asset_id / "point_cloud_analysis.json"
         return _read_json_or_404(path, "Point cloud analysis")
 
+    @app.get("/segments/{asset_id}/objects")
+    def get_object_segments(asset_id: str) -> dict:
+        """返回 Phase 10 物体候选分割报告。"""
+
+        path = project_root / "reports" / "object_segments" / asset_id / "object_segments.json"
+        return _read_json_or_404(path, "Object segmentation")
+
     @app.get("/quality-gates/{asset_id}")
     def get_quality_gate(asset_id: str) -> dict:
         """返回 Phase 8 质量门禁报告。"""

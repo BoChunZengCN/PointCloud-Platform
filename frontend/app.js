@@ -281,7 +281,9 @@ function renderDashboard(project) {
   renderJobSummary(asset, null);
   renderQualityInsights(asset, null);
   renderAnalysisOverview(project, null);
+  renderObjectSegmentation(asset, null);
   renderQualityGateStatus(asset, null);
+  renderDeliveryGateNotice(asset, null);
   if (project.sourceType === "api" && asset) {
     fetchJobSummary(asset.id)
       .then((summary) => renderJobSummary(asset, summary))
@@ -292,6 +294,9 @@ function renderDashboard(project) {
     fetchAnalysisOverview()
       .then((overview) => renderAnalysisOverview(project, overview))
       .catch(() => renderAnalysisOverview(project, null));
+    fetchObjectSegmentation(asset.id)
+      .then((segments) => renderObjectSegmentation(asset, segments))
+      .catch(() => renderObjectSegmentation(asset, { object_count: 0, noise_point_count: 0, objects: [] }));
     fetchQualityGate(asset.id)
       .then((gate) => renderQualityGateStatus(asset, gate))
       .catch(() => renderQualityGateStatus(asset, { status: "review_required", severity: "warning", finding_count: 0 }));
@@ -555,6 +560,27 @@ function renderQualityGateStatus(asset, gate) {
     textElement("small", `${asset.id} · ${gate.finding_count || 0} 项质量提示`),
   );
 }
+function renderDeliveryGateNotice(asset, gate) {
+  const node = document.getElementById("delivery-gate-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset || !gate) {
+    node.replaceChildren(textElement("span", "交付放行"), textElement("strong", "等待门禁"), textElement("small", "生成 quality gate 后判断是否可导出"));
+    return;
+  }
+  const deliveryLabels = {
+    passed: ["可导出", "export-delivery-package 可直接执行"],
+    review_required: ["需复核", "使用 --allow-review-required 后可导出"],
+    blocked: ["不可导出", "blocked 门禁会阻止交付包导出"],
+  };
+  const [label, note] = deliveryLabels[gate.status] || deliveryLabels.review_required;
+  node.replaceChildren(
+    textElement("span", "交付放行"),
+    textElement("strong", label),
+    textElement("small", `${asset.id} · ${note}`),
+  );
+}
 async function fetchAnalysisOverview() {
   return await loadJson(`${API_BASE_URL}/analysis`);
 }
@@ -582,6 +608,38 @@ function renderAnalysisOverview(project, overview) {
 async function fetchPointCloudAnalysis(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/analysis/${encodedAssetId}`);
+}
+
+async function fetchObjectSegmentation(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/segments/${encodedAssetId}/objects`);
+}
+
+function renderObjectSegmentation(asset, segments) {
+  const node = document.getElementById("object-segmentation-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.replaceChildren(textElement("span", "暂无资产"));
+    return;
+  }
+  if (!segments) {
+    node.replaceChildren(
+      textElement("span", "物体分割"),
+      textElement("strong", "读取中"),
+      textElement("small", "正在读取 Phase 10 分割报告"),
+    );
+    return;
+  }
+
+  const firstObject = (segments.objects || [])[0];
+  const detail = firstObject ? `${firstObject.object_id} · ${formatNumber(firstObject.point_count)} points` : "等待生成 object_segments.json";
+  node.replaceChildren(
+    textElement("span", `${asset.id} · ${segments.method || "geometric_cluster"}`),
+    textElement("strong", `${formatNumber(segments.object_count || 0)} objects`),
+    textElement("small", `${formatNumber(segments.noise_point_count || 0)} noise points · ${detail}`),
+  );
 }
 
 function renderQualityInsights(asset, analysis) {
@@ -683,6 +741,8 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
+
 
 
 

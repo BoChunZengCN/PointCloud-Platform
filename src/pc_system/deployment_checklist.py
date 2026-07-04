@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -39,6 +40,7 @@ def _expected_items(asset_id: str) -> list[tuple[str, bool, str]]:
         ("phase2_viewer_manifest", True, f"previews/{asset_id}/phase2_viewer_manifest.json"),
         ("quality_report", False, f"reports/{asset_id}/quality_report.html"),
         ("segmentation_summary", False, f"reports/{asset_id}/segments/room-a/baseline/segmentation_summary.html"),
+        ("quality_gate", True, f"reports/quality_gates/{asset_id}/quality_gate.json"),
     ]
 
 
@@ -48,12 +50,16 @@ def build_deployment_checklist(project_root: Path, asset_id: str, exists: PathEx
     exists_func = exists or (lambda path: path.exists())
     items = []
     for name, required, relative_path in _expected_items(asset_id):
-        status = "ready" if exists_func(project_root / relative_path) else "missing"
+        path = project_root / relative_path
+        status = "ready" if exists_func(path) else "missing"
+        if name == "quality_gate" and status == "ready":
+            gate = json.loads(path.read_text(encoding="utf-8"))
+            status = gate.get("status", "missing")
         items.append(DeploymentItem(name=name, required=required, path=relative_path, status=status).to_dict())
 
     ready_count = sum(1 for item in items if item["status"] == "ready")
     missing_count = sum(1 for item in items if item["status"] == "missing")
-    required_missing = [item for item in items if item["required"] and item["status"] != "ready"]
+    required_missing = [item for item in items if item["required"] and item["status"] not in {"ready", "passed"}]
     ready = not required_missing
     return {
         "phase": "Phase 3",
@@ -104,3 +110,4 @@ def write_deployment_checklist(checklist: dict, output_dir: Path) -> dict[str, P
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.write_text(_render_markdown(checklist), encoding="utf-8")
     return {"json": json_path, "markdown": markdown_path}
+

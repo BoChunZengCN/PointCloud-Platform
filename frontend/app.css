@@ -712,3 +712,58 @@ h2 {
 .quality-gate-status-bar[data-status="blocked"] strong {
   color: var(--red);
 }
+
+
+.object-segmentation-panel {
+  border-color: rgba(73, 91, 166, 0.32);
+}
+
+.object-segmentation-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.object-segmentation-summary span,
+.object-segmentation-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.object-segmentation-summary strong {
+  color: #495ba6;
+  font-size: 22px;
+  line-height: 1.15;
+}
+.delivery-gate-notice {
+  border-color: rgba(23, 111, 122, 0.28);
+}
+
+.delivery-gate-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.delivery-gate-summary span,
+.delivery-gate-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.delivery-gate-summary strong {
+  color: var(--cyan);
+  font-size: 22px;
+  line-height: 1.15;
+}
+

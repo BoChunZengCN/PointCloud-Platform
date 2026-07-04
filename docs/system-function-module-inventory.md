@@ -1,0 +1,200 @@
+# 点云平台功能模块总览 / Point Cloud Platform Module Inventory
+
+本文档整理当前系统已规划和已实现的功能模块，供后续开发、验收和交付沟通使用。
+
+This document summarizes the current functional modules of the point-cloud platform for future development, acceptance, and delivery communication.
+
+## 交付门禁是什么 / What Is Delivery Gate
+
+交付门禁是交付包导出前的质量放行控制。它不是用来发现点云问题的模块；发现问题由 Phase 6/7 的点云分析与 Phase 8 的质量门禁完成。交付门禁负责读取质量门禁结果，然后决定是否允许执行 `export-delivery-package`。
+
+Delivery Gate is the release-control layer before exporting a delivery package. It does not discover point-cloud quality issues by itself; Phase 6/7 analysis and Phase 8 quality gates do that. Delivery Gate reads the quality-gate result and decides whether `export-delivery-package` is allowed.
+
+### 当前规则 / Current Rules
+
+| 质量门禁状态 / Quality Gate Status | 交付导出行为 / Delivery Export Behavior | 说明 / Notes |
+| --- | --- | --- |
+| `passed` | 允许导出 / Allowed | 资产通过质量门禁，可正常导出交付包。 |
+| `review_required` | 默认阻止，显式放行后允许 / Blocked by default, allowed with explicit override | 需要人工复核；使用 `--allow-review-required` 后可导出。 |
+| `blocked` | 阻止导出 / Blocked | 即使使用 override 也不允许导出。 |
+| missing gate | 阻止导出 / Blocked | 缺少质量门禁报告时，必须先生成 gate。 |
+
+### 典型流程 / Typical Flow
+
+```text
+analyze-asset
+  -> point_cloud_analysis.json
+  -> check-quality-gate
+  -> quality_gate.json
+  -> export-delivery-package
+  -> delivery_manifest.json / zip
+```
+
+## 总体功能链路 / Overall Workflow
+
+```text
+LAS/LAZ or FLS source
+  -> asset metadata
+  -> QA / preview / slicing / segmentation
+  -> Potree / Gaussian Splatting / viewer manifests
+  -> production plan / job / API / frontend dashboard
+  -> point-cloud analysis
+  -> quality gate
+  -> delivery gate
+  -> delivery package
+```
+
+## Phase 1: 已处理 LAS/LAZ 基础处理 / Processed LAS/LAZ Foundation
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| M1 项目骨架 / Project skeleton | 已完成 / Done | 初始化标准 workspace 目录和配置入口。 | `data/`, `reports/`, `previews/`, `logs/` |
+| M2 LAS 资产元数据 / LAS asset metadata | 已完成 / Done | 读取 LAS/LAZ 元数据，生成资产记录。 | `data/assets/<asset_id>/asset.json` |
+| M3 QA 报告 / QA report | 已完成 / Done | 输出基础质量检查结果。 | `quality_report.json`, `quality_report.html` |
+| M4 预览与 Potree 发布 / Preview and Potree publish | 已完成 / Done | 生成预览清单，必要时调用 PotreeConverter。 | `preview_manifest.json`, `potree_manifest.json` |
+| M5 切片计划与执行 / Slice planning and execution | 已完成 / Done | 创建空间切片计划，并支持占位/PDAL 执行。 | `slice_plan.json`, sliced point files |
+| M6 规则分割 / Rule segmentation | 已完成 / Done | 对切片结果做规则分割，支持 Open3D 脚本适配。 | rule plan, labels, segmentation summary |
+| M7 模块状态 / Module status | 已完成 / Done | 输出 Phase 1 模块完成状态。 | `module_status.json`, `module_status.md` |
+
+## Phase 2: FLS 与高级渲染路线 / FLS and Advanced Rendering Route
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| FLS 接入 / FLS ingest | 已完成 / Done | 为原始 FLS 文件创建转换计划，并调用外部转换器边界。 | FLS ingest plan/report |
+| Gaussian Splatting | 已完成 / Done | 生成并执行 3DGS 训练计划，训练器外置。 | Gaussian Splatting plan/output manifest |
+| 统一查看器 / Unified viewer | 已完成 / Done | 汇总 Potree、Splat、报告入口。 | `phase2_viewer_manifest.json` |
+| Phase 2 状态报告 / Phase 2 status | 已完成 / Done | 输出 Phase 2 模块状态。 | `phase2_status.json`, `phase2_status.md` |
+
+## Phase 3: 生产化与交付 / Production and Delivery
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P3-M1 生产工具检查 / Production tool check | 已完成 / Done | 检查 FLS/PDAL/Potree/3DGS/Open3D 等工具路径。 | `phase3_tool_check.json`, `.md` |
+| P3-M2 生产运行计划 / Production run plan | 已完成 / Done | 串联 Phase 1/2/3 命令，形成可审计计划。 | `production_run_plan.json`, `.md` |
+| P3-M3 生产运行报告 / Production run report | 已完成 / Done | 根据计划输出运行状态报告。 | `production_run_report.json`, `.md` |
+| P3-M4 部署包检查 / Deployment package checklist | 已完成 / Done | 检查交付所需关键产物是否齐备。 | `deployment_checklist.json`, `.md` |
+| P3-M5 交付包导出 / Delivery package export | 已完成 / Done | 复制 ready 文件，生成交付 manifest 和 zip。 | `delivery_manifest.json`, `.md`, `.zip` |
+
+## Phase 4: 生产 Job Runner / Production Job Runner
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P4-M1 Job 生命周期 CLI / Job lifecycle CLI | 已完成 / Done | 从生产计划创建 job，更新 step 状态。 | job JSON files |
+| P4-M2 Job 状态 API 与驾驶舱 / Job status API and dashboard | 已完成 / Done | API 汇总 job 状态，并在前端展示最新任务。 | `/runs/<asset_id>/jobs` |
+| P4-M3 受控 Job 写入 API / Controlled Job Write API | 已完成 / Done | 通过 API 创建 job、更新 step。 | POST/PATCH job endpoints |
+| P4-EX1 前端 Job 操作面板 / Frontend job operation panel | 已完成 / Done | 在驾驶舱创建 job、更新 step 状态。 | frontend controls |
+| P4-EX2 Job 操作审计 / Job audit event log | 已完成 / Done | 记录 job 创建和状态更新事件。 | JSONL audit events |
+| P4-EX3 Job 详情 API / Job detail API | 已完成 / Done | 返回单 job 和审计事件。 | job detail endpoint |
+| P4-EX4 Retry/Block/Fail 语义 / Retry, block, fail semantics | 已完成 / Done | 记录 attempt、last_error、updated_at。 | richer job state |
+| P4-EX5 轻量执行适配器 / Lightweight execution adapter | 已完成 / Done | 提供不执行 shell 的本地状态推进适配器。 | local execution adapter |
+| P4-EX6 队列接口预留 / Async queue interface reservation | 已完成 / Done | 以 JSONL 形式预留 enqueue/list 队列接口。 | queue JSONL contract |
+
+## Phase 5: API 生产加固 / API Production Hardening
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P5-M1 API 写入保护 / API write protection | 已完成 / Done | 写入路由支持 API Key 保护。 | API key guard |
+| P5-M2 运行模式 / Run modes | 已完成 / Done | 支持 development / production 模式。 | run-mode config |
+| P5-M3 API 启动 CLI / API service CLI | 已完成 / Done | 新增 `serve-api` 命令。 | API start command |
+| P5-M4 前端 API 状态 / Frontend API health status | 已完成 / Done | 驾驶舱显示 API 在线状态和写入保护。 | API status bar |
+| P5-M5 Workspace 一致性检查 / Workspace consistency report | 已完成 / Done | 检查 asset/plan/job/events 一致性。 | consistency report |
+| P5-M6 部署文档 / Deployment docs | 已完成 / Done | 新增最小生产部署说明。 | `phase5-production-hardening.md` |
+
+## Phase 6: 点云分析与质量洞察 / Point-Cloud Analysis and Quality Insights
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P6-M1 点云深度统计模型 / Point-cloud analysis model | 已完成 / Done | 统计点数、边界、密度、RGB 覆盖率、分类分布。 | analysis JSON fields |
+| P6-M2 采样与空间网格统计 / Sampling and spatial grid stats | 已完成 / Done | 生成空间网格和单元统计。 | `grid` stats |
+| P6-M3 质量异常检测报告 / Quality findings report | 已完成 / Done | 输出 RGB 缺失、高程跨度、低密度网格提示。 | `findings` |
+| P6-M4 分析 CLI / Analysis CLI | 已完成 / Done | 新增 `analyze-point-cloud`。 | `point_cloud_analysis.json`, `.md` |
+| P6-M5 分析 API / Analysis API | 已完成 / Done | 读取单资产分析结果。 | `GET /analysis/<asset_id>` |
+| P6-M6 前端质量洞察 / Frontend quality insights | 已完成 / Done | 驾驶舱展示 RGB、网格、质量提示。 | quality insight panel |
+
+## Phase 7: 真实 LAS/LAZ 分析接入 / Real LAS/LAZ Analysis Integration
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P7-M1 LAS/LAZ 采样适配器 / LAS/LAZ sampling adapter | 已完成 / Done | 从轻量 JSON 或真实 LAS/LAZ 源采样点记录。 | sampled point records |
+| P7-M2 analyze-asset CLI | 已完成 / Done | 按 workspace 资产 ID 直接生成分析报告。 | `analyze-asset` |
+| P7-M3 资产索引分析状态 / Asset registry analysis status | 已完成 / Done | asset_index 增加 `analysis_status` 和报告路径。 | asset registry fields |
+| P7-M4 分析概览 API / Analysis overview API | 已完成 / Done | 汇总所有分析报告。 | `GET /analysis` |
+| P7-M5 前端分析概览 / Frontend analysis overview | 已完成 / Done | 驾驶舱展示已分析资产数量。 | analysis overview panel |
+| P7-M6 文档与回归 / Docs and regression | 已完成 / Done | README 与 Phase 7 文档同步。 | `phase7-real-las-analysis.md` |
+
+## Phase 8: 质量门禁 / Quality Gates
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P8-M1 Findings 规则映射 / Findings rule mapping | 已完成 / Done | 将 findings 映射成 `passed`、`review_required`、`blocked`。 | gate decision |
+| P8-M2 质量门禁报告 / Quality gate report | 已完成 / Done | 写出质量门禁 JSON 与 Markdown。 | `quality_gate.json`, `.md` |
+| P8-M3 check-quality-gate CLI | 已完成 / Done | 从分析报告生成质量门禁。 | `check-quality-gate` |
+| P8-M4 质量门禁 API / Quality gate API | 已完成 / Done | 返回单资产质量门禁。 | `GET /quality-gates/<asset_id>` |
+| P8-M5 前端质量门禁状态条 / Frontend quality gate status bar | 已完成 / Done | 驾驶舱展示可交付、需复核、阻塞。 | quality gate status bar |
+| P8-M6 文档与回归 / Docs and regression | 已完成 / Done | README 与 Phase 8 文档同步。 | `phase8-quality-gates.md` |
+
+## Phase 9: 交付门禁 / Delivery Gates
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P9-M1 交付门禁策略 / Delivery gate policy | 已完成 / Done | 判断质量门禁是否允许导出交付包。 | `evaluate_delivery_gate` |
+| P9-M2 阻止 blocked 导出 / Block blocked delivery export | 已完成 / Done | `blocked` 时 `export-delivery-package` 返回 2，不生成交付包。 | blocked export guard |
+| P9-M3 复核态显式放行 / Review override | 已完成 / Done | `review_required` 默认阻止，`--allow-review-required` 后允许。 | CLI override |
+| P9-M4 部署检查门禁状态 / Deployment checklist gate status | 已完成 / Done | deployment checklist 增加 required 的 `quality_gate` 项。 | checklist item |
+| P9-M5 前端交付提示 / Frontend delivery gate notice | 已完成 / Done | 驾驶舱展示可导出、需复核、不可导出。 | delivery gate notice |
+| P9-M6 文档与回归 / Docs and regression | 已完成 / Done | README 与 Phase 9 文档同步。 | `phase9-delivery-gates.md` |
+
+## Phase 10: 物体分割 / Object Segmentation
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P10-M1 物体候选模型 / Object candidate model | 已完成 / Done | 从点记录按三维距离聚类，生成物体候选。 | `segment_object_candidates` |
+| P10-M2 分割报告写出 / Segmentation report output | 已完成 / Done | 写出可审计 JSON 与 Markdown 报告。 | `object_segments.json`, `.md` |
+| P10-M3 segment-objects CLI | 已完成 / Done | 从轻量 points JSON 生成物体分割报告。 | `segment-objects` |
+| P10-M4 物体分割 API / Object segmentation API | 已完成 / Done | 返回单资产物体分割结果。 | `GET /segments/<asset_id>/objects` |
+| P10-M5 前端物体分割面板 / Frontend object segmentation panel | 已完成 / Done | 驾驶舱展示对象数量、噪声点和候选对象摘要。 | object segmentation panel |
+| P10-M6 文档与回归 / Docs and regression | 已完成 / Done | README 与 Phase 10 文档同步。 | `phase10-object-segmentation.md` |
+## 关键 CLI 命令 / Key CLI Commands
+
+```powershell
+python -m pc_system.cli init --project-root .\workspace
+python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.las
+python -m pc_system.cli analyze-asset --project-root .\workspace --asset-id sample
+python -m pc_system.cli check-quality-gate --project-root .\workspace --asset-id sample
+python -m pc_system.cli segment-objects --project-root .\workspace --asset-id sample --points-json .\workspace\samples\sample.points.json
+python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample
+python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample --allow-review-required
+python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --port 8000
+```
+
+## 关键 API / Key APIs
+
+| API | 用途 / Purpose |
+| --- | --- |
+| `GET /health` | API 健康状态。 |
+| `GET /assets` | 资产索引。 |
+| `GET /analysis` | 分析报告概览。 |
+| `GET /analysis/<asset_id>` | 单资产点云分析报告。 |
+| `GET /quality-gates/<asset_id>` | 单资产质量门禁。 |
+| `GET /runs/<asset_id>/jobs` | 生产 job 汇总。 |
+| `POST /runs/<asset_id>/jobs` | 创建生产 job。 |
+| `PATCH /runs/<asset_id>/jobs/<job_id>/steps/<step_id>` | 更新 job step。 |
+| `GET /deployment/<asset_id>` | 部署检查清单。 |
+| `GET /delivery/<asset_id>/status` | 交付状态。 |
+
+## 主要前端入口 / Frontend Entrypoints
+
+| 页面 / Page | 文件 / File | 用途 / Purpose |
+| --- | --- | --- |
+| 项目驾驶舱 / Dashboard | `frontend/index.html` | 资产、任务、分析、质量门禁、交付状态总览。 |
+| 展示页 / Showcase viewer | `frontend/viewer.html` | 单资产展示型查看器入口。 |
+| 设计候选 / Design options | `frontend/design-options/` | UI 风格候选页面。 |
+
+## 当前后续建议 / Recommended Next Iterations
+
+1. 将 Phase 9 的 delivery gate 决策写入 delivery manifest，形成交付审计链。
+2. 增加项目级质量/交付门禁，汇总多个资产的最严重状态。
+3. 将 `blocked` 自动联动到 Phase 4 production job step。
+4. 为展示页加入质量网格或热力图叠加层。
+5. 增强真实 LAS/LAZ 采样策略，例如分层采样、分类覆盖采样、空间边界覆盖采样。
+
