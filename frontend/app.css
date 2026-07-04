@@ -669,3 +669,46 @@ h2 {
   font-size: 22px;
   line-height: 1.15;
 }
+
+.quality-gate-status-bar {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 180px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 54px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: var(--shadow);
+}
+
+.quality-gate-status-bar span,
+.quality-gate-status-bar small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quality-gate-status-bar strong {
+  color: var(--green);
+  font-size: 16px;
+}
+
+.quality-gate-status-bar[data-status="review_required"] {
+  border-color: #e0c08c;
+  background: #fff8ea;
+}
+
+.quality-gate-status-bar[data-status="review_required"] strong {
+  color: var(--amber);
+}
+
+.quality-gate-status-bar[data-status="blocked"] {
+  border-color: rgba(176, 68, 62, 0.4);
+  background: #fff1ef;
+}
+
+.quality-gate-status-bar[data-status="blocked"] strong {
+  color: var(--red);
+}

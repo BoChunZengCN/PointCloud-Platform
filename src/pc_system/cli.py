@@ -25,6 +25,7 @@ from pc_system.commands.phase2 import (
 from pc_system.commands.phase4 import run_create_production_job, run_update_job_step
 from pc_system.commands.phase5 import run_check_consistency, run_serve_api
 from pc_system.commands.phase6 import run_analyze_asset, run_analyze_point_cloud
+from pc_system.commands.phase8 import run_check_quality_gate
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -167,6 +168,8 @@ def main(
             return run_analyze_point_cloud(args.project_root, args.asset_id, args.points_json, args.grid_cell_size)
         if args.command == "analyze-asset":
             return run_analyze_asset(args.project_root, args.asset_id, args.max_points, args.grid_cell_size)
+        if args.command == "check-quality-gate":
+            return run_check_quality_gate(args.project_root, args.asset_id)
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
@@ -178,6 +181,7 @@ def main(
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

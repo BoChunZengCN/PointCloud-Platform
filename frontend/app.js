@@ -281,6 +281,7 @@ function renderDashboard(project) {
   renderJobSummary(asset, null);
   renderQualityInsights(asset, null);
   renderAnalysisOverview(project, null);
+  renderQualityGateStatus(asset, null);
   if (project.sourceType === "api" && asset) {
     fetchJobSummary(asset.id)
       .then((summary) => renderJobSummary(asset, summary))
@@ -291,6 +292,9 @@ function renderDashboard(project) {
     fetchAnalysisOverview()
       .then((overview) => renderAnalysisOverview(project, overview))
       .catch(() => renderAnalysisOverview(project, null));
+    fetchQualityGate(asset.id)
+      .then((gate) => renderQualityGateStatus(asset, gate))
+      .catch(() => renderQualityGateStatus(asset, { status: "review_required", severity: "warning", finding_count: 0 }));
   }
 }
 
@@ -519,6 +523,38 @@ async function fetchJobSummary(assetId) {
   return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
 }
 
+async function fetchQualityGate(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/quality-gates/${encodedAssetId}`);
+}
+
+function renderQualityGateStatus(asset, gate) {
+  const node = document.getElementById("quality-gate-status-bar");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.dataset.status = "review_required";
+    node.replaceChildren(textElement("span", "质量门禁"), textElement("strong", "暂无资产"), textElement("small", "请先生成资产索引"));
+    return;
+  }
+  if (!gate) {
+    node.dataset.status = "review_required";
+    node.replaceChildren(textElement("span", "质量门禁"), textElement("strong", "读取中"), textElement("small", `正在检查 ${asset.id}`));
+    return;
+  }
+  const statusLabels = {
+    passed: "可交付",
+    review_required: "需复核",
+    blocked: "阻塞",
+  };
+  node.dataset.status = gate.status || "review_required";
+  node.replaceChildren(
+    textElement("span", "质量门禁"),
+    textElement("strong", statusLabels[gate.status] || "需复核"),
+    textElement("small", `${asset.id} · ${gate.finding_count || 0} 项质量提示`),
+  );
+}
 async function fetchAnalysisOverview() {
   return await loadJson(`${API_BASE_URL}/analysis`);
 }
@@ -647,5 +683,6 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
 
 

@@ -172,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_asset.add_argument("--asset-id", required=True)
     analyze_asset.add_argument("--max-points", default=10000, type=int)
     analyze_asset.add_argument("--grid-cell-size", default=5.0, type=float)
+    quality_gate = subparsers.add_parser("check-quality-gate", help="Build a Phase 8 quality gate report from analysis findings.")
+    quality_gate.add_argument("--project-root", required=True, type=Path)
+    quality_gate.add_argument("--asset-id", required=True)
     return parser
+
 
 

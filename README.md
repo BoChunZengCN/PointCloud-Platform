@@ -61,6 +61,12 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 7 | P7-M4 分析概览 API / Analysis overview API | 已完成 / Done | 新增 GET /analysis 汇总所有分析报告。 |
 | Phase 7 | P7-M5 前端分析概览 / Frontend analysis overview | 已完成 / Done | 驾驶舱展示已分析资产数量。 |
 | Phase 7 | P7-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 7 文档和测试约束。 |
+| Phase 8 | P8-M1 Findings 规则映射 / Findings rule mapping | 已完成 / Done | 将分析 findings 映射为 passed / review_required / blocked。 |
+| Phase 8 | P8-M2 质量门禁报告 / Quality gate report | 已完成 / Done | 输出 quality_gate.json 与 quality_gate.md。 |
+| Phase 8 | P8-M3 check-quality-gate CLI | 已完成 / Done | 从点云分析报告生成质量门禁报告。 |
+| Phase 8 | P8-M4 质量门禁 API / Quality gate API | 已完成 / Done | 新增 GET /quality-gates/<asset_id>。 |
+| Phase 8 | P8-M5 前端质量门禁状态条 / Frontend quality gate status bar | 已完成 / Done | 驾驶舱展示可交付、需复核、阻塞状态。 |
+| Phase 8 | P8-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 8 文档和测试约束。 |
 
 ## 技术路线 / Technical Routes
 
@@ -478,6 +484,25 @@ GET /analysis
 Phase 7 会从 `data/assets/<asset_id>/asset.json` 的 `file.path` 读取源点云，采样后复用 Phase 6 分析模型，并在资产索引中写入 `analysis_status` 和报告路径。
 
 Phase 7 reads the source path from `data/assets/<asset_id>/asset.json`, samples points, reuses the Phase 6 analysis model, and records `analysis_status` plus report paths in the asset registry.
+## Phase 8 命令 / Phase 8 Commands
+
+从分析报告生成质量门禁 / Build a quality gate from analysis findings:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli check-quality-gate `
+  --project-root .\workspace `
+  --asset-id sample
+```
+
+读取质量门禁状态 / Read quality gate status:
+
+```text
+GET /quality-gates/<asset_id>
+```
+
+Phase 8 会读取 `reports/analysis/<asset_id>/point_cloud_analysis.json`，输出 `reports/quality_gates/<asset_id>/quality_gate.json` 和 Markdown 摘要，供 API 与前端状态条复用。
+
+Phase 8 reads `reports/analysis/<asset_id>/point_cloud_analysis.json` and writes `reports/quality_gates/<asset_id>/quality_gate.json` plus a Markdown summary for API and frontend status-bar usage.
 生产环境写入保护 / Production write protection:
 
 ```powershell
@@ -515,6 +540,8 @@ workspace/
   reports/jobs/<asset_id>/<job_id>.json
   reports/analysis/<asset_id>/point_cloud_analysis.json
   reports/analysis/<asset_id>/point_cloud_analysis.md
+  reports/quality_gates/<asset_id>/quality_gate.json
+  reports/quality_gates/<asset_id>/quality_gate.md
   delivery/<asset_id>/delivery_manifest.json
   delivery/<asset_id>/delivery_manifest.md
   delivery/<asset_id>/files/...
@@ -543,6 +570,9 @@ workspace/
 - `docs/phase5-production-hardening.md`
 - `docs/phase6-point-cloud-analysis.md`
 - `docs/phase7-real-las-analysis.md`
+- `docs/phase8-quality-gates.md`
+
+
 
 
 
