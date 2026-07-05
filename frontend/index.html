@@ -39,6 +39,12 @@
         <small>正在读取服务状态</small>
       </section>
 
+      <section id="project-gate-status" class="project-gate-status" aria-label="项目级门禁状态">
+        <span>项目门禁</span>
+        <strong>等待数据</strong>
+        <small>生成 project gate 后读取</small>
+      </section>
+
       <section id="quality-gate-status-bar" class="quality-gate-status-bar" aria-label="质量门禁状态">
         <span>质量门禁</span>
         <strong>等待资产</strong>
@@ -148,6 +154,13 @@
               <span>等待质量门禁</span>
             </div>
           </section>
+          <section id="report-center-panel" class="info-card report-center-panel" aria-labelledby="report-center-title">
+            <p class="eyebrow">Phase 11 Reports</p>
+            <h2 id="report-center-title">报告中心</h2>
+            <div id="report-center-summary" class="report-center-summary">
+              <span>等待报告索引</span>
+            </div>
+          </section>
           <section class="info-card" aria-labelledby="reports-title">
             <p class="eyebrow">Reports</p>
             <h2 id="reports-title">报告入口</h2>
@@ -160,6 +173,8 @@
     <script src="app.js" defer></script>
   </body>
 </html>
+
+
 
 
 

@@ -284,6 +284,8 @@ function renderDashboard(project) {
   renderObjectSegmentation(asset, null);
   renderQualityGateStatus(asset, null);
   renderDeliveryGateNotice(asset, null);
+  renderProjectGateStatus(null);
+  renderReportCenter(null);
   if (project.sourceType === "api" && asset) {
     fetchJobSummary(asset.id)
       .then((summary) => renderJobSummary(asset, summary))
@@ -528,6 +530,50 @@ async function fetchJobSummary(assetId) {
   return await loadJson(`${API_BASE_URL}/runs/${encodedAssetId}/jobs`);
 }
 
+
+async function fetchProjectGate() {
+  return await loadJson(`${API_BASE_URL}/project-gate`);
+}
+
+function renderProjectGateStatus(gate) {
+  const node = document.getElementById("project-gate-status");
+  if (!node) {
+    return;
+  }
+  if (!gate) {
+    node.dataset.status = "review_required";
+    node.replaceChildren(textElement("span", "项目门禁"), textElement("strong", "读取中"), textElement("small", "正在读取项目级门禁"));
+    return;
+  }
+  const labels = { passed: "可交付", review_required: "需复核", blocked: "阻塞", missing: "缺失" };
+  node.dataset.status = gate.status || "review_required";
+  node.replaceChildren(
+    textElement("span", "项目门禁"),
+    textElement("strong", labels[gate.status] || "需复核"),
+    textElement("small", `${gate.asset_count || 0} 个资产 · 项目级汇总`),
+  );
+}
+
+async function fetchReportCenter() {
+  return await loadJson(`${API_BASE_URL}/reports/center`);
+}
+
+function renderReportCenter(center) {
+  const node = document.getElementById("report-center-summary");
+  if (!node) {
+    return;
+  }
+  if (!center) {
+    node.replaceChildren(textElement("span", "报告中心"), textElement("strong", "读取中"), textElement("small", "正在扫描 reports 与 delivery"));
+    return;
+  }
+  const firstReport = (center.reports || [])[0];
+  node.replaceChildren(
+    textElement("span", "报告中心"),
+    textElement("strong", `${formatNumber(center.report_count || 0)} reports`),
+    textElement("small", firstReport ? firstReport.path : "等待生成报告"),
+  );
+}
 async function fetchQualityGate(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/quality-gates/${encodedAssetId}`);
@@ -741,6 +787,8 @@ initWorkbench();
 function renderWorkflow(project) {
   renderDecisions(project);
 }
+
+
 
 
 

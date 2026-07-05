@@ -119,6 +119,59 @@ def segment_object_candidates(
     }
 
 
+
+
+def segment_with_open3d_adapter(
+    asset_id: str,
+    points: list[dict[str, Any]],
+    distance_threshold: float = 1.0,
+    min_points: int = 10,
+    runner=None,
+) -> dict[str, Any]:
+    """通过 Open3D 适配边界生成物体候选分割报告。
+
+    runner 参数让测试和后续生产适配器可以注入真实 Open3D DBSCAN 实现；未注入时，
+    当前版本使用内置几何聚类作为兼容回退，并把 method 标记为 open3d_dbscan。
+    """
+
+    if runner:
+        report = runner(points, distance_threshold, min_points)
+    else:
+        report = segment_object_candidates(asset_id, points, distance_threshold=distance_threshold, min_points=min_points)
+    report["asset_id"] = asset_id
+    report["method"] = "open3d_dbscan"
+    for item in report.get("objects", []):
+        item["method"] = "open3d_dbscan"
+    return report
+
+
+def build_object_segmentation_quality(
+    report: dict[str, Any],
+    max_noise_ratio: float = 0.2,
+    min_object_count: int = 1,
+) -> dict[str, Any]:
+    """从物体分割报告生成轻量质量指标，供后续质量门禁接入。"""
+
+    point_count = int(report.get("point_count", 0) or 0)
+    noise_count = int(report.get("noise_point_count", 0) or 0)
+    object_count = int(report.get("object_count", 0) or 0)
+    noise_ratio = round(noise_count / point_count, 4) if point_count else 0.0
+    findings: list[dict[str, str]] = []
+    if noise_ratio > max_noise_ratio:
+        findings.append({"code": "high_noise_ratio", "severity": "warning", "message": "Object segmentation noise ratio is above threshold."})
+    if object_count < min_object_count:
+        findings.append({"code": "low_object_count", "severity": "warning", "message": "Object candidate count is below threshold."})
+    return {
+        "schema_version": "1.0",
+        "asset_id": report.get("asset_id", ""),
+        "status": "review_required" if findings else "passed",
+        "point_count": point_count,
+        "object_count": object_count,
+        "noise_point_count": noise_count,
+        "noise_ratio": noise_ratio,
+        "findings": findings,
+    }
+
 def _markdown(report: dict[str, Any]) -> str:
     """生成物体分割 Markdown 摘要，供交付审查快速阅读。"""
 
@@ -146,3 +199,4 @@ def write_object_segmentation_report(report: dict[str, Any], output_dir: Path) -
     markdown_path = output_dir / "object_segments.md"
     markdown_path.write_text(_markdown(report), encoding="utf-8")
     return {"json": json_path, "markdown": markdown_path}
+

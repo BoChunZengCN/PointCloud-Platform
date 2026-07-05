@@ -767,3 +767,64 @@ h2 {
   line-height: 1.15;
 }
 
+
+.project-gate-status {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 180px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 54px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: var(--shadow);
+}
+
+.project-gate-status span,
+.project-gate-status small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-gate-status strong {
+  color: var(--green);
+  font-size: 16px;
+}
+
+.project-gate-status[data-status="review_required"] strong,
+.project-gate-status[data-status="missing"] strong {
+  color: var(--amber);
+}
+
+.project-gate-status[data-status="blocked"] strong {
+  color: var(--red);
+}
+
+.report-center-panel {
+  border-color: rgba(79, 84, 92, 0.28);
+}
+
+.report-center-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.report-center-summary span,
+.report-center-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-center-summary strong {
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.15;
+}

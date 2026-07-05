@@ -154,6 +154,21 @@ LAS/LAZ or FLS source
 | P10-M4 物体分割 API / Object segmentation API | 已完成 / Done | 返回单资产物体分割结果。 | `GET /segments/<asset_id>/objects` |
 | P10-M5 前端物体分割面板 / Frontend object segmentation panel | 已完成 / Done | 驾驶舱展示对象数量、噪声点和候选对象摘要。 | object segmentation panel |
 | P10-M6 文档与回归 / Docs and regression | 已完成 / Done | README 与 Phase 10 文档同步。 | `phase10-object-segmentation.md` |
+| P10-EX1 资产源直分割 / Asset source segmentation | 已完成 / Done | 按 asset_id 读取资产源点云并直接分割。 | `segment-asset-objects` |
+| P10-EX2 分割配置 / Segmentation config | 已完成 / Done | 用 JSON 配置控制距离阈值、最小点数、最大采样数和 engine。 | config JSON |
+| P10-EX3 Open3D 适配边界 / Open3D adapter boundary | 已完成 / Done | 预留 Open3D DBSCAN runner 注入点，保持输出 schema 稳定。 | `open3d_dbscan` |
+| P10-EX4 分割质量指标 / Segmentation quality metrics | 已完成 / Done | 生成噪声比例、对象数量检查和 findings。 | `segmentation_quality` |
+
+## Phase 11: 项目级工作流闭环 / Project Workflow Loop
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P11-M1 项目级门禁 / Project gate | 已完成 / Done | 汇总所有资产质量门禁，生成项目级状态。 | `project_gate.json` |
+| P11-M2 check-project-gate CLI | 已完成 / Done | 从资产索引和质量门禁报告写出项目门禁。 | `check-project-gate` |
+| P11-M3 交付审计增强 / Delivery manifest audit | 已完成 / Done | 在交付 manifest 中记录放行决策。 | `delivery_gate_decision` |
+| P11-M4 Job 门禁联动 / Job gate link | 已完成 / Done | 将 quality gate 状态同步到 job step。 | blocked/completed step |
+| P11-M5 批处理计划 / Batch run plan | 已完成 / Done | 为多资产生成 analyze/gate/segment/delivery 批处理计划。 | `batch_run_plan.json` |
+| P11-M6 报告中心 / Report center | 已完成 / Done | API 与前端读取项目报告索引。 | `GET /reports/center` |
 ## 关键 CLI 命令 / Key CLI Commands
 
 ```powershell
@@ -162,6 +177,9 @@ python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.la
 python -m pc_system.cli analyze-asset --project-root .\workspace --asset-id sample
 python -m pc_system.cli check-quality-gate --project-root .\workspace --asset-id sample
 python -m pc_system.cli segment-objects --project-root .\workspace --asset-id sample --points-json .\workspace\samples\sample.points.json
+python -m pc_system.cli segment-asset-objects --project-root .\workspace --asset-id sample
+python -m pc_system.cli check-project-gate --project-root .\workspace
+python -m pc_system.cli plan-batch-run --project-root .\workspace
 python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample
 python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample --allow-review-required
 python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --port 8000
@@ -176,6 +194,8 @@ python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --
 | `GET /analysis` | 分析报告概览。 |
 | `GET /analysis/<asset_id>` | 单资产点云分析报告。 |
 | `GET /quality-gates/<asset_id>` | 单资产质量门禁。 |
+| `GET /project-gate` | 项目级门禁。 |
+| `GET /reports/center` | 报告中心索引。 |
 | `GET /runs/<asset_id>/jobs` | 生产 job 汇总。 |
 | `POST /runs/<asset_id>/jobs` | 创建生产 job。 |
 | `PATCH /runs/<asset_id>/jobs/<job_id>/steps/<step_id>` | 更新 job step。 |
@@ -197,4 +217,6 @@ python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --
 3. 将 `blocked` 自动联动到 Phase 4 production job step。
 4. 为展示页加入质量网格或热力图叠加层。
 5. 增强真实 LAS/LAZ 采样策略，例如分层采样、分类覆盖采样、空间边界覆盖采样。
+
+
 

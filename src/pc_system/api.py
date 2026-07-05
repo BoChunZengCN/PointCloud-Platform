@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pc_system.config import ProjectConfig
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
+from pc_system.phase11_report_center import build_report_center
 
 
 def _registry_path(project_root: Path) -> Path:
@@ -227,6 +228,12 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Job not found: {path}")
         return {"asset_id": asset_id, "job": load_job(path), "events": read_job_events(path.parent, job_id)}
+    @app.get("/reports/center")
+    def get_report_center() -> dict:
+        """返回 Phase 11 报告中心索引。"""
+
+        return build_report_center(project_root)
+
     @app.get("/reports/{asset_id}")
     def list_reports(asset_id: str) -> dict:
         """返回常用报告路径，前端可直接生成链接。"""
@@ -287,6 +294,13 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
 
         path = project_root / "reports" / "object_segments" / asset_id / "object_segments.json"
         return _read_json_or_404(path, "Object segmentation")
+
+    @app.get("/project-gate")
+    def get_project_gate() -> dict:
+        """返回 Phase 11 项目级门禁报告。"""
+
+        path = project_root / "reports" / "project_gate" / "project_gate.json"
+        return _read_json_or_404(path, "Project gate")
 
     @app.get("/quality-gates/{asset_id}")
     def get_quality_gate(asset_id: str) -> dict:

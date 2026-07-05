@@ -69,7 +69,7 @@ def _item(project_root: Path, source: DeliverySource) -> dict:
     }
 
 
-def build_delivery_package(project_root: Path, registry: dict, asset_id: str) -> dict:
+def build_delivery_package(project_root: Path, registry: dict, asset_id: str, gate_decision: dict | None = None) -> dict:
     """构建交付包 manifest，不复制文件。
 
     该函数只负责计算交付清单，便于测试和前端/API 复用。
@@ -80,7 +80,7 @@ def build_delivery_package(project_root: Path, registry: dict, asset_id: str) ->
     ready_count = sum(1 for item in items if item["status"] == "ready")
     missing_count = sum(1 for item in items if item["status"] == "missing")
     status = "ready" if items and missing_count == 0 else "partial"
-    return {
+    package = {
         "schema_version": "1.0",
         "module": "Delivery Package Export",
         "asset_id": asset_id,
@@ -92,6 +92,9 @@ def build_delivery_package(project_root: Path, registry: dict, asset_id: str) ->
         },
         "items": items,
     }
+    if gate_decision is not None:
+        package["delivery_gate_decision"] = gate_decision
+    return package
 
 
 def _copy_ready_files(project_root: Path, package: dict, output_dir: Path) -> None:
@@ -143,10 +146,11 @@ def export_delivery_package(
     asset_id: str,
     output_dir: Path,
     make_zip: bool = False,
+    gate_decision: dict | None = None,
 ) -> dict[str, Path]:
     """复制交付文件，并按需写出 zip 归档。"""
 
-    package = build_delivery_package(project_root, registry, asset_id)
+    package = build_delivery_package(project_root, registry, asset_id, gate_decision=gate_decision)
     output_dir.mkdir(parents=True, exist_ok=True)
     _copy_ready_files(project_root, package, output_dir)
     json_path = write_json(package, output_dir / "delivery_manifest.json")
@@ -156,3 +160,5 @@ def export_delivery_package(
     if make_zip:
         outputs["zip"] = _write_zip_archive(output_dir, output_dir.with_suffix(".zip"))
     return outputs
+
+

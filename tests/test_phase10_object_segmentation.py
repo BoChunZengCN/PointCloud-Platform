@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 from pc_system.api import create_app
 from pc_system.cli import main
 from pc_system.object_segmentation import (
+    build_object_segmentation_quality,
     segment_object_candidates,
+    segment_with_open3d_adapter,
     write_object_segmentation_report,
 )
 
@@ -131,3 +133,100 @@ def test_p10_m6_docs_describe_object_segmentation_modules():
     assert "P10-M1" in doc
     assert "P10-M6" in doc
     assert "object_segments.json" in doc
+
+
+def test_p10_ex1_cli_segments_workspace_asset_source():
+    project = case_dir("p10-ex1-asset") / "workspace"
+    source = project / "samples" / "scan.points.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps(sample_object_points()), encoding="utf-8")
+    asset_dir = project / "data" / "assets" / "scan"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "asset.json").write_text(json.dumps({"asset_id": "scan", "file": {"path": str(source)}}), encoding="utf-8")
+
+    exit_code = main([
+        "segment-asset-objects",
+        "--project-root",
+        str(project),
+        "--asset-id",
+        "scan",
+        "--distance-threshold",
+        "1.0",
+        "--min-points",
+        "2",
+    ])
+
+    output = project / "reports" / "object_segments" / "scan" / "object_segments.json"
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["source_mode"] == "asset_source"
+    assert payload["object_count"] == 2
+
+
+def test_p10_ex2_cli_reads_segmentation_config_file():
+    project = case_dir("p10-ex2-config") / "workspace"
+    source = project / "samples" / "scan.points.json"
+    config = project / "object-segmentation.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps(sample_object_points()), encoding="utf-8")
+    config.write_text(json.dumps({"distance_threshold": 1.0, "min_points": 2, "max_points": 50}), encoding="utf-8")
+    asset_dir = project / "data" / "assets" / "scan"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "asset.json").write_text(json.dumps({"asset_id": "scan", "file": {"path": str(source)}}), encoding="utf-8")
+
+    exit_code = main([
+        "segment-asset-objects",
+        "--project-root",
+        str(project),
+        "--asset-id",
+        "scan",
+        "--config",
+        str(config),
+    ])
+
+    payload = json.loads((project / "reports" / "object_segments" / "scan" / "object_segments.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["distance_threshold"] == 1.0
+    assert payload["min_points"] == 2
+    assert payload["max_points"] == 50
+
+
+def test_p10_ex3_open3d_adapter_preserves_schema_with_injected_runner():
+    def fake_runner(points, distance_threshold, min_points):
+        report = segment_object_candidates("scan", points, distance_threshold=distance_threshold, min_points=min_points)
+        report["method"] = "open3d_dbscan"
+        for item in report["objects"]:
+            item["method"] = "open3d_dbscan"
+            item["confidence"] = 0.72
+        return report
+
+    report = segment_with_open3d_adapter(
+        "scan",
+        sample_object_points(),
+        distance_threshold=1.0,
+        min_points=2,
+        runner=fake_runner,
+    )
+
+    assert report["method"] == "open3d_dbscan"
+    assert report["object_count"] == 2
+    assert report["objects"][0]["confidence"] == 0.72
+
+
+def test_p10_ex4_builds_object_segmentation_quality_metrics():
+    report = segment_object_candidates("scan", sample_object_points(), distance_threshold=1.0, min_points=2)
+    quality = build_object_segmentation_quality(report, max_noise_ratio=0.1, min_object_count=3)
+
+    assert quality["status"] == "review_required"
+    assert quality["noise_ratio"] == 0.1667
+    assert {finding["code"] for finding in quality["findings"]} == {"high_noise_ratio", "low_object_count"}
+
+
+def test_p10_ex5_docs_describe_extension_modules():
+    doc = (ROOT / "docs" / "phase10-object-segmentation.md").read_text(encoding="utf-8")
+
+    assert "P10-EX1" in doc
+    assert "segment-asset-objects" in doc
+    assert "Open3D" in doc
+    assert "segmentation_quality" in doc
+

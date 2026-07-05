@@ -26,7 +26,8 @@ from pc_system.commands.phase4 import run_create_production_job, run_update_job_
 from pc_system.commands.phase5 import run_check_consistency, run_serve_api
 from pc_system.commands.phase6 import run_analyze_asset, run_analyze_point_cloud
 from pc_system.commands.phase8 import run_check_quality_gate
-from pc_system.commands.phase10 import run_segment_objects
+from pc_system.commands.phase10 import run_segment_asset_objects, run_segment_objects
+from pc_system.commands.phase11 import run_check_project_gate, run_plan_batch_run
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -173,6 +174,12 @@ def main(
             return run_check_quality_gate(args.project_root, args.asset_id)
         if args.command == "segment-objects":
             return run_segment_objects(args.project_root, args.asset_id, args.points_json, args.distance_threshold, args.min_points)
+        if args.command == "segment-asset-objects":
+            return run_segment_asset_objects(args.project_root, args.asset_id, args.distance_threshold, args.min_points, args.max_points, args.engine, args.config)
+        if args.command == "check-project-gate":
+            return run_check_project_gate(args.project_root)
+        if args.command == "plan-batch-run":
+            return run_plan_batch_run(args.project_root, args.operations)
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

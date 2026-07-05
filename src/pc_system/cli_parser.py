@@ -182,6 +182,19 @@ def build_parser() -> argparse.ArgumentParser:
     segment_objects.add_argument("--points-json", required=True, type=Path)
     segment_objects.add_argument("--distance-threshold", default=1.0, type=float)
     segment_objects.add_argument("--min-points", default=10, type=int)
+    segment_asset_objects = subparsers.add_parser("segment-asset-objects", help="Create a Phase 10 object segmentation report from a workspace asset source.")
+    segment_asset_objects.add_argument("--project-root", required=True, type=Path)
+    segment_asset_objects.add_argument("--asset-id", required=True)
+    segment_asset_objects.add_argument("--distance-threshold", default=1.0, type=float)
+    segment_asset_objects.add_argument("--min-points", default=10, type=int)
+    segment_asset_objects.add_argument("--max-points", default=10000, type=int)
+    segment_asset_objects.add_argument("--engine", default="builtin", choices=["builtin", "open3d"])
+    segment_asset_objects.add_argument("--config", type=Path)
+    project_gate = subparsers.add_parser("check-project-gate", help="Build a Phase 11 project-level gate from asset quality gates.")
+    project_gate.add_argument("--project-root", required=True, type=Path)
+    batch_run = subparsers.add_parser("plan-batch-run", help="Create a Phase 11 batch run plan for all indexed assets.")
+    batch_run.add_argument("--project-root", required=True, type=Path)
+    batch_run.add_argument("--operations", nargs="+")
     return parser
 
 

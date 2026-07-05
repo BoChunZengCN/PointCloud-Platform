@@ -79,6 +79,16 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 10 | P10-M4 物体分割 API / Object segmentation API | 已完成 / Done | 新增 GET /segments/<asset_id>/objects。 |
 | Phase 10 | P10-M5 前端物体分割面板 / Frontend object segmentation panel | 已完成 / Done | 驾驶舱展示物体数量、噪声点和首个候选对象。 |
 | Phase 10 | P10-M6 文档与回归 / Docs and regression | 已完成 / Done | 新增 Phase 10 文档和测试约束。 |
+| Phase 10 Extension | P10-EX1 资产源直分割 / Asset source segmentation | 已完成 / Done | 新增 segment-asset-objects，按 asset_id 读取源点云采样并分割。 |
+| Phase 10 Extension | P10-EX2 分割配置 / Segmentation config | 已完成 / Done | 支持 distance_threshold、min_points、max_points、engine JSON 配置。 |
+| Phase 10 Extension | P10-EX3 Open3D 适配边界 / Open3D adapter boundary | 已完成 / Done | 保持输出 schema 不变，预留 open3d_dbscan runner 注入点。 |
+| Phase 10 Extension | P10-EX4 分割质量指标 / Segmentation quality metrics | 已完成 / Done | 输出 segmentation_quality、noise_ratio 与 findings。 |
+| Phase 11 | P11-M1 项目级门禁 / Project gate | 已完成 / Done | 汇总所有资产质量门禁，生成项目级最严重状态。 |
+| Phase 11 | P11-M2 check-project-gate CLI | 已完成 / Done | 从 asset_index 和 quality gate 报告生成 project_gate.json。 |
+| Phase 11 | P11-M3 交付审计增强 / Delivery manifest audit | 已完成 / Done | delivery_manifest 写入 delivery_gate_decision。 |
+| Phase 11 | P11-M4 Job 门禁联动 / Job gate link | 已完成 / Done | 将质量门禁状态同步到 production job step。 |
+| Phase 11 | P11-M5 批处理计划 / Batch run plan | 已完成 / Done | 新增 plan-batch-run 生成多资产批处理计划。 |
+| Phase 11 | P11-M6 报告中心 / Report center | 已完成 / Done | 新增 GET /project-gate、GET /reports/center 和前端报告中心入口。 |
 
 ## 技术路线 / Technical Routes
 
@@ -634,7 +644,51 @@ $env:PYTHONPATH="src"; python -m pc_system.cli segment-objects `
 GET /segments/<asset_id>/objects
 ```
 
+
+直接从资产源分割 / Segment directly from workspace asset source:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli segment-asset-objects `
+  --project-root workspace `
+  --asset-id site-a-las `
+  --distance-threshold 1.0 `
+  --min-points 10 `
+  --max-points 10000
+```
+
+配置文件方式 / Config-driven run:
+
+```json
+{
+  "distance_threshold": 1.0,
+  "min_points": 10,
+  "max_points": 10000,
+  "engine": "builtin"
+}
+```
 输出文件 / Outputs:
 
 - `reports/object_segments/<asset_id>/object_segments.json`
 - `reports/object_segments/<asset_id>/object_segments.md`
+
+
+### Phase 11 项目级工作流 / Phase 11 Project Workflow
+
+生成项目级门禁 / Build project-level gate:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli check-project-gate --project-root workspace
+```
+
+生成批处理计划 / Build batch run plan:
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli plan-batch-run --project-root workspace
+```
+
+读取项目级门禁与报告中心 / Read project gate and report center:
+
+```text
+GET /project-gate
+GET /reports/center
+```
