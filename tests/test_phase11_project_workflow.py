@@ -127,9 +127,10 @@ def test_p11_m5_builds_batch_run_plan_for_multiple_assets():
     plan = build_batch_run_plan(["scan-a", "scan-b"], operations=["analyze", "quality_gate", "segment", "delivery_gate"])
 
     assert plan["asset_count"] == 2
-    assert len(plan["steps"]) == 8
-    assert plan["steps"][0]["command"][:2] == ["analyze-asset", "--asset-id"]
+    assert len(plan["steps"]) == 7
+    assert plan["steps"][0]["command"][:2] == ["pc-system", "analyze-asset"]
     assert plan["steps"][-1]["operation"] == "delivery_gate"
+    assert sum(step["operation"] == "delivery_gate" for step in plan["steps"]) == 1
 
 
 def test_p11_m6_api_exposes_project_gate_and_report_center():

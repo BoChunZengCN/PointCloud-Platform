@@ -27,6 +27,11 @@ def build_production_run_plan(
     slice_name: str = "room-a",
     segment_name: str = "baseline",
     splat_name: str = "baseline",
+    project_root: Path = Path("workspace"),
+    potree_converter: Path = Path("PotreeConverter"),
+    pdal_path: Path = Path("pdal"),
+    python_path: Path = Path("python"),
+    open3d_script: Path = Path("scripts/open3d_rule_segment.py"),
 ) -> dict:
     """生成 P3-M2 生产运行计划，不执行任何重型外部工具。
 
@@ -38,27 +43,28 @@ def build_production_run_plan(
     bounds = asset_metadata.get("las", {}).get("bounds", {})
     min_bounds = bounds.get("min", [0, 0, 0])
     max_bounds = bounds.get("max", [0, 0, 0])
+    root_args = ("--project-root", project_root)
 
     steps = [
         _step(
             "ingest",
             "Phase 1",
             "读取 LAS/LAZ 资产元数据",
-            _command("pc-system", "ingest", "--asset-id", asset_id, "--las-path", source_path),
+            _command("pc-system", "ingest", *root_args, "--las-path", source_path),
             [f"data/assets/{asset_id}/asset.json"],
         ),
         _step(
             "qa_preview",
             "Phase 1",
             "生成 QA 报告与基础预览入口",
-            _command("pc-system", "demo-phase1", "--asset-id", asset_id),
+            _command("pc-system", "ingest", *root_args, "--las-path", source_path),
             [f"reports/{asset_id}/quality_report.json", f"previews/{asset_id}/preview_manifest.json"],
         ),
         _step(
             "potree_publish",
             "Phase 1",
             "发布 Potree 点云预览目录",
-            _command("pc-system", "publish-potree", "--asset-id", asset_id),
+            _command("pc-system", "publish-potree", *root_args, "--asset-id", asset_id, "--converter-path", potree_converter),
             [f"previews/{asset_id}/potree_manifest.json", f"previews/{asset_id}/potree/metadata.json"],
         ),
         _step(
@@ -68,6 +74,7 @@ def build_production_run_plan(
             _command(
                 "pc-system",
                 "plan-slice",
+                *root_args,
                 "--asset-id",
                 asset_id,
                 "--name",
@@ -83,49 +90,49 @@ def build_production_run_plan(
             "slice_execute",
             "Phase 1",
             "执行空间切片计划",
-            _command("pc-system", "execute-slice", "--asset-id", asset_id, "--slice-name", slice_name),
+            _command("pc-system", "execute-slice", *root_args, "--asset-id", asset_id, "--slice-name", slice_name, "--engine", "pdal", "--pdal-path", pdal_path),
             [f"data/assets/{asset_id}/slices/{slice_name}/{asset_id}-{slice_name}.las"],
         ),
         _step(
             "rule_segment_plan",
             "Phase 1",
             "创建规则分割计划",
-            _command("pc-system", "plan-rule-segment", "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name),
+            _command("pc-system", "plan-rule-segment", *root_args, "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name),
             [f"data/assets/{asset_id}/slices/{slice_name}/segments/{segment_name}/rule_segmentation_plan.json"],
         ),
         _step(
             "rule_segment_execute",
             "Phase 1",
             "执行规则分割计划",
-            _command("pc-system", "execute-rule-segment", "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name),
+            _command("pc-system", "execute-rule-segment", *root_args, "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name, "--engine", "open3d", "--python-path", python_path, "--script-path", open3d_script),
             [f"data/assets/{asset_id}/slices/{slice_name}/segments/{segment_name}/{asset_id}-{slice_name}-{segment_name}-labels.json"],
         ),
         _step(
             "rule_segment_report",
             "Phase 1",
             "生成分割汇总报告",
-            _command("pc-system", "report-rule-segment", "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name),
+            _command("pc-system", "report-rule-segment", *root_args, "--asset-id", asset_id, "--slice-name", slice_name, "--name", segment_name),
             [f"reports/{asset_id}/segments/{slice_name}/{segment_name}/segmentation_summary.json"],
         ),
         _step(
             "gaussian_splat_plan",
             "Phase 2",
             "创建 Gaussian Splatting 训练计划",
-            _command("pc-system", "plan-gaussian-splat", "--asset-id", asset_id, "--name", splat_name, "--source-las", source_path),
+            _command("pc-system", "plan-gaussian-splat", *root_args, "--asset-id", asset_id, "--name", splat_name, "--source-las", source_path),
             [f"previews/{asset_id}/splats/{splat_name}/gaussian_splat_plan.json"],
         ),
         _step(
             "phase2_viewer",
             "Phase 2",
             "发布统一查看器入口",
-            _command("pc-system", "publish-phase2-viewer", "--asset-id", asset_id),
+            _command("pc-system", "publish-phase2-viewer", *root_args, "--asset-id", asset_id),
             [f"previews/{asset_id}/phase2_viewer_manifest.json"],
         ),
         _step(
             "phase3_tool_check",
             "Phase 3",
             "检查生产外部工具路径",
-            _command("pc-system", "phase3-tool-check"),
+            _command("pc-system", "phase3-tool-check", *root_args, "--pdal-path", pdal_path, "--potree-converter", potree_converter, "--open3d-script", open3d_script),
             ["reports/phase3_tool_check.json"],
         ),
     ]
@@ -139,6 +146,11 @@ def build_production_run_plan(
             "slice_name": slice_name,
             "segment_name": segment_name,
             "splat_name": splat_name,
+            "project_root": str(project_root),
+            "potree_converter": str(potree_converter),
+            "pdal_path": str(pdal_path),
+            "python_path": str(python_path),
+            "open3d_script": str(open3d_script),
         },
         "steps": steps,
     }

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pc_system.json_io import write_json
+from pc_system.identifiers import validate_identifier
 
 
 JOB_STATUSES = ["planned", "running", "completed", "failed", "blocked"]
@@ -37,7 +38,8 @@ def _job_status(summary: dict) -> str:
 def create_job_from_plan(plan: dict, job_id: str | None = None) -> dict:
     """从生产运行计划创建本地 job 状态。"""
 
-    resolved_job_id = job_id or f"job-{plan['asset_id']}"
+    asset_id = validate_identifier(plan["asset_id"], "asset_id")
+    resolved_job_id = validate_identifier(job_id or f"job-{asset_id}", "job_id")
     steps = []
     for index, step in enumerate(plan["steps"], start=1):
         steps.append(
@@ -59,7 +61,7 @@ def create_job_from_plan(plan: dict, job_id: str | None = None) -> dict:
     return {
         "schema_version": "1.0",
         "job_id": resolved_job_id,
-        "asset_id": plan["asset_id"],
+        "asset_id": asset_id,
         "status": _job_status(summary),
         "summary": summary,
         "steps": steps,
@@ -95,7 +97,8 @@ def mark_step_status(job: dict, step_id: str, status: str, message: str = "") ->
 def write_job(job: dict, output_dir: Path) -> Path:
     """写出 job 状态 JSON。"""
 
-    return write_json(job, output_dir / f"{job['job_id']}.json")
+    job_id = validate_identifier(job["job_id"], "job_id")
+    return write_json(job, output_dir / f"{job_id}.json")
 
 
 def load_job(path: Path) -> dict:
@@ -116,6 +119,7 @@ def write_job_event(
 ) -> Path:
     """追加写入 job 审计事件 JSONL，便于追踪状态变化。"""
 
+    job_id = validate_identifier(job_id, "job_id")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{job_id}.events.jsonl"
     event = {
@@ -136,6 +140,7 @@ def write_job_event(
 def read_job_events(output_dir: Path, job_id: str) -> list[dict]:
     """读取 job 审计事件；事件文件缺失时返回空列表。"""
 
+    job_id = validate_identifier(job_id, "job_id")
     path = output_dir / f"{job_id}.events.jsonl"
     if not path.exists():
         return []
@@ -181,6 +186,8 @@ def execute_job_steps(job: dict, output_dir: Path, actor: str = "executor") -> d
 def enqueue_job(queue_dir: Path, *, asset_id: str, job_id: str, requested_by: str = "system") -> Path:
     """写入轻量本地队列记录，为后续替换异步队列保留接口。"""
 
+    asset_id = validate_identifier(asset_id, "asset_id")
+    job_id = validate_identifier(job_id, "job_id")
     queue_dir.mkdir(parents=True, exist_ok=True)
     path = queue_dir / "job_queue.jsonl"
     entry = {

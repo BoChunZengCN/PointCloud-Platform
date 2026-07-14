@@ -4,7 +4,7 @@ from typing import Any
 from pc_system.json_io import write_json
 
 
-STATUS_ORDER = {"passed": 0, "review_required": 1, "missing": 1, "blocked": 2}
+STATUS_ORDER = {"passed": 0, "review_required": 1, "missing": 2, "blocked": 3}
 
 
 def _asset_status(asset_id: str, gates: dict[str, dict[str, Any]]) -> str:
@@ -25,7 +25,7 @@ def build_project_gate(registry: dict[str, Any], gates: dict[str, dict[str, Any]
             status = "missing"
         summary[status] += 1
         assets.append({"asset_id": asset_id, "status": status})
-    worst = "passed"
+    worst = "passed" if assets else "missing"
     for status in summary:
         if summary[status] and STATUS_ORDER[status] > STATUS_ORDER[worst]:
             worst = status

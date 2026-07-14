@@ -166,6 +166,9 @@ function normalizeRegistryProject(registry) {
 function normalizeRegistryAsset(item) {
   const reportPaths = item.report_paths || {};
   const previewPaths = item.preview_paths || {};
+  const artifactStatus = item.artifact_status || {};
+  const reportStatus = artifactStatus.reports || {};
+  const previewStatus = artifactStatus.preview || {};
   return {
     id: item.asset_id,
     name: item.file_name || item.asset_id,
@@ -175,11 +178,12 @@ function normalizeRegistryAsset(item) {
     colorized: Boolean(item.has_rgb),
     coordinate_system: "来自 asset_index.json",
     bounds: JSON.stringify(item.bounds || {}),
+    analysis_status: item.analysis_status || "missing",
     reports: [
-      { name: "质量报告", kind: "QA", href: `../workspace/${reportPaths.quality_report || ""}`, status: reportPaths.quality_report ? "ready" : "planned" },
-      { name: "生产运行计划", kind: "Production", href: `../workspace/${reportPaths.production_plan || ""}`, status: reportPaths.production_plan ? "ready" : "planned" },
-      { name: "生产运行报告", kind: "Production", href: `../workspace/${reportPaths.production_report || ""}`, status: reportPaths.production_report ? "ready" : "planned" },
-      { name: "Phase 2 Viewer", kind: "Viewer", href: `../workspace/${previewPaths.phase2_viewer || ""}`, status: previewPaths.phase2_viewer ? "ready" : "planned" },
+      { name: "质量报告", kind: "QA", href: `../workspace/${reportPaths.quality_report || ""}`, status: reportStatus.quality_report ? "ready" : "planned" },
+      { name: "生产运行计划", kind: "Production", href: `../workspace/${reportPaths.production_plan || ""}`, status: reportStatus.production_plan ? "ready" : "planned" },
+      { name: "生产运行报告", kind: "Production", href: `../workspace/${reportPaths.production_report || ""}`, status: reportStatus.production_report ? "ready" : "planned" },
+      { name: "Phase 2 Viewer", kind: "Viewer", href: `../workspace/${previewPaths.phase2_viewer || ""}`, status: previewStatus.phase2_viewer ? "ready" : "planned" },
     ],
   };
 }

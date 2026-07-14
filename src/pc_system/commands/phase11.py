@@ -53,6 +53,6 @@ def run_plan_batch_run(project_root: Path, operations: list[str] | None = None) 
         print(str(exc), file=sys.stderr)
         return 2
     asset_ids = [asset.get("asset_id", "") for asset in registry.get("assets", []) if asset.get("asset_id")]
-    plan = build_batch_run_plan(asset_ids, operations=operations)
+    plan = build_batch_run_plan(asset_ids, operations=operations, project_root=str(project_root))
     write_json(plan, paths["reports"] / "batch" / "batch_run_plan.json")
     return 0

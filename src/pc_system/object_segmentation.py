@@ -1,4 +1,5 @@
 import math
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
@@ -18,23 +19,41 @@ def _distance(a: dict[str, Any], b: dict[str, Any]) -> float:
 def _cluster_points(points: list[dict[str, Any]], distance_threshold: float) -> list[list[int]]:
     """用简单连通域聚类生成物体候选，避免 Phase 10 初版依赖重型三维库。"""
 
+    buckets: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    for index, point in enumerate(points):
+        key = (
+            math.floor(float(point["x"]) / distance_threshold),
+            math.floor(float(point["y"]) / distance_threshold),
+            math.floor(float(point["z"]) / distance_threshold),
+        )
+        buckets[key].append(index)
+
     visited: set[int] = set()
     clusters: list[list[int]] = []
     for start_index in range(len(points)):
         if start_index in visited:
             continue
-        queue = [start_index]
+        queue = deque([start_index])
         visited.add(start_index)
         cluster: list[int] = []
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             cluster.append(current)
-            for candidate in range(len(points)):
-                if candidate in visited:
-                    continue
-                if _distance(points[current], points[candidate]) <= distance_threshold:
-                    visited.add(candidate)
-                    queue.append(candidate)
+            point = points[current]
+            cell = (
+                math.floor(float(point["x"]) / distance_threshold),
+                math.floor(float(point["y"]) / distance_threshold),
+                math.floor(float(point["z"]) / distance_threshold),
+            )
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        for candidate in buckets.get((cell[0] + dx, cell[1] + dy, cell[2] + dz), []):
+                            if candidate in visited:
+                                continue
+                            if _distance(points[current], points[candidate]) <= distance_threshold:
+                                visited.add(candidate)
+                                queue.append(candidate)
         clusters.append(cluster)
     return clusters
 
