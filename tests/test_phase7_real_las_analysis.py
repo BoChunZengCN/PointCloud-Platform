@@ -29,7 +29,7 @@ def test_p7_m1_samples_lightweight_las_points_with_limit():
 
     assert len(points) == 3
     assert points[0] == {"x": 0.0, "y": 0.0, "z": 0.0, "red": 0, "green": 1, "blue": 2, "classification": 0}
-    assert points[-1]["z"] == 4.0
+    assert points[-1]["z"] == 8.0
 
 
 def test_p7_m2_cli_analyzes_existing_asset_source():

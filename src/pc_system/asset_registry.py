@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from pc_system.json_io import write_json
+from pc_system.identifiers import validate_identifier
 
 
 SCHEMA_VERSION = "1.0"
@@ -33,13 +34,40 @@ def _analysis_paths(project_root: Path | None, asset_id: str) -> dict:
     }
 
 
+def _artifact_status(project_root: Path | None, paths: dict[str, str]) -> dict[str, bool]:
+    """记录索引中预期产物的真实存在性，避免前端把预期路径误报为 ready。"""
+
+    return {
+        name: bool(project_root and relative_path and (project_root / relative_path).is_file())
+        for name, relative_path in paths.items()
+    }
+
+
 def _asset_entry(metadata: dict, project_root: Path | None = None) -> dict:
     """把完整 asset.json 压缩成前端/API 常用的索引条目。"""
 
-    asset_id = metadata["asset_id"]
+    asset_id = validate_identifier(metadata["asset_id"], "asset_id")
     file_info = metadata.get("file", {})
     las_info = metadata.get("las", {})
     analysis_paths = _analysis_paths(project_root, asset_id)
+    preview_paths = {
+        "preview_manifest": f"previews/{asset_id}/preview_manifest.json",
+        "potree_manifest": f"previews/{asset_id}/potree_manifest.json",
+        "phase2_viewer": f"previews/{asset_id}/phase2_viewer_manifest.json",
+    }
+    viewer_paths = {
+        "viewer_url": f"previews/{asset_id}/phase2_viewer.html",
+        "viewer_html_path": f"previews/{asset_id}/phase2_viewer.html",
+        "manifest_path": f"previews/{asset_id}/phase2_viewer_manifest.json",
+        "potree_manifest_path": f"previews/{asset_id}/potree_manifest.json",
+        "report_path": f"reports/production_runs/{asset_id}/production_run_report.md",
+    }
+    report_paths = {
+        "quality_report": f"reports/{asset_id}/quality_report.html",
+        "production_plan": f"reports/production_runs/{asset_id}/production_run_plan.md",
+        "production_report": f"reports/production_runs/{asset_id}/production_run_report.md",
+        "analysis_report": analysis_paths["analysis_markdown_path"],
+    }
     return {
         "asset_id": asset_id,
         "file_name": file_info.get("name", ""),
@@ -50,23 +78,13 @@ def _asset_entry(metadata: dict, project_root: Path | None = None) -> dict:
         "analysis_status": analysis_paths["analysis_status"],
         "analysis_report_path": analysis_paths["analysis_report_path"],
         "metadata_path": f"data/assets/{asset_id}/asset.json",
-        "preview_paths": {
-            "preview_manifest": f"previews/{asset_id}/preview_manifest.json",
-            "potree_manifest": f"previews/{asset_id}/potree_manifest.json",
-            "phase2_viewer": f"previews/{asset_id}/phase2_viewer_manifest.json",
-        },
-        "viewer_paths": {
-            "viewer_url": f"previews/{asset_id}/phase2_viewer.html",
-            "viewer_html_path": f"previews/{asset_id}/phase2_viewer.html",
-            "manifest_path": f"previews/{asset_id}/phase2_viewer_manifest.json",
-            "potree_manifest_path": f"previews/{asset_id}/potree_manifest.json",
-            "report_path": f"reports/production_runs/{asset_id}/production_run_report.md",
-        },
-        "report_paths": {
-            "quality_report": f"reports/{asset_id}/quality_report.html",
-            "production_plan": f"reports/production_runs/{asset_id}/production_run_plan.md",
-            "production_report": f"reports/production_runs/{asset_id}/production_run_report.md",
-            "analysis_report": analysis_paths["analysis_markdown_path"],
+        "preview_paths": preview_paths,
+        "viewer_paths": viewer_paths,
+        "report_paths": report_paths,
+        "artifact_status": {
+            "preview": _artifact_status(project_root, preview_paths),
+            "viewer": _artifact_status(project_root, viewer_paths),
+            "reports": _artifact_status(project_root, report_paths),
         },
     }
 

@@ -6,6 +6,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from pc_system.config import ProjectConfig
+from pc_system.identifiers import validate_identifier
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
 from pc_system.phase11_report_center import build_report_center
 
@@ -28,6 +29,7 @@ def _load_registry(project_root: Path) -> dict:
 def _asset_or_404(project_root: Path, asset_id: str) -> dict:
     """从 registry 查找资产；缺失时返回 404。"""
 
+    _validate_api_identifier(asset_id, "asset_id")
     registry = _load_registry(project_root)
     for asset in registry["assets"]:
         if asset["asset_id"] == asset_id:
@@ -46,7 +48,16 @@ def _read_json_or_404(path: Path, label: str) -> dict:
 def _production_dir(project_root: Path, asset_id: str) -> Path:
     """生产运行报告目录。"""
 
-    return project_root / "reports" / "production_runs" / asset_id
+    return project_root / "reports" / "production_runs" / _validate_api_identifier(asset_id, "asset_id")
+
+
+def _validate_api_identifier(value: str, label: str) -> str:
+    """把核心标识符校验错误转换为稳定的 API 400。"""
+
+    try:
+        return validate_identifier(value, label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _file_kind(path: Path) -> str:
@@ -78,13 +89,13 @@ def _delivery_output(project_root: Path, relative_path: str | None) -> dict:
 def _jobs_dir(project_root: Path, asset_id: str) -> Path:
     """返回资产 job 状态目录，保持 API 与 CLI 的目录约定一致。"""
 
-    return ProjectConfig(project_root=project_root).paths()["reports"] / "jobs" / asset_id
+    return ProjectConfig(project_root=project_root).paths()["reports"] / "jobs" / _validate_api_identifier(asset_id, "asset_id")
 
 
 def _job_path(project_root: Path, asset_id: str, job_id: str) -> Path:
     """返回单个 job JSON 文件路径。"""
 
-    return _jobs_dir(project_root, asset_id) / f"{job_id}.json"
+    return _jobs_dir(project_root, asset_id) / f"{_validate_api_identifier(job_id, 'job_id')}.json"
 
 def _summarize_jobs(jobs: list[dict]) -> dict:
     """汇总 job 列表，给前端提供可直接渲染的只读状态。"""
@@ -104,6 +115,8 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
 
     resolved_run_mode = run_mode or os.environ.get("PC_SYSTEM_RUN_MODE", "development")
     resolved_api_key = api_key if api_key is not None else os.environ.get("PC_SYSTEM_API_KEY")
+    if resolved_run_mode == "production" and not resolved_api_key:
+        raise ValueError("PC_SYSTEM_API_KEY is required in production mode.")
     cors_origins = [] if resolved_run_mode == "production" else ["*"]
     app = FastAPI(title="Point Cloud Platform API", version="0.1.0")
     app.add_middleware(
@@ -178,6 +191,8 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
             raise HTTPException(status_code=404, detail=f"Production run plan not found: {plan_path}")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         job_id = (payload or {}).get("job_id")
+        if job_id is not None:
+            _validate_api_identifier(job_id, "job_id")
         job = create_job_from_plan(plan, job_id=job_id)
         jobs_dir = _jobs_dir(project_root, asset_id)
         write_job(job, jobs_dir)
@@ -285,6 +300,7 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
     def get_point_cloud_analysis(asset_id: str) -> dict:
         """返回 Phase 6 点云分析报告。"""
 
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
         path = project_root / "reports" / "analysis" / asset_id / "point_cloud_analysis.json"
         return _read_json_or_404(path, "Point cloud analysis")
 
@@ -292,6 +308,7 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
     def get_object_segments(asset_id: str) -> dict:
         """返回 Phase 10 物体候选分割报告。"""
 
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
         path = project_root / "reports" / "object_segments" / asset_id / "object_segments.json"
         return _read_json_or_404(path, "Object segmentation")
 
@@ -306,12 +323,14 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
     def get_quality_gate(asset_id: str) -> dict:
         """返回 Phase 8 质量门禁报告。"""
 
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
         path = project_root / "reports" / "quality_gates" / asset_id / "quality_gate.json"
         return _read_json_or_404(path, "Quality gate")
     @app.get("/deployment/{asset_id}")
     def get_deployment(asset_id: str) -> dict:
         """返回部署交付检查清单。"""
 
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
         path = project_root / "reports" / "deployment" / asset_id / "deployment_checklist.json"
         return _read_json_or_404(path, "Deployment checklist")
 

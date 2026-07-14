@@ -39,6 +39,7 @@ from pc_system.commands.phase3 import (
 from pc_system.fls_ingest import FlsRunner, subprocess_runner as fls_subprocess_runner
 from pc_system.gaussian_splatting import GaussianRunner, subprocess_runner as gaussian_subprocess_runner
 from pc_system.las_reader import read_las_info
+from pc_system.identifiers import validate_identifier
 from pc_system.open3d_rule_segmentation_adapter import Open3DRunner, subprocess_runner as open3d_subprocess_runner
 from pc_system.pdal_slice_adapter import PdalRunner, subprocess_runner as pdal_subprocess_runner
 from pc_system.potree_publisher import PotreeRunner, subprocess_runner
@@ -62,6 +63,10 @@ def main(
 
     args = build_parser().parse_args(argv)
     try:
+        for field in ("asset_id", "job_id", "step_id", "name", "slice_name", "segment_name", "splat_name"):
+            value = getattr(args, field, None)
+            if value:
+                validate_identifier(value, field)
         if args.command == "init":
             return run_init(args.project_root)
         if args.command == "demo-phase1":
@@ -142,6 +147,10 @@ def main(
                 args.slice_name,
                 args.segment_name,
                 args.splat_name,
+                args.potree_converter,
+                args.pdal_path,
+                args.python_path,
+                args.open3d_script,
             )
         if args.command == "report-production-run":
             return run_report_production_run(args.project_root, args.asset_id)
@@ -184,6 +193,9 @@ def main(
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except (FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

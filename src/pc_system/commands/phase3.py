@@ -41,6 +41,10 @@ def run_plan_production_run(
     slice_name: str,
     segment_name: str,
     splat_name: str,
+    potree_converter: Path = Path("PotreeConverter"),
+    pdal_path: Path = Path("pdal"),
+    python_path: Path = Path("python"),
+    open3d_script: Path = Path("scripts/open3d_rule_segment.py"),
 ) -> int:
     """读取 asset.json 并写出 P3-M2 生产运行计划。"""
 
@@ -55,6 +59,11 @@ def run_plan_production_run(
         slice_name=slice_name,
         segment_name=segment_name,
         splat_name=splat_name,
+        project_root=project_root,
+        potree_converter=potree_converter,
+        pdal_path=pdal_path,
+        python_path=python_path,
+        open3d_script=open3d_script,
     )
     output_dir = paths["reports"] / "production_runs" / asset_id
     write_production_run_plan(plan, output_dir)
@@ -114,7 +123,14 @@ def run_export_delivery_package(project_root: Path, asset_id: str, make_zip: boo
         print(decision["message"], file=sys.stderr)
         return 2
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    export_delivery_package(project_root, registry, asset_id, project_root / "delivery" / asset_id, make_zip=make_zip)
+    export_delivery_package(
+        project_root,
+        registry,
+        asset_id,
+        project_root / "delivery" / asset_id,
+        make_zip=make_zip,
+        gate_decision=decision,
+    )
     return 0
 
 
