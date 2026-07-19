@@ -8,6 +8,7 @@ from pc_system.segmentation_operational_quality import (
     write_operational_quality,
 )
 from pc_system.segmentation_preprocessing import preprocess_points
+from pc_system.segmentation_provenance import fingerprint_points
 from pc_system.segmentation_run import (
     build_segmentation_run,
     publish_latest_success,
@@ -38,12 +39,23 @@ def _write_membership_artifacts(
         indices = item.pop("_point_indices")
         object_id = validate_identifier(item["object_id"], "object_id")
         relative_path = Path("artifacts") / f"{object_id}.points.json"
+        source_point_indices = []
+        public_points = []
+        for index in indices:
+            if index < 0 or index >= len(points):
+                raise ValueError("Segmentation engine output contains an invalid membership index.")
+            point = points[index]
+            if "_source_index" not in point:
+                raise ValueError("Segmentation point is missing its source index.")
+            source_point_indices.append(int(point["_source_index"]))
+            public_points.append({key: value for key, value in point.items() if key != "_source_index"})
         write_json(
             {
                 "schema_version": "1.0",
                 "object_id": object_id,
                 "point_count": len(indices),
-                "points": [points[index] for index in indices],
+                "source_point_indices": source_point_indices,
+                "points": public_points,
             },
             run_dir / relative_path,
         )
@@ -78,6 +90,7 @@ def run_segmentation(
         source_point_count=len(points),
         config=dict(config),
         requested_engine=requested_engine,
+        source_fingerprint=fingerprint_points(points),
     )
     write_segmentation_run(run, run_dir)
 
@@ -85,7 +98,8 @@ def run_segmentation(
         run["status"] = "running"
         run["started_at"] = utc_now()
         write_segmentation_run(run, run_dir)
-        processed_points, preprocessing = preprocess_points(points, config)
+        indexed_points = [dict(point, _source_index=index) for index, point in enumerate(points)]
+        processed_points, preprocessing = preprocess_points(indexed_points, config)
         report, execution = execute_engine(
             asset_id,
             processed_points,

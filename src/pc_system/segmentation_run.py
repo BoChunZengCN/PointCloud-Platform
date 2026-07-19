@@ -23,6 +23,7 @@ def build_segmentation_run(
     source_point_count: int,
     config: dict,
     requested_engine: str,
+    source_fingerprint: str | None = None,
 ) -> dict:
     """创建尚未执行的版本化分割运行记录。"""
 
@@ -33,6 +34,7 @@ def build_segmentation_run(
         "asset_version": asset_version,
         "source_uri": source_uri,
         "source_point_count": int(source_point_count),
+        "source_fingerprint": source_fingerprint,
         "config": config,
         "config_fingerprint": fingerprint_config(config),
         "requested_engine": requested_engine,
