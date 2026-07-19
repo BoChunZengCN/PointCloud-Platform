@@ -180,4 +180,3 @@ def test_comparison_requires_completed_evaluations(tmp_path):
             candidate_evaluation_id="candidate",
             thresholds=thresholds(),
         )
-

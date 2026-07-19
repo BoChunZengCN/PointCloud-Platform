@@ -19,6 +19,7 @@ def test_frontend_has_golden_evaluation_panel_and_fetchers():
     assert "fetchGoldenEvaluations" in script
     assert "fetchSegmentationSearches" in script
     assert "fetchSegmentationComparison" in script
+    assert "latestByLifecycle" in script
     assert "renderGoldenEvaluation" in script
     assert ".golden-evaluation-panel" in css
 
@@ -90,6 +91,79 @@ def test_frontend_view_model_uses_real_gate_artifact_and_label_coverage():
     assert payload["missing"]["gateStatus"] == "读取失败"
     assert payload["failed"]["gateStatus"] == "failed"
     assert payload["failed"]["matchedLabelRatio"] == 0.75
+
+
+def test_frontend_view_model_selects_search_by_time_and_links_its_evaluation():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for frontend behavior verification.")
+    module_path = ROOT / "frontend" / "golden-evaluation.js"
+    evaluation_payload = {
+        "evaluations": [
+            {
+                "evaluation_id": "eval-z-old",
+                "status": "completed",
+                "completed_at": "2026-07-01T00:00:00Z",
+                "summary": {
+                    "instance_f1": 0.4,
+                    "point_miou": 0.4,
+                    "mean_box_iou": 0.4,
+                    "matched_label_ratio": 0.4,
+                },
+            },
+            {
+                "evaluation_id": "eval-a-latest",
+                "status": "completed",
+                "completed_at": "2026-07-19T00:00:00Z",
+                "summary": {
+                    "instance_f1": 0.9,
+                    "point_miou": 0.9,
+                    "mean_box_iou": 0.9,
+                    "matched_label_ratio": 0.9,
+                },
+            },
+        ]
+    }
+    search_payload = {
+        "searches": [
+            {
+                "search_id": "search-z-old",
+                "completed_at": "2026-07-01T00:00:00Z",
+                "recommendation": {
+                    "evaluation_id": "eval-a-latest",
+                    "comparison_id": "cmp-old",
+                },
+            },
+            {
+                "search_id": "search-a-latest",
+                "completed_at": "2026-07-19T00:00:00Z",
+                "recommendation": {
+                    "evaluation_id": "eval-z-old",
+                    "comparison_id": "cmp-latest",
+                },
+            },
+        ]
+    }
+    script = (
+        f"const m=require({json.dumps(str(module_path))});"
+        f"const e={json.dumps(evaluation_payload)};"
+        f"const s={json.dumps(search_payload)};"
+        "console.log(JSON.stringify("
+        "m.buildGoldenEvaluationViewModel(e,s,{gate:{status:'passed'}})"
+        "));"
+    )
+
+    result = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["comparisonId"] == "cmp-latest"
+    assert payload["evaluationId"] == "eval-z-old"
+    assert payload["instanceF1"] == 0.4
 
 
 def test_phase13b_documentation_describes_formats_metrics_and_search_limits():

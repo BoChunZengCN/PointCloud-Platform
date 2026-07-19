@@ -74,4 +74,3 @@ def test_membership_indices_survive_deduplication(tmp_path):
     payload = json.loads(artifact.read_text(encoding="utf-8"))
 
     assert payload["source_point_indices"] == [0, 2]
-

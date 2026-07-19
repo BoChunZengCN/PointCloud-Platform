@@ -313,9 +313,7 @@ function renderDashboard(project) {
       fetchSegmentationSearches(asset.id).catch(() => ({ search_count: 0, searches: [] })),
     ]).then(async ([evaluations, searches]) => {
       const searchItems = searches.searches || [];
-      const latestSearch = searchItems.length
-        ? searchItems[searchItems.length - 1]
-        : null;
+      const latestSearch = latestByLifecycle(searchItems, "search_id");
       const comparisonId = latestSearch?.recommendation?.comparison_id;
       let comparison = null;
       if (comparisonId) {

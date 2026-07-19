@@ -43,6 +43,20 @@ def _finite_vector(value, length: int, code: str, label: str) -> list[float]:
     return result
 
 
+def _label_containers(document: dict) -> tuple[list, list]:
+    point_labels = document.get("point_labels", [])
+    if not isinstance(point_labels, list):
+        raise _validation_error(
+            "invalid_point_labels_container", "point_labels must be an array."
+        )
+    boxes = document.get("boxes", [])
+    if not isinstance(boxes, list):
+        raise _validation_error(
+            "invalid_boxes_container", "boxes must be an array."
+        )
+    return point_labels, boxes
+
+
 def load_label_document(path: Path, labels_format: str) -> dict:
     """读取 JSON 或 JSONL 标签并归一化为单一文档。"""
 
@@ -51,10 +65,11 @@ def load_label_document(path: Path, labels_format: str) -> dict:
             document = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(document, dict):
                 raise _validation_error("invalid_labels_document", "JSON labels must be an object.")
+            point_labels, boxes = _label_containers(document)
             return {
                 "schema_version": document.get("schema_version", "1.0"),
-                "point_labels": list(document.get("point_labels", [])),
-                "boxes": list(document.get("boxes", [])),
+                "point_labels": point_labels,
+                "boxes": boxes,
             }
         if labels_format == "jsonl":
             point_labels = []
@@ -65,6 +80,11 @@ def load_label_document(path: Path, labels_format: str) -> dict:
                 if not line.strip():
                     continue
                 record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise _validation_error(
+                        "invalid_jsonl_record",
+                        f"JSONL record on line {line_number} must be an object.",
+                    )
                 record_type = record.pop("record_type", None)
                 if record_type == "point_label":
                     point_labels.append(record)
@@ -202,8 +222,9 @@ def _normalize_labels(document: dict) -> dict:
             "unsupported_labels_schema",
             f"Unsupported labels schema: {document.get('schema_version')}",
         )
-    point_labels = _validate_point_labels(list(document.get("point_labels", [])))
-    boxes = _validate_boxes(list(document.get("boxes", [])))
+    point_label_records, box_records = _label_containers(document)
+    point_labels = _validate_point_labels(point_label_records)
+    boxes = _validate_boxes(box_records)
     if boxes:
         box_instances = {item["instance_id"] for item in boxes}
         missing = sorted(

@@ -280,3 +280,35 @@ def test_rejects_missing_or_invalid_required_sample_fields(
         import_benchmark(tmp_path / "project", manifest_path)
 
     assert exc_info.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("point_labels", None, "invalid_point_labels_container"),
+        ("point_labels", {}, "invalid_point_labels_container"),
+        ("boxes", None, "invalid_boxes_container"),
+        ("boxes", {}, "invalid_boxes_container"),
+    ],
+)
+def test_rejects_non_array_json_label_containers(tmp_path, field, value, code):
+    labels = label_document()
+    labels[field] = value
+    manifest_path = write_benchmark_source(tmp_path, labels=labels)
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == code
+
+
+@pytest.mark.parametrize("record", ["scalar", 7, None, []])
+def test_rejects_non_object_jsonl_records_with_stable_error(tmp_path, record):
+    manifest_path = write_benchmark_source(tmp_path, labels_format="jsonl")
+    labels_path = manifest_path.parent / "labels" / "scan.jsonl"
+    labels_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == "invalid_jsonl_record"
