@@ -84,7 +84,7 @@ def write_benchmark_source(
                 "asset_id": "scan",
                 "asset_version": "v1",
                 "source_uri": "scan.points.json",
-                "source_fingerprint": "abc123",
+                "source_fingerprint": "a" * 64,
                 "labels_path": relative_labels,
                 "labels_format": labels_format,
             }
@@ -93,6 +93,12 @@ def write_benchmark_source(
     manifest_path = source / "benchmark.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path
+
+
+def update_manifest(manifest_path: Path, update) -> None:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    update(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_imports_json_benchmark_into_versioned_workspace(tmp_path):
@@ -193,3 +199,84 @@ def test_refuses_to_overwrite_existing_benchmark(tmp_path):
 
     assert exc_info.value.code == "benchmark_exists"
 
+
+@pytest.mark.parametrize("point_index", [1.9, True, "1"])
+def test_rejects_non_integer_point_index_without_coercion(tmp_path, point_index):
+    labels = label_document()
+    labels["point_labels"][1]["point_index"] = point_index
+    manifest_path = write_benchmark_source(tmp_path, labels=labels)
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == "invalid_point_index"
+
+
+@pytest.mark.parametrize("is_noise", ["false", 0, None])
+def test_rejects_non_boolean_noise_flag_without_coercion(tmp_path, is_noise):
+    labels = label_document()
+    labels["point_labels"][0]["is_noise"] = is_noise
+    manifest_path = write_benchmark_source(tmp_path, labels=labels)
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == "invalid_is_noise"
+
+
+def test_requires_explicit_noise_flag(tmp_path):
+    labels = label_document()
+    del labels["point_labels"][0]["is_noise"]
+    manifest_path = write_benchmark_source(tmp_path, labels=labels)
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == "invalid_is_noise"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("benchmark_version", None, "invalid_benchmark_version"),
+        ("scene_type", "", "invalid_scene_type"),
+        ("point_density", True, "invalid_point_density"),
+        ("point_density", 0, "invalid_point_density"),
+        ("coordinate_unit", None, "invalid_coordinate_unit"),
+        ("label_version", "", "invalid_label_version"),
+        ("license", None, "invalid_benchmark_license"),
+    ],
+)
+def test_rejects_missing_or_invalid_required_manifest_fields(
+    tmp_path, field, value, code
+):
+    manifest_path = write_benchmark_source(tmp_path)
+    update_manifest(manifest_path, lambda manifest: manifest.__setitem__(field, value))
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("asset_version", None, "invalid_asset_version"),
+        ("source_uri", "", "invalid_source_uri"),
+        ("source_fingerprint", "not-a-sha256", "invalid_source_fingerprint"),
+    ],
+)
+def test_rejects_missing_or_invalid_required_sample_fields(
+    tmp_path, field, value, code
+):
+    manifest_path = write_benchmark_source(tmp_path)
+    update_manifest(
+        manifest_path,
+        lambda manifest: manifest["samples"][0].__setitem__(field, value),
+    )
+
+    with pytest.raises(BenchmarkValidationError) as exc_info:
+        import_benchmark(tmp_path / "project", manifest_path)
+
+    assert exc_info.value.code == code

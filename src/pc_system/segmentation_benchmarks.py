@@ -1,5 +1,6 @@
 import json
 import math
+import re
 from pathlib import Path
 
 from pc_system.identifiers import validate_identifier
@@ -21,13 +22,22 @@ def _validation_error(code: str, message: str) -> BenchmarkValidationError:
     return BenchmarkValidationError(code, message)
 
 
+def _required_string(document: dict, field: str, code: str) -> str:
+    value = document.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise _validation_error(code, f"{field} must be a non-empty string.")
+    return value.strip()
+
+
 def _finite_vector(value, length: int, code: str, label: str) -> list[float]:
     if not isinstance(value, list) or len(value) != length:
         raise _validation_error(code, f"{label} must contain {length} numbers.")
-    try:
-        result = [float(item) for item in value]
-    except (TypeError, ValueError) as exc:
-        raise _validation_error(code, f"{label} must contain finite numbers.") from exc
+    if any(
+        isinstance(item, bool) or not isinstance(item, (int, float))
+        for item in value
+    ):
+        raise _validation_error(code, f"{label} must contain finite numbers.")
+    result = [float(item) for item in value]
     if not all(math.isfinite(item) for item in result):
         raise _validation_error(code, f"{label} must contain finite numbers.")
     return result
@@ -83,12 +93,11 @@ def _validate_point_labels(point_labels: list[dict]) -> list[dict]:
     for item in point_labels:
         if not isinstance(item, dict):
             raise _validation_error("invalid_point_label", "Point labels must be objects.")
-        try:
-            point_index = int(item["point_index"])
-        except (KeyError, TypeError, ValueError) as exc:
+        point_index = item.get("point_index")
+        if isinstance(point_index, bool) or not isinstance(point_index, int):
             raise _validation_error(
                 "invalid_point_index", "point_index must be a non-negative integer."
-            ) from exc
+            )
         if point_index < 0:
             raise _validation_error(
                 "invalid_point_index", "point_index must be a non-negative integer."
@@ -98,16 +107,27 @@ def _validate_point_labels(point_labels: list[dict]) -> list[dict]:
                 "duplicate_point_index", f"Duplicate point_index: {point_index}"
             )
         seen_indices.add(point_index)
+        if not isinstance(item.get("instance_id"), str) or not isinstance(
+            item.get("class_id"), str
+        ):
+            raise _validation_error(
+                "invalid_point_label",
+                "instance_id and class_id must be strings.",
+            )
         try:
-            instance_id = validate_identifier(str(item["instance_id"]), "instance_id")
-            class_id = validate_identifier(str(item["class_id"]), "class_id")
-        except (KeyError, ValueError) as exc:
+            instance_id = validate_identifier(item["instance_id"], "instance_id")
+            class_id = validate_identifier(item["class_id"], "class_id")
+        except ValueError as exc:
             raise _validation_error("invalid_point_label", str(exc)) from exc
+        if not isinstance(item.get("is_noise"), bool):
+            raise _validation_error(
+                "invalid_is_noise", "is_noise must be an explicit boolean."
+            )
         normalized_item = dict(item)
         normalized_item["point_index"] = point_index
         normalized_item["instance_id"] = instance_id
         normalized_item["class_id"] = class_id
-        normalized_item["is_noise"] = bool(item.get("is_noise", False))
+        normalized_item["is_noise"] = item["is_noise"]
         present_xyz = [axis in item for axis in ("x", "y", "z")]
         if any(present_xyz) and not all(present_xyz):
             raise _validation_error(
@@ -131,10 +151,16 @@ def _validate_boxes(boxes: list[dict]) -> list[dict]:
     for item in boxes:
         if not isinstance(item, dict):
             raise _validation_error("invalid_box", "Boxes must be objects.")
+        if not isinstance(item.get("instance_id"), str) or not isinstance(
+            item.get("class_id"), str
+        ):
+            raise _validation_error(
+                "invalid_box", "instance_id and class_id must be strings."
+            )
         try:
-            instance_id = validate_identifier(str(item["instance_id"]), "instance_id")
-            class_id = validate_identifier(str(item["class_id"]), "class_id")
-        except (KeyError, ValueError) as exc:
+            instance_id = validate_identifier(item["instance_id"], "instance_id")
+            class_id = validate_identifier(item["class_id"], "class_id")
+        except ValueError as exc:
             raise _validation_error("invalid_box", str(exc)) from exc
         if instance_id in seen_instances:
             raise _validation_error(
@@ -220,17 +246,50 @@ def import_benchmark(project_root: Path, manifest_path: Path) -> dict:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise _validation_error("invalid_manifest_json", str(exc)) from exc
+    if not isinstance(manifest, dict):
+        raise _validation_error(
+            "invalid_manifest_document", "Benchmark manifest must be an object."
+        )
     if manifest.get("schema_version") != "1.0":
         raise _validation_error(
             "unsupported_benchmark_schema",
             f"Unsupported benchmark schema: {manifest.get('schema_version')}",
         )
+    if not isinstance(manifest.get("benchmark_id"), str):
+        raise _validation_error(
+            "invalid_benchmark_id", "benchmark_id must be a string."
+        )
     try:
         benchmark_id = validate_identifier(
-            str(manifest["benchmark_id"]), "benchmark_id"
+            manifest["benchmark_id"], "benchmark_id"
         )
-    except (KeyError, ValueError) as exc:
+    except ValueError as exc:
         raise _validation_error("invalid_benchmark_id", str(exc)) from exc
+    benchmark_version = _required_string(
+        manifest, "benchmark_version", "invalid_benchmark_version"
+    )
+    scene_type = _required_string(manifest, "scene_type", "invalid_scene_type")
+    coordinate_unit = _required_string(
+        manifest, "coordinate_unit", "invalid_coordinate_unit"
+    )
+    label_version = _required_string(
+        manifest, "label_version", "invalid_label_version"
+    )
+    benchmark_license = _required_string(
+        manifest, "license", "invalid_benchmark_license"
+    )
+    point_density = manifest.get("point_density")
+    if (
+        isinstance(point_density, bool)
+        or not isinstance(point_density, (int, float))
+        or not math.isfinite(float(point_density))
+        or float(point_density) <= 0
+    ):
+        raise _validation_error(
+            "invalid_point_density",
+            "point_density must be a positive finite number.",
+        )
+    point_density = float(point_density)
     if manifest.get("split") not in BENCHMARK_SPLITS:
         raise _validation_error(
             "invalid_benchmark_split", f"Unsupported split: {manifest.get('split')}"
@@ -249,19 +308,47 @@ def import_benchmark(project_root: Path, manifest_path: Path) -> dict:
     normalized_labels: list[tuple[str, dict]] = []
     seen_samples: set[str] = set()
     for sample in samples:
+        if not isinstance(sample, dict):
+            raise _validation_error(
+                "invalid_benchmark_sample", "Benchmark samples must be objects."
+            )
+        if not isinstance(sample.get("sample_id"), str) or not isinstance(
+            sample.get("asset_id"), str
+        ):
+            raise _validation_error(
+                "invalid_benchmark_sample",
+                "sample_id and asset_id must be strings.",
+            )
         try:
-            sample_id = validate_identifier(str(sample["sample_id"]), "sample_id")
-            asset_id = validate_identifier(str(sample["asset_id"]), "asset_id")
-        except (KeyError, ValueError) as exc:
+            sample_id = validate_identifier(sample["sample_id"], "sample_id")
+            asset_id = validate_identifier(sample["asset_id"], "asset_id")
+        except ValueError as exc:
             raise _validation_error("invalid_benchmark_sample", str(exc)) from exc
         if sample_id in seen_samples:
             raise _validation_error(
                 "duplicate_sample_id", f"Duplicate sample_id: {sample_id}"
             )
         seen_samples.add(sample_id)
-        labels_format = str(sample.get("labels_format", "json"))
+        asset_version = _required_string(
+            sample, "asset_version", "invalid_asset_version"
+        )
+        source_uri = _required_string(sample, "source_uri", "invalid_source_uri")
+        source_fingerprint = _required_string(
+            sample, "source_fingerprint", "invalid_source_fingerprint"
+        )
+        if re.fullmatch(r"[0-9a-fA-F]{64}", source_fingerprint) is None:
+            raise _validation_error(
+                "invalid_source_fingerprint",
+                "source_fingerprint must be a 64-character SHA-256 hex digest.",
+            )
+        labels_format = _required_string(
+            sample, "labels_format", "invalid_labels_format"
+        )
+        relative_labels_path = _required_string(
+            sample, "labels_path", "invalid_labels_path"
+        )
         labels_path = _safe_labels_path(
-            manifest_path.parent, str(sample.get("labels_path", ""))
+            manifest_path.parent, relative_labels_path
         )
         labels = _normalize_labels(load_label_document(labels_path, labels_format))
         normalized_sample = dict(sample)
@@ -269,6 +356,9 @@ def import_benchmark(project_root: Path, manifest_path: Path) -> dict:
             {
                 "sample_id": sample_id,
                 "asset_id": asset_id,
+                "asset_version": asset_version,
+                "source_uri": source_uri,
+                "source_fingerprint": source_fingerprint.lower(),
                 "labels_path": f"samples/{sample_id}/labels.json",
                 "labels_format": "json",
                 "imported_labels_format": labels_format,
@@ -277,7 +367,17 @@ def import_benchmark(project_root: Path, manifest_path: Path) -> dict:
         normalized_samples.append(normalized_sample)
         normalized_labels.append((sample_id, labels))
     normalized_manifest = dict(manifest)
-    normalized_manifest["benchmark_id"] = benchmark_id
+    normalized_manifest.update(
+        {
+            "benchmark_id": benchmark_id,
+            "benchmark_version": benchmark_version,
+            "scene_type": scene_type,
+            "point_density": point_density,
+            "coordinate_unit": coordinate_unit,
+            "label_version": label_version,
+            "license": benchmark_license,
+        }
+    )
     normalized_manifest["samples"] = normalized_samples
     write_json(normalized_manifest, destination / "benchmark.json")
     for sample_id, labels in normalized_labels:
