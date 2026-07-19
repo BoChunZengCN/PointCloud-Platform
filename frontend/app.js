@@ -287,6 +287,7 @@ function renderDashboard(project) {
   renderAnalysisOverview(project, null);
   renderObjectSegmentation(asset, null);
   renderSegmentationRun(asset, null);
+  renderGoldenEvaluation(asset, null, null);
   renderQualityGateStatus(asset, null);
   renderDeliveryGateNotice(asset, null);
   renderProjectGateStatus(null);
@@ -307,6 +308,10 @@ function renderDashboard(project) {
     fetchSegmentationRuns(asset.id)
       .then((runs) => renderSegmentationRun(asset, runs))
       .catch(() => renderSegmentationRun(asset, { run_count: 0, runs: [] }));
+    Promise.all([
+      fetchGoldenEvaluations(asset.id).catch(() => ({ evaluation_count: 0, evaluations: [] })),
+      fetchSegmentationSearches(asset.id).catch(() => ({ search_count: 0, searches: [] })),
+    ]).then(([evaluations, searches]) => renderGoldenEvaluation(asset, evaluations, searches));
     fetchQualityGate(asset.id)
       .then((gate) => renderQualityGateStatus(asset, gate))
       .catch(() => renderQualityGateStatus(asset, { status: "review_required", severity: "warning", finding_count: 0 }));
@@ -672,6 +677,66 @@ async function fetchObjectSegmentation(assetId) {
 async function fetchSegmentationRuns(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/segmentation-runs/${encodedAssetId}`);
+}
+
+async function fetchGoldenEvaluations(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/segmentation-evaluations/${encodedAssetId}`);
+}
+
+async function fetchSegmentationSearches(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/segmentation-searches/${encodedAssetId}`);
+}
+
+function metricPercent(value) {
+  return `${((Number(value) || 0) * 100).toFixed(1)}%`;
+}
+
+function renderGoldenEvaluation(asset, evaluationPayload, searchPayload) {
+  const node = document.getElementById("golden-evaluation-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.replaceChildren(textElement("span", "暂无资产"));
+    return;
+  }
+  if (!evaluationPayload) {
+    node.replaceChildren(
+      textElement("span", "黄金标注准确率"),
+      textElement("strong", "读取中"),
+      textElement("small", "正在读取 Phase 13B 评估与参数搜索"),
+    );
+    return;
+  }
+  const evaluations = evaluationPayload.evaluations || [];
+  const completed = evaluations.filter((item) => item.status === "completed" && item.summary);
+  const latest = completed.length ? completed[completed.length - 1] : null;
+  if (!latest) {
+    node.replaceChildren(
+      textElement("span", "黄金标注准确率"),
+      textElement("strong", "暂无评估"),
+      textElement("small", "请先执行 evaluate-segmentation-run"),
+    );
+    return;
+  }
+  const searches = searchPayload?.searches || [];
+  const latestSearch = searches.length ? searches[searches.length - 1] : null;
+  const recommendation = latestSearch?.recommendation;
+  const recommendationText = recommendation?.config
+    ? JSON.stringify(recommendation.config)
+    : "暂无推荐参数";
+  const gateStatus = recommendation?.status === "recommended" ? "passed" : "未执行";
+  node.replaceChildren(
+    textElement("span", `黄金标注准确率 · ${latest.evaluation_id}`),
+    textElement("strong", `实例 F1 ${metricPercent(latest.summary.instance_f1)}`),
+    textElement(
+      "small",
+      `点 mIoU ${metricPercent(latest.summary.point_miou)} · 包围盒 IoU ${metricPercent(latest.summary.mean_box_iou)}`,
+    ),
+    textElement("small", `回归门禁: ${gateStatus} · 推荐参数: ${recommendationText}`),
+  );
 }
 
 function renderSegmentationRun(asset, payload) {

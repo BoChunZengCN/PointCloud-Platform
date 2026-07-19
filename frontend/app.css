@@ -768,6 +768,33 @@ h2 {
   line-height: 1.15;
 }
 
+.golden-evaluation-panel {
+  border-color: rgba(166, 112, 27, 0.38);
+}
+
+.golden-evaluation-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 104px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.golden-evaluation-summary span,
+.golden-evaluation-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.golden-evaluation-summary strong {
+  color: #9a6418;
+  font-size: 20px;
+  line-height: 1.15;
+}
+
 .delivery-gate-notice {
   border-color: rgba(23, 111, 122, 0.28);
 }
