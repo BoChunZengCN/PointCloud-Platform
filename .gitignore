@@ -4,6 +4,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .superpowers/
+.worktrees/
 .venv/
 venv/
 tests/_output/
