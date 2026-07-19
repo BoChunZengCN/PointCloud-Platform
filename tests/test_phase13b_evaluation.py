@@ -162,7 +162,7 @@ def test_evaluation_uses_public_source_point_indices(tmp_path):
 
 
 def test_evaluation_failure_is_persisted_without_summary(tmp_path):
-    prepare_run_and_benchmark(tmp_path, benchmark_fingerprint="wrong")
+    prepare_run_and_benchmark(tmp_path, benchmark_fingerprint="0" * 64)
 
     with pytest.raises(CorrespondenceError):
         evaluate_segmentation_run(
@@ -183,6 +183,54 @@ def test_evaluation_failure_is_persisted_without_summary(tmp_path):
     )
     assert failed["status"] == "failed"
     assert failed["error"]["code"] == "source_fingerprint_mismatch"
+    assert not (evaluation_dir / "evaluation_summary.json").exists()
+
+
+def test_failed_coordinate_evaluation_persists_correspondence_diagnostics(tmp_path):
+    prepare_run_and_benchmark(tmp_path)
+    labels_path = (
+        tmp_path
+        / "benchmarks"
+        / "bench-001"
+        / "samples"
+        / "sample-001"
+        / "labels.json"
+    )
+    labels = json.loads(labels_path.read_text(encoding="utf-8"))
+    for item in labels["point_labels"]:
+        item["x"] += 1000
+    labels_path.write_text(json.dumps(labels), encoding="utf-8")
+
+    with pytest.raises(CorrespondenceError) as exc_info:
+        evaluate_segmentation_run(
+            tmp_path,
+            asset_id="scan",
+            run_id="seg-run-001",
+            benchmark_id="bench-001",
+            sample_id="sample-001",
+            evaluation_id="eval-001",
+            config={
+                "correspondence_mode": "coordinate_tolerance",
+                "coordinate_tolerance": 0.01,
+                "min_match_coverage": 1.0,
+            },
+        )
+
+    assert exc_info.value.code == "insufficient_match_coverage"
+    evaluation_dir = (
+        tmp_path / "reports" / "segmentation_evaluations" / "scan" / "eval-001"
+    )
+    failed = json.loads(
+        (evaluation_dir / "evaluation_run.json").read_text(encoding="utf-8")
+    )
+    correspondence = json.loads(
+        (evaluation_dir / "correspondence.json").read_text(encoding="utf-8")
+    )
+    assert failed["status"] == "failed"
+    assert failed["artifacts"]["correspondence"] == "correspondence.json"
+    assert failed["error"]["diagnostic_artifact"] == "correspondence.json"
+    assert correspondence["matched_count"] == 0
+    assert correspondence["unmatched_count"] == len(sample_points())
     assert not (evaluation_dir / "evaluation_summary.json").exists()
 
 
@@ -218,4 +266,3 @@ def test_operational_proxy_and_accuracy_remain_separate(tmp_path):
     assert evaluation["summary"]["evaluation_kind"] == "golden_labels"
     assert "operational_proxy" not in json.dumps(evaluation["summary"])
     assert "retention_ratio" not in evaluation["summary"]
-

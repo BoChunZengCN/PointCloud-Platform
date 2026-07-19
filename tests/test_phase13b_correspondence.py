@@ -132,6 +132,35 @@ def test_coordinate_mode_reports_unmatched_and_ambiguous_points():
     assert report["unmatched_count"] == 1
 
 
+def test_coordinate_mode_rejects_two_labels_competing_for_one_source_point():
+    competing_labels = [
+        {
+            "point_index": index,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "instance_id": f"obj-{index}",
+            "class_id": "pipe",
+            "is_noise": False,
+        }
+        for index in range(2)
+    ]
+
+    matched, report = match_point_labels(
+        competing_labels,
+        [{"x": 0.0, "y": 0.0, "z": 0.0}],
+        expected_fingerprint="ignored",
+        mode="coordinate_tolerance",
+        tolerance=0.01,
+        min_coverage=0.0,
+    )
+
+    assert matched == []
+    assert report["matched_count"] == 0
+    assert report["ambiguous_count"] == 2
+    assert report["unmatched_count"] == 0
+
+
 def test_coordinate_mode_fails_below_minimum_coverage():
     with pytest.raises(CorrespondenceError) as exc_info:
         match_point_labels(
@@ -178,4 +207,3 @@ def test_coordinate_mode_is_deterministic():
     )
 
     assert first == second
-

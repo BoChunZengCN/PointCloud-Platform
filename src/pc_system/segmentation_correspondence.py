@@ -85,9 +85,7 @@ def _coordinate_match(
         source_xyz.append(xyz)
 
     tolerance_squared = tolerance * tolerance
-    matched = []
-    unmatched_count = 0
-    ambiguous_count = 0
+    candidate_rows = []
     for label in labels:
         try:
             target = tuple(float(label[axis]) for axis in ("x", "y", "z"))
@@ -108,9 +106,26 @@ def _coordinate_match(
             )
             if distance_squared <= tolerance_squared:
                 candidates.append(index)
+        candidate_rows.append((label, candidates))
+
+    unique_candidate_uses: dict[int, int] = {}
+    for _, candidates in candidate_rows:
+        if len(candidates) == 1:
+            source_index = candidates[0]
+            unique_candidate_uses[source_index] = (
+                unique_candidate_uses.get(source_index, 0) + 1
+            )
+
+    matched = []
+    unmatched_count = 0
+    ambiguous_count = 0
+    for label, candidates in candidate_rows:
         if not candidates:
             unmatched_count += 1
-        elif len(candidates) > 1:
+        elif (
+            len(candidates) > 1
+            or unique_candidate_uses.get(candidates[0], 0) > 1
+        ):
             ambiguous_count += 1
         else:
             matched.append({**label, "source_point_index": candidates[0]})

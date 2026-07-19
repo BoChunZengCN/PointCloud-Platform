@@ -290,5 +290,9 @@ def evaluate_segmentation_run(
         evaluation["status"] = "failed"
         evaluation["completed_at"] = utc_now()
         evaluation["error"] = _error_details(exc)
+        if isinstance(exc, CorrespondenceError) and exc.report is not None:
+            write_json(exc.report, evaluation_dir / "correspondence.json")
+            evaluation["artifacts"]["correspondence"] = "correspondence.json"
+            evaluation["error"]["diagnostic_artifact"] = "correspondence.json"
         write_json(evaluation, evaluation_dir / "evaluation_run.json")
         raise
