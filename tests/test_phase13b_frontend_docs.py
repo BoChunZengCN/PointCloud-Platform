@@ -105,6 +105,7 @@ def test_phase13b_documentation_describes_formats_metrics_and_search_limits():
         "instance_f1",
         "mean_box_iou",
         "regression_gate.json",
+        "/segmentation-searches/<asset_id>/<search_id>/trials",
         "max_trials",
         "trial_timeout_seconds",
         "advisory",

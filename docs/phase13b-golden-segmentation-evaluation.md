@@ -205,7 +205,13 @@ GET /segmentation-evaluations/<asset_id>/<evaluation_id>
 GET /segmentation-comparisons/<asset_id>/<comparison_id>
 GET /segmentation-searches/<asset_id>
 GET /segmentation-searches/<asset_id>/<search_id>
+GET /segmentation-searches/<asset_id>/<search_id>/trials
 GET /segmentation-searches/<asset_id>/<search_id>/recommendation
 ```
+
+Search trials and recommendations record `comparison_id` and the actual
+`gate_status`. A search without a baseline remains eligible for an advisory
+recommendation but uses `gate_status: "not_evaluated"`; the frontend never
+converts recommendation existence into a passed regression gate.
 
 Phase 14 will add visual correction and feedback events. Phase 15 will add model-library retrieval and registration.
