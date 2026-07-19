@@ -149,14 +149,13 @@ def segment_with_open3d_adapter(
 ) -> dict[str, Any]:
     """通过 Open3D 适配边界生成物体候选分割报告。
 
-    runner 参数让测试和后续生产适配器可以注入真实 Open3D DBSCAN 实现；未注入时，
-    当前版本使用内置几何聚类作为兼容回退，并把 method 标记为 open3d_dbscan。
+    runner 参数让测试和后续生产适配器可以注入真实 Open3D DBSCAN 实现。
+    未注入执行器时明确失败，避免把内置算法错误标记为 Open3D。
     """
 
-    if runner:
-        report = runner(points, distance_threshold, min_points)
-    else:
-        report = segment_object_candidates(asset_id, points, distance_threshold=distance_threshold, min_points=min_points)
+    if runner is None:
+        raise RuntimeError("Open3D segmentation runner is required.")
+    report = runner(points, distance_threshold, min_points)
     report["asset_id"] = asset_id
     report["method"] = "open3d_dbscan"
     for item in report.get("objects", []):
