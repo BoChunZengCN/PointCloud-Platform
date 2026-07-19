@@ -111,3 +111,27 @@ def test_engine_output_without_membership_is_rejected(tmp_path):
             run_id="seg-run-001",
             runners={"external": runner_without_membership},
         )
+
+
+def test_completed_run_writes_operational_quality_artifacts(tmp_path):
+    run = run_segmentation(
+        tmp_path,
+        asset_id="scan",
+        asset_version="v1",
+        source_uri="scan.points.json",
+        points=sample_points(),
+        config={
+            "engine": "builtin_geometric",
+            "distance_threshold": 0.2,
+            "min_points": 1,
+            "quality_thresholds": {"max_largest_object_ratio": 1.0},
+        },
+        run_id="seg-run-001",
+    )
+    run_dir = tmp_path / "reports" / "segmentation_runs" / "scan" / "seg-run-001"
+
+    assert run["quality"]["evaluation_kind"] == "operational_proxy"
+    assert run["quality"]["status"] == "passed"
+    assert run["artifacts"]["segmentation_quality"] == "segmentation_quality.json"
+    assert (run_dir / "segmentation_quality.json").exists()
+    assert (run_dir / "segmentation_quality.md").exists()

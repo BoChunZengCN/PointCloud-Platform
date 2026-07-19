@@ -3,6 +3,10 @@ from pathlib import Path
 from pc_system.identifiers import validate_identifier
 from pc_system.json_io import write_json
 from pc_system.segmentation_engines import SegmentationEngineUnavailable, execute_engine
+from pc_system.segmentation_operational_quality import (
+    build_operational_quality,
+    write_operational_quality,
+)
 from pc_system.segmentation_preprocessing import preprocess_points
 from pc_system.segmentation_run import (
     build_segmentation_run,
@@ -91,6 +95,13 @@ def run_segmentation(
         )
         memberships = _write_membership_artifacts(report, processed_points, run_dir)
         write_json(report, run_dir / "object_segments.json")
+        quality = build_operational_quality(
+            report=report,
+            preprocessing=preprocessing,
+            execution=execution,
+            thresholds=dict(config.get("quality_thresholds", {})),
+        )
+        write_operational_quality(quality, run_dir)
 
         run["preprocessing"] = preprocessing
         run["requested_engine"] = execution["requested_engine"]
@@ -99,7 +110,10 @@ def run_segmentation(
         run["artifacts"] = {
             "object_segments": "object_segments.json",
             "memberships": memberships,
+            "segmentation_quality": "segmentation_quality.json",
+            "segmentation_quality_markdown": "segmentation_quality.md",
         }
+        run["quality"] = quality
         run["status"] = "completed"
         run["completed_at"] = utc_now()
         write_segmentation_run(run, run_dir)
