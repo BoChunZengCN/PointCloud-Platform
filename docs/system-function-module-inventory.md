@@ -171,6 +171,17 @@ LAS/LAZ or FLS source
 | P11-M6 报告中心 / Report center | 已完成 / Done | API 与前端读取项目报告索引。 | `GET /reports/center` |
 ## 关键 CLI 命令 / Key CLI Commands
 
+## Phase 13A: 分割质量基础 / Segmentation Foundation
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P13A-M1 分割运行 / Segmentation run | 已完成 / Done | 保存数据版本、配置指纹和运行生命周期。 | `segmentation_run.json` |
+| P13A-M2 保守预处理 / Conservative preprocessing | 已完成 / Done | 校验、去重、可选体素采样和点保留率。 | preprocessing summary |
+| P13A-M3 引擎真实性 / Engine truth | 已完成 / Done | 分别记录请求、实际引擎和回退原因。 | execution metadata |
+| P13A-M4 对象成员工件 / Membership artifacts | 已完成 / Done | 为每个对象写出独立点记录。 | `artifacts/*.points.json` |
+| P13A-M5 运行质量代理 / Operational quality | 已完成 / Done | 识别噪声、疑似粘连、碎片和回退风险。 | `segmentation_quality.json`, `.md` |
+| P13A-M6 公共接口 / Public surfaces | 已完成 / Done | CLI、只读 API、前端摘要和文档。 | `run-segmentation`, API |
+
 ```powershell
 python -m pc_system.cli init --project-root .\workspace
 python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.las

@@ -51,6 +51,12 @@ def _production_dir(project_root: Path, asset_id: str) -> Path:
     return project_root / "reports" / "production_runs" / _validate_api_identifier(asset_id, "asset_id")
 
 
+def _segmentation_runs_dir(project_root: Path, asset_id: str) -> Path:
+    """返回资产的版本化分割运行目录。"""
+
+    return project_root / "reports" / "segmentation_runs" / _validate_api_identifier(asset_id, "asset_id")
+
+
 def _validate_api_identifier(value: str, label: str) -> str:
     """把核心标识符校验错误转换为稳定的 API 400。"""
 
@@ -311,6 +317,33 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         asset_id = _validate_api_identifier(asset_id, "asset_id")
         path = project_root / "reports" / "object_segments" / asset_id / "object_segments.json"
         return _read_json_or_404(path, "Object segmentation")
+
+    @app.get("/segmentation-runs/{asset_id}")
+    def list_segmentation_runs(asset_id: str) -> dict:
+        """返回资产的历史分割运行。"""
+
+        runs_dir = _segmentation_runs_dir(project_root, asset_id)
+        runs = []
+        if runs_dir.exists():
+            for path in sorted(runs_dir.glob("*/segmentation_run.json"), key=lambda item: item.parent.name):
+                runs.append(json.loads(path.read_text(encoding="utf-8")))
+        return {"asset_id": asset_id, "run_count": len(runs), "runs": runs}
+
+    @app.get("/segmentation-runs/{asset_id}/{run_id}")
+    def get_segmentation_run(asset_id: str, run_id: str) -> dict:
+        """返回单次版本化分割运行。"""
+
+        run_id = _validate_api_identifier(run_id, "run_id")
+        path = _segmentation_runs_dir(project_root, asset_id) / run_id / "segmentation_run.json"
+        return _read_json_or_404(path, "Segmentation run")
+
+    @app.get("/segmentation-runs/{asset_id}/{run_id}/quality")
+    def get_segmentation_run_quality(asset_id: str, run_id: str) -> dict:
+        """返回单次分割运行的无标注质量代理报告。"""
+
+        run_id = _validate_api_identifier(run_id, "run_id")
+        path = _segmentation_runs_dir(project_root, asset_id) / run_id / "segmentation_quality.json"
+        return _read_json_or_404(path, "Segmentation operational quality")
 
     @app.get("/project-gate")
     def get_project_gate() -> dict:

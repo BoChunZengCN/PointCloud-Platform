@@ -89,6 +89,7 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 11 | P11-M4 Job 门禁联动 / Job gate link | 已完成 / Done | 将质量门禁状态同步到 production job step。 |
 | Phase 11 | P11-M5 批处理计划 / Batch run plan | 已完成 / Done | 新增 plan-batch-run 生成多资产批处理计划。 |
 | Phase 11 | P11-M6 报告中心 / Report center | 已完成 / Done | 新增 GET /project-gate、GET /reports/center 和前端报告中心入口。 |
+| Phase 13A | 分割质量基础 / Segmentation foundation | 已完成 / Done | 版本化分割运行、保守预处理、真实引擎记录、对象点工件和运行质量代理门禁。 |
 | Phase 12 | P12 生产可靠性闭环 / Production reliability | 已完成 / Done | 修复路径安全、生产 API 保护、可执行计划、交付审计、真实产物状态和分析性能。 |
 
 ## 技术路线 / Technical Routes
@@ -695,3 +696,17 @@ $env:PYTHONPATH="src"; python -m pc_system.cli plan-batch-run --project-root wor
 GET /project-gate
 GET /reports/center
 ```
+
+### Phase 13A 分割质量基础 / Segmentation Foundation
+
+```powershell
+$env:PYTHONPATH="src"; python -m pc_system.cli run-segmentation `
+  --project-root workspace `
+  --asset-id sample `
+  --run-id seg-run-001 `
+  --engine builtin_geometric `
+  --distance-threshold 0.2 `
+  --min-points 10
+```
+
+运行结果保存在 `reports/segmentation_runs/<asset_id>/<run_id>/`，质量结果是无黄金标注的运行质量代理指标，不代表真实准确率。
