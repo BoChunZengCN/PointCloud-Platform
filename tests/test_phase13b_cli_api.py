@@ -302,6 +302,8 @@ def test_search_cli_uses_bounded_config_file(tmp_path):
     recommendation = json.loads(recommendation_path.read_text(encoding="utf-8"))
     assert recommendation["status"] == "recommended"
     assert recommendation["config"]["min_points"] == 1
+    assert recommendation["gate_status"] == "not_evaluated"
+    assert recommendation["comparison_id"] is None
 
 
 def test_api_lists_and_reads_phase13b_artifacts(tmp_path):
@@ -355,3 +357,46 @@ def test_api_validates_all_phase13b_identifiers(tmp_path):
     )
     assert client.get("/segmentation-searches/scan/bad$id").status_code == 400
 
+
+def test_api_exposes_sorted_parameter_search_trials(tmp_path):
+    search_root = (
+        tmp_path
+        / "reports"
+        / "segmentation_searches"
+        / "scan"
+        / "search-001"
+    )
+    trials_root = search_root / "trials"
+    trials_root.mkdir(parents=True)
+    (search_root / "search_run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "asset_id": "scan",
+                "search_id": "search-001",
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for trial_id in ("trial-0002", "trial-0001"):
+        (trials_root / f"{trial_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "trial_id": trial_id,
+                    "status": "completed",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    response = TestClient(create_app(tmp_path)).get(
+        "/segmentation-searches/scan/search-001/trials"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["trial_count"] == 2
+    assert [
+        trial["trial_id"] for trial in response.json()["trials"]
+    ] == ["trial-0001", "trial-0002"]

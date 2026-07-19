@@ -41,12 +41,14 @@ def trial_result(
     *,
     evaluation_id="eval",
     gate_status="passed",
+    comparison_id="cmp",
     instance_f1=0.8,
     runtime_seconds=1.0,
 ):
     return {
         "evaluation_id": evaluation_id,
         "gate_status": gate_status,
+        "comparison_id": comparison_id,
         "runtime_seconds": runtime_seconds,
         "summary": {
             "instance_f1": instance_f1,
@@ -212,6 +214,57 @@ def test_search_records_per_trial_timeout_metadata(tmp_path):
     assert trial["trial_timeout_seconds"] == 12
 
 
+def test_recommendation_preserves_actual_gate_and_comparison_reference(tmp_path):
+    search = run_parameter_search(
+        tmp_path,
+        asset_id="scan",
+        search_id="search-001",
+        search_config=search_config(
+            parameter_space={"min_points": [1]},
+            max_trials=1,
+        ),
+        trial_runner=lambda trial_id, config: trial_result(
+            gate_status="passed",
+            comparison_id="cmp-001",
+        ),
+    )
+
+    assert search["recommendation"]["gate_status"] == "passed"
+    assert search["recommendation"]["comparison_id"] == "cmp-001"
+    trial = json.loads(
+        (
+            tmp_path
+            / "reports"
+            / "segmentation_searches"
+            / "scan"
+            / "search-001"
+            / "trials"
+            / "trial-0001.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert trial["comparison_id"] == "cmp-001"
+
+
+def test_ungated_completed_trial_remains_eligible_but_not_marked_passed(tmp_path):
+    search = run_parameter_search(
+        tmp_path,
+        asset_id="scan",
+        search_id="search-001",
+        search_config=search_config(
+            parameter_space={"min_points": [1]},
+            max_trials=1,
+        ),
+        trial_runner=lambda trial_id, config: trial_result(
+            gate_status="not_evaluated",
+            comparison_id=None,
+        ),
+    )
+
+    assert search["recommendation"]["status"] == "recommended"
+    assert search["recommendation"]["gate_status"] == "not_evaluated"
+    assert search["recommendation"]["comparison_id"] is None
+
+
 def test_search_never_mutates_production_config(tmp_path):
     production_config = tmp_path / "config" / "segmentation.json"
     production_config.parent.mkdir()
@@ -230,4 +283,3 @@ def test_search_never_mutates_production_config(tmp_path):
     )
 
     assert production_config.read_text(encoding="utf-8") == before
-

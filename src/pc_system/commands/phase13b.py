@@ -147,17 +147,19 @@ def run_search_segmentation(
             evaluation_id=evaluation_id,
             config=evaluation_config,
         )
-        gate_status = "passed"
+        gate_status = "not_evaluated"
+        comparison_id = None
         if baseline_evaluation_id:
             thresholds = search_config.get("regression_thresholds")
             if not isinstance(thresholds, dict):
                 raise ValueError(
                     "Search with a baseline requires regression_thresholds."
                 )
+            comparison_id = f"{segmentation_run_id}-cmp"
             comparison = compare_evaluations(
                 project_root,
                 asset_id=asset_id,
-                comparison_id=f"{segmentation_run_id}-cmp",
+                comparison_id=comparison_id,
                 baseline_evaluation_id=baseline_evaluation_id,
                 candidate_evaluation_id=evaluation_id,
                 thresholds=thresholds,
@@ -167,6 +169,7 @@ def run_search_segmentation(
             "evaluation_id": evaluation_id,
             "summary": evaluation["summary"],
             "gate_status": gate_status,
+            "comparison_id": comparison_id,
             "runtime_seconds": time.perf_counter() - started,
         }
 

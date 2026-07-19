@@ -468,6 +468,39 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         )
         return _read_json_or_404(path, "Segmentation search recommendation")
 
+    @app.get("/segmentation-searches/{asset_id}/{search_id}/trials")
+    def list_segmentation_search_trials(
+        asset_id: str, search_id: str
+    ) -> dict:
+        """返回一次参数搜索的全部试验记录。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        search_id = _validate_api_identifier(search_id, "search_id")
+        root = (
+            project_root
+            / "reports"
+            / "segmentation_searches"
+            / asset_id
+            / search_id
+        )
+        search = _read_json_or_404(
+            root / "search_run.json", "Segmentation search"
+        )
+        trials = []
+        trials_root = root / "trials"
+        if trials_root.exists():
+            for path in sorted(
+                trials_root.glob("*.json"), key=lambda item: item.name
+            ):
+                trials.append(json.loads(path.read_text(encoding="utf-8")))
+        return {
+            "asset_id": asset_id,
+            "search_id": search_id,
+            "search_status": search.get("status"),
+            "trial_count": len(trials),
+            "trials": trials,
+        }
+
     @app.get("/project-gate")
     def get_project_gate() -> dict:
         """返回 Phase 11 项目级门禁报告。"""

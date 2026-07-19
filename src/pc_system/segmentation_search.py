@@ -156,6 +156,7 @@ def run_parameter_search(
             "trial_timeout_seconds": timeout,
             "evaluation_id": None,
             "gate_status": None,
+            "comparison_id": None,
             "runtime_seconds": None,
             "score": None,
             "error": None,
@@ -174,7 +175,10 @@ def run_parameter_search(
                 {
                     "status": "completed",
                     "evaluation_id": result["evaluation_id"],
-                    "gate_status": str(result.get("gate_status", "passed")),
+                    "gate_status": str(
+                        result.get("gate_status", "not_evaluated")
+                    ),
+                    "comparison_id": result.get("comparison_id"),
                     "runtime_seconds": runtime_seconds,
                     "summary": dict(result["summary"]),
                     "score": score_evaluation(scoring_summary, weights),
@@ -197,7 +201,7 @@ def run_parameter_search(
     eligible = [
         trial
         for trial in completed_trials
-        if trial.get("gate_status") == "passed"
+        if trial.get("gate_status") in {"passed", "not_evaluated"}
     ]
     eligible.sort(
         key=lambda trial: (
@@ -214,6 +218,8 @@ def run_parameter_search(
             "search_id": search_id,
             "trial_id": best["trial_id"],
             "evaluation_id": best["evaluation_id"],
+            "gate_status": best["gate_status"],
+            "comparison_id": best["comparison_id"],
             "score": best["score"],
             "runtime_seconds": best["runtime_seconds"],
             "config": best["config"],
@@ -227,6 +233,8 @@ def run_parameter_search(
             "search_id": search_id,
             "trial_id": None,
             "evaluation_id": None,
+            "gate_status": None,
+            "comparison_id": None,
             "score": None,
             "config": None,
             "advisory_only": True,

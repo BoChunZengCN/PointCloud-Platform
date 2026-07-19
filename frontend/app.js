@@ -287,7 +287,7 @@ function renderDashboard(project) {
   renderAnalysisOverview(project, null);
   renderObjectSegmentation(asset, null);
   renderSegmentationRun(asset, null);
-  renderGoldenEvaluation(asset, null, null);
+  renderGoldenEvaluation(asset, null, null, null);
   renderQualityGateStatus(asset, null);
   renderDeliveryGateNotice(asset, null);
   renderProjectGateStatus(null);
@@ -311,7 +311,19 @@ function renderDashboard(project) {
     Promise.all([
       fetchGoldenEvaluations(asset.id).catch(() => ({ evaluation_count: 0, evaluations: [] })),
       fetchSegmentationSearches(asset.id).catch(() => ({ search_count: 0, searches: [] })),
-    ]).then(([evaluations, searches]) => renderGoldenEvaluation(asset, evaluations, searches));
+    ]).then(async ([evaluations, searches]) => {
+      const searchItems = searches.searches || [];
+      const latestSearch = searchItems.length
+        ? searchItems[searchItems.length - 1]
+        : null;
+      const comparisonId = latestSearch?.recommendation?.comparison_id;
+      let comparison = null;
+      if (comparisonId) {
+        comparison = await fetchSegmentationComparison(asset.id, comparisonId)
+          .catch(() => null);
+      }
+      renderGoldenEvaluation(asset, evaluations, searches, comparison);
+    });
     fetchQualityGate(asset.id)
       .then((gate) => renderQualityGateStatus(asset, gate))
       .catch(() => renderQualityGateStatus(asset, { status: "review_required", severity: "warning", finding_count: 0 }));
@@ -689,11 +701,24 @@ async function fetchSegmentationSearches(assetId) {
   return await loadJson(`${API_BASE_URL}/segmentation-searches/${encodedAssetId}`);
 }
 
+async function fetchSegmentationComparison(assetId, comparisonId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  const encodedComparisonId = encodeURIComponent(comparisonId);
+  return await loadJson(
+    `${API_BASE_URL}/segmentation-comparisons/${encodedAssetId}/${encodedComparisonId}`,
+  );
+}
+
 function metricPercent(value) {
   return `${((Number(value) || 0) * 100).toFixed(1)}%`;
 }
 
-function renderGoldenEvaluation(asset, evaluationPayload, searchPayload) {
+function renderGoldenEvaluation(
+  asset,
+  evaluationPayload,
+  searchPayload,
+  comparisonPayload,
+) {
   const node = document.getElementById("golden-evaluation-summary");
   if (!node) {
     return;
@@ -710,10 +735,12 @@ function renderGoldenEvaluation(asset, evaluationPayload, searchPayload) {
     );
     return;
   }
-  const evaluations = evaluationPayload.evaluations || [];
-  const completed = evaluations.filter((item) => item.status === "completed" && item.summary);
-  const latest = completed.length ? completed[completed.length - 1] : null;
-  if (!latest) {
+  const view = buildGoldenEvaluationViewModel(
+    evaluationPayload,
+    searchPayload,
+    comparisonPayload,
+  );
+  if (view.state !== "ready") {
     node.replaceChildren(
       textElement("span", "黄金标注准确率"),
       textElement("strong", "暂无评估"),
@@ -721,21 +748,23 @@ function renderGoldenEvaluation(asset, evaluationPayload, searchPayload) {
     );
     return;
   }
-  const searches = searchPayload?.searches || [];
-  const latestSearch = searches.length ? searches[searches.length - 1] : null;
-  const recommendation = latestSearch?.recommendation;
-  const recommendationText = recommendation?.config
-    ? JSON.stringify(recommendation.config)
+  const recommendationText = view.recommendationConfig
+    ? JSON.stringify(view.recommendationConfig)
     : "暂无推荐参数";
-  const gateStatus = recommendation?.status === "recommended" ? "passed" : "未执行";
+  const scoreText = view.recommendationScore === null
+    ? "暂无评分"
+    : view.recommendationScore.toFixed(4);
   node.replaceChildren(
-    textElement("span", `黄金标注准确率 · ${latest.evaluation_id}`),
-    textElement("strong", `实例 F1 ${metricPercent(latest.summary.instance_f1)}`),
+    textElement("span", `黄金标注准确率 · ${view.evaluationId}`),
+    textElement("strong", `实例 F1 ${metricPercent(view.instanceF1)}`),
     textElement(
       "small",
-      `点 mIoU ${metricPercent(latest.summary.point_miou)} · 包围盒 IoU ${metricPercent(latest.summary.mean_box_iou)}`,
+      `点 mIoU ${metricPercent(view.pointMiou)} · 包围盒 IoU ${metricPercent(view.meanBoxIou)} · 标注覆盖率 ${metricPercent(view.matchedLabelRatio)}`,
     ),
-    textElement("small", `回归门禁: ${gateStatus} · 推荐参数: ${recommendationText}`),
+    textElement(
+      "small",
+      `回归门禁: ${view.gateStatus} · 最佳综合分: ${scoreText} · 推荐参数: ${recommendationText}`,
+    ),
   );
 }
 
