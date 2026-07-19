@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,14 @@ def _sample_json_points(path: Path, max_points: int) -> list[dict[str, Any]]:
     raw_points = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw_points, list):
         raise ValueError("Point sample JSON must be an array of point records.")
-    return [_normalize_point(point) for point in raw_points[:max_points]]
+    if len(raw_points) <= max_points:
+        selected = raw_points
+    elif max_points == 1:
+        selected = [raw_points[len(raw_points) // 2]]
+    else:
+        step = (len(raw_points) - 1) / (max_points - 1)
+        selected = [raw_points[round(index * step)] for index in range(max_points)]
+    return [_normalize_point(point) for point in selected]
 
 
 def _sample_las_points(path: Path, max_points: int) -> list[dict[str, Any]]:
@@ -38,18 +46,24 @@ def _sample_las_points(path: Path, max_points: int) -> list[dict[str, Any]]:
         raise RuntimeError("Reading LAS/LAZ samples requires optional dependency: python -m pip install laspy") from exc
 
     points: list[dict[str, Any]] = []
+    randomizer = random.Random(0)
+    seen = 0
     with laspy.open(path) as reader:
-        for chunk in reader.chunk_iterator(max_points):
-            limit = max_points - len(points)
-            for index in range(min(len(chunk.x), limit)):
+        chunk_size = min(max(max_points, 10_000), 1_000_000)
+        for chunk in reader.chunk_iterator(chunk_size):
+            for index in range(len(chunk.x)):
                 point = {"x": float(chunk.x[index]), "y": float(chunk.y[index]), "z": float(chunk.z[index])}
                 if hasattr(chunk, "red") and hasattr(chunk, "green") and hasattr(chunk, "blue"):
                     point.update({"red": int(chunk.red[index]), "green": int(chunk.green[index]), "blue": int(chunk.blue[index])})
                 if hasattr(chunk, "classification"):
                     point["classification"] = int(chunk.classification[index])
-                points.append(point)
-            if len(points) >= max_points:
-                break
+                seen += 1
+                if len(points) < max_points:
+                    points.append(point)
+                else:
+                    replacement = randomizer.randrange(seen)
+                    if replacement < max_points:
+                        points[replacement] = point
     return points
 
 

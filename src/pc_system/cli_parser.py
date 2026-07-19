@@ -121,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     plan_production.add_argument("--slice-name", default="room-a")
     plan_production.add_argument("--segment-name", default="baseline")
     plan_production.add_argument("--splat-name", default="baseline")
+    plan_production.add_argument("--potree-converter", default=Path("PotreeConverter"), type=Path)
+    plan_production.add_argument("--pdal-path", default=Path("pdal"), type=Path)
+    plan_production.add_argument("--python-path", default=Path("python"), type=Path)
+    plan_production.add_argument("--open3d-script", default=Path("scripts/open3d_rule_segment.py"), type=Path)
 
     report_production = subparsers.add_parser("report-production-run", help="Create a Phase 3 production run report from a plan.")
     report_production.add_argument("--project-root", required=True, type=Path)

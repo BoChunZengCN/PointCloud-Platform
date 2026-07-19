@@ -45,6 +45,8 @@ def _classification_distribution(points: list[dict]) -> dict[str, int]:
 def build_spatial_grid(points: list[dict], cell_size: float = 5.0) -> dict[str, Any]:
     """按 XY 网格聚合点数与高程范围。"""
 
+    if not math.isfinite(cell_size) or cell_size <= 0:
+        raise ValueError("grid_cell_size must be a finite number greater than 0.")
     cells: dict[str, dict[str, Any]] = {}
     for point in points:
         cell_x = math.floor(float(point["x"]) / cell_size)
@@ -61,6 +63,8 @@ def build_spatial_grid(points: list[dict], cell_size: float = 5.0) -> dict[str, 
 def analyze_point_records(asset_id: str, points: list[dict], grid_cell_size: float = 5.0) -> dict[str, Any]:
     """从轻量点记录生成 Phase 6 点云分析报告。"""
 
+    if not math.isfinite(grid_cell_size) or grid_cell_size <= 0:
+        raise ValueError("grid_cell_size must be a finite number greater than 0.")
     if not points:
         return {
             "schema_version": "1.0",

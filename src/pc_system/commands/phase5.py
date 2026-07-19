@@ -31,6 +31,8 @@ def run_serve_api(
 ) -> int:
     """启动 FastAPI 服务；dry-run 只校验配置并返回。"""
 
+    if run_mode == "production" and not api_key:
+        raise ValueError("--api-key is required when --mode production is used.")
     ProjectConfig(project_root=project_root).ensure_directories()
     env = build_api_environment(project_root, api_key, run_mode)
     os.environ.update(env)

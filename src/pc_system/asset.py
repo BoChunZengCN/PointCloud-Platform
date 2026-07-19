@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from pc_system.json_io import write_json
+from pc_system.identifiers import validate_identifier
 
 
 @dataclass(frozen=True)
@@ -28,9 +29,10 @@ def build_asset_metadata(las_path: Path, info: LasAssetInfo) -> dict[str, Any]:
     """把文件路径和 LAS 元数据合并为统一的 asset.json 结构。"""
 
     resolved = las_path.resolve()
+    asset_id = validate_identifier(resolved.stem, "asset_id")
     return {
         # asset_id 先使用文件名主干，后续如接数据库可替换为 UUID 或哈希。
-        "asset_id": resolved.stem,
+        "asset_id": asset_id,
         "file": {
             "path": str(resolved),
             "name": resolved.name,

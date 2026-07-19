@@ -89,6 +89,7 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 11 | P11-M4 Job 门禁联动 / Job gate link | 已完成 / Done | 将质量门禁状态同步到 production job step。 |
 | Phase 11 | P11-M5 批处理计划 / Batch run plan | 已完成 / Done | 新增 plan-batch-run 生成多资产批处理计划。 |
 | Phase 11 | P11-M6 报告中心 / Report center | 已完成 / Done | 新增 GET /project-gate、GET /reports/center 和前端报告中心入口。 |
+| Phase 12 | P12 生产可靠性闭环 / Production reliability | 已完成 / Done | 修复路径安全、生产 API 保护、可执行计划、交付审计、真实产物状态和分析性能。 |
 
 ## 技术路线 / Technical Routes
 
@@ -135,6 +136,7 @@ The second route targets raw FLS scan files. The current implementation provides
 The core test suite does not require heavy point-cloud dependencies. Real LAS/LAZ reading needs `laspy`; production slicing, segmentation, Potree publishing, and 3DGS training require their respective external tools.
 
 ```powershell
+python -m pip install -e ".[test]"
 python -m pytest tests -q -p no:cacheprovider
 ```
 
@@ -616,6 +618,7 @@ workspace/
 - `docs/phase7-real-las-analysis.md`
 - `docs/phase8-quality-gates.md`
 - `docs/phase9-delivery-gates.md`
+- `docs/phase12-production-reliability.md`
 
 
 
