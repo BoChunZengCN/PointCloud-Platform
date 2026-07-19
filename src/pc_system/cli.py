@@ -29,6 +29,12 @@ from pc_system.commands.phase8 import run_check_quality_gate
 from pc_system.commands.phase10 import run_segment_asset_objects, run_segment_objects
 from pc_system.commands.phase11 import run_check_project_gate, run_plan_batch_run
 from pc_system.commands.phase13 import run_phase13_segmentation
+from pc_system.commands.phase13b import (
+    run_compare_segmentation,
+    run_evaluate_segmentation,
+    run_import_segmentation_benchmark,
+    run_search_segmentation,
+)
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -64,7 +70,23 @@ def main(
 
     args = build_parser().parse_args(argv)
     try:
-        for field in ("asset_id", "job_id", "run_id", "step_id", "name", "slice_name", "segment_name", "splat_name"):
+        for field in (
+            "asset_id",
+            "benchmark_id",
+            "candidate_evaluation_id",
+            "comparison_id",
+            "evaluation_id",
+            "baseline_evaluation_id",
+            "job_id",
+            "run_id",
+            "sample_id",
+            "search_id",
+            "step_id",
+            "name",
+            "slice_name",
+            "segment_name",
+            "splat_name",
+        ):
             value = getattr(args, field, None)
             if value:
                 validate_identifier(value, field)
@@ -201,6 +223,39 @@ def main(
                 args.min_points,
                 args.voxel_size,
                 args.max_points,
+            )
+        if args.command == "import-segmentation-benchmark":
+            return run_import_segmentation_benchmark(
+                args.project_root, args.manifest
+            )
+        if args.command == "evaluate-segmentation-run":
+            return run_evaluate_segmentation(
+                args.project_root,
+                asset_id=args.asset_id,
+                run_id=args.run_id,
+                benchmark_id=args.benchmark_id,
+                sample_id=args.sample_id,
+                evaluation_id=args.evaluation_id,
+                config_path=args.config,
+            )
+        if args.command == "compare-segmentation-runs":
+            return run_compare_segmentation(
+                args.project_root,
+                asset_id=args.asset_id,
+                comparison_id=args.comparison_id,
+                baseline_evaluation_id=args.baseline_evaluation_id,
+                candidate_evaluation_id=args.candidate_evaluation_id,
+                thresholds_path=args.thresholds,
+            )
+        if args.command == "search-segmentation-params":
+            return run_search_segmentation(
+                args.project_root,
+                asset_id=args.asset_id,
+                benchmark_id=args.benchmark_id,
+                sample_id=args.sample_id,
+                search_id=args.search_id,
+                config_path=args.config,
+                baseline_evaluation_id=args.baseline_evaluation_id,
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:

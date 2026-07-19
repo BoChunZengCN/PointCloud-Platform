@@ -345,6 +345,129 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         path = _segmentation_runs_dir(project_root, asset_id) / run_id / "segmentation_quality.json"
         return _read_json_or_404(path, "Segmentation operational quality")
 
+    @app.get("/segmentation-benchmarks")
+    def list_segmentation_benchmarks() -> dict:
+        """返回已导入的黄金 benchmark 清单。"""
+
+        root = project_root / "benchmarks"
+        benchmarks = []
+        if root.exists():
+            for path in sorted(root.glob("*/benchmark.json"), key=lambda item: item.parent.name):
+                benchmarks.append(json.loads(path.read_text(encoding="utf-8")))
+        return {"benchmark_count": len(benchmarks), "benchmarks": benchmarks}
+
+    @app.get("/segmentation-benchmarks/{benchmark_id}")
+    def get_segmentation_benchmark(benchmark_id: str) -> dict:
+        """返回单个黄金 benchmark。"""
+
+        benchmark_id = _validate_api_identifier(benchmark_id, "benchmark_id")
+        path = project_root / "benchmarks" / benchmark_id / "benchmark.json"
+        return _read_json_or_404(path, "Segmentation benchmark")
+
+    @app.get("/segmentation-evaluations/{asset_id}")
+    def list_segmentation_evaluations(asset_id: str) -> dict:
+        """返回资产的黄金评估运行。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        root = project_root / "reports" / "segmentation_evaluations" / asset_id
+        evaluations = []
+        if root.exists():
+            for path in sorted(root.glob("*/evaluation_run.json"), key=lambda item: item.parent.name):
+                evaluations.append(json.loads(path.read_text(encoding="utf-8")))
+        return {
+            "asset_id": asset_id,
+            "evaluation_count": len(evaluations),
+            "evaluations": evaluations,
+        }
+
+    @app.get("/segmentation-evaluations/{asset_id}/{evaluation_id}")
+    def get_segmentation_evaluation(asset_id: str, evaluation_id: str) -> dict:
+        """返回单次黄金评估。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        evaluation_id = _validate_api_identifier(evaluation_id, "evaluation_id")
+        path = (
+            project_root
+            / "reports"
+            / "segmentation_evaluations"
+            / asset_id
+            / evaluation_id
+            / "evaluation_run.json"
+        )
+        return _read_json_or_404(path, "Segmentation evaluation")
+
+    @app.get("/segmentation-comparisons/{asset_id}/{comparison_id}")
+    def get_segmentation_comparison(asset_id: str, comparison_id: str) -> dict:
+        """返回候选/基线比较和回归门禁。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        comparison_id = _validate_api_identifier(comparison_id, "comparison_id")
+        root = (
+            project_root
+            / "reports"
+            / "segmentation_comparisons"
+            / asset_id
+            / comparison_id
+        )
+        return {
+            "comparison": _read_json_or_404(
+                root / "comparison.json", "Segmentation comparison"
+            ),
+            "gate": _read_json_or_404(
+                root / "regression_gate.json", "Segmentation regression gate"
+            ),
+        }
+
+    @app.get("/segmentation-searches/{asset_id}")
+    def list_segmentation_searches(asset_id: str) -> dict:
+        """返回资产的参数搜索运行。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        root = project_root / "reports" / "segmentation_searches" / asset_id
+        searches = []
+        if root.exists():
+            for path in sorted(root.glob("*/search_run.json"), key=lambda item: item.parent.name):
+                searches.append(json.loads(path.read_text(encoding="utf-8")))
+        return {
+            "asset_id": asset_id,
+            "search_count": len(searches),
+            "searches": searches,
+        }
+
+    @app.get("/segmentation-searches/{asset_id}/{search_id}")
+    def get_segmentation_search(asset_id: str, search_id: str) -> dict:
+        """返回一次参数搜索运行。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        search_id = _validate_api_identifier(search_id, "search_id")
+        path = (
+            project_root
+            / "reports"
+            / "segmentation_searches"
+            / asset_id
+            / search_id
+            / "search_run.json"
+        )
+        return _read_json_or_404(path, "Segmentation search")
+
+    @app.get("/segmentation-searches/{asset_id}/{search_id}/recommendation")
+    def get_segmentation_search_recommendation(
+        asset_id: str, search_id: str
+    ) -> dict:
+        """返回一次参数搜索的建议配置。"""
+
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        search_id = _validate_api_identifier(search_id, "search_id")
+        path = (
+            project_root
+            / "reports"
+            / "segmentation_searches"
+            / asset_id
+            / search_id
+            / "recommendation.json"
+        )
+        return _read_json_or_404(path, "Segmentation search recommendation")
+
     @app.get("/project-gate")
     def get_project_gate() -> dict:
         """返回 Phase 11 项目级门禁报告。"""
