@@ -207,3 +207,41 @@ def test_injected_oriented_runner_is_recorded_as_executed():
     assert metrics["executed_engine"] == "oriented_3d"
     assert metrics["fallback_reason"] is None
 
+
+def test_box_metrics_include_missing_golden_boxes_in_mean_and_findings():
+    golden_boxes = [
+        {
+            "instance_id": instance_id,
+            "class_id": "pipe",
+            "center": center,
+            "size": [2.0, 2.0, 2.0],
+            "rotation": [0.0, 0.0, 0.0, 1.0],
+        }
+        for instance_id, center in (
+            ("gold-a", [0.0, 0.0, 0.0]),
+            ("gold-b", [10.0, 0.0, 0.0]),
+        )
+    ]
+    predicted_objects = [
+        {
+            "object_id": "pred-a",
+            "bounds": {
+                "min": [-1.0, -1.0, -1.0],
+                "max": [1.0, 1.0, 1.0],
+            },
+        }
+    ]
+
+    metrics = build_bbox_metrics(
+        golden_boxes,
+        predicted_objects,
+        {"matches": []},
+        iou_threshold=0.5,
+    )
+
+    assert metrics["mean_box_iou"] == pytest.approx(0.5)
+    assert metrics["true_positive_count"] == 1
+    assert metrics["false_negative_count"] == 1
+    assert metrics["box_recall"] == 0.5
+    assert metrics["missing_golden_instance_ids"] == ["gold-b"]
+    assert metrics["extra_predicted_object_ids"] == []

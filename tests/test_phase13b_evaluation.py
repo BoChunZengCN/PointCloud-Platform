@@ -266,3 +266,44 @@ def test_operational_proxy_and_accuracy_remain_separate(tmp_path):
     assert evaluation["summary"]["evaluation_kind"] == "golden_labels"
     assert "operational_proxy" not in json.dumps(evaluation["summary"])
     assert "retention_ratio" not in evaluation["summary"]
+
+
+def test_box_only_benchmark_is_evaluated_without_point_associations(tmp_path):
+    prepare_run_and_benchmark(tmp_path)
+    labels_path = (
+        tmp_path
+        / "benchmarks"
+        / "bench-001"
+        / "samples"
+        / "sample-001"
+        / "labels.json"
+    )
+    labels = json.loads(labels_path.read_text(encoding="utf-8"))
+    labels["point_labels"] = []
+    labels_path.write_text(json.dumps(labels), encoding="utf-8")
+
+    evaluation = evaluate_segmentation_run(
+        tmp_path,
+        asset_id="scan",
+        run_id="seg-run-001",
+        benchmark_id="bench-001",
+        sample_id="sample-001",
+        evaluation_id="eval-box-only",
+        config={"box_iou_threshold": 0.5},
+    )
+
+    bbox_metrics = json.loads(
+        (
+            tmp_path
+            / "reports"
+            / "segmentation_evaluations"
+            / "scan"
+            / "eval-box-only"
+            / "bbox_metrics.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert evaluation["summary"]["matched_label_ratio"] == 1.0
+    assert evaluation["summary"]["mean_box_iou"] == pytest.approx(1.0)
+    assert bbox_metrics["true_positive_count"] == 2
+    assert bbox_metrics["missing_golden_instance_ids"] == []
+    assert bbox_metrics["extra_predicted_object_ids"] == []

@@ -313,44 +313,78 @@ def build_bbox_metrics(
     iou_threshold: float = 0.5,
     runner: Callable[[dict, dict], float] | None = None,
 ) -> dict:
-    """计算匹配实例的包围盒指标并如实记录实际引擎。"""
+    """独立关联黄金/预测包围盒并如实记录实际引擎。"""
 
     if not 0 <= iou_threshold <= 1:
         raise ValueError("Box IoU threshold must be between 0 and 1.")
+    # Box-only benchmarks have no point association. Keep this argument for
+    # compatibility, but deliberately derive box association from geometry.
+    del instance_matches
     golden_by_id = {str(item["instance_id"]): item for item in golden_boxes}
     predicted_by_id = {str(item["object_id"]): item for item in predicted_objects}
     requested_engine = "oriented_3d"
     executed_engine = "oriented_3d" if runner else "axis_aligned_envelope"
     fallback_reason = None if runner else "oriented_runner_unavailable"
-    rows = []
-    for match in instance_matches.get("matches", []):
-        golden_id = str(match["golden_instance_id"])
-        predicted_id = str(match["predicted_instance_id"])
-        golden_box = golden_by_id.get(golden_id)
-        predicted_object = predicted_by_id.get(predicted_id)
-        if golden_box is None or predicted_object is None:
-            continue
-        if runner:
-            iou = float(runner(golden_box, predicted_object))
-        else:
-            iou = _aabb_iou(
-                _golden_box_envelope(golden_box), predicted_object["bounds"]
-            )
-        if not math.isfinite(iou) or not 0 <= iou <= 1:
-            raise ValueError("Box IoU engine must return a finite value between 0 and 1.")
-        rows.append(
-            {
-                "golden_instance_id": golden_id,
-                "predicted_instance_id": predicted_id,
-                "iou": iou,
-            }
-        )
+    candidates = []
+    for golden_id, golden_box in sorted(golden_by_id.items()):
+        for predicted_id, predicted_object in sorted(predicted_by_id.items()):
+            if runner:
+                iou = float(runner(golden_box, predicted_object))
+            else:
+                iou = _aabb_iou(
+                    _golden_box_envelope(golden_box), predicted_object["bounds"]
+                )
+            if not math.isfinite(iou) or not 0 <= iou <= 1:
+                raise ValueError(
+                    "Box IoU engine must return a finite value between 0 and 1."
+                )
+            candidates.append((iou, golden_id, predicted_id))
 
-    true_positive_count = sum(
-        row["iou"] >= iou_threshold for row in rows
-    )
-    false_positive_count = max(0, len(predicted_objects) - true_positive_count)
-    false_negative_count = max(0, len(golden_boxes) - true_positive_count)
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    used_golden: set[str] = set()
+    used_predicted: set[str] = set()
+    associated_by_golden = {}
+    for iou, golden_id, predicted_id in candidates:
+        if iou <= 0:
+            continue
+        if golden_id in used_golden or predicted_id in used_predicted:
+            continue
+        used_golden.add(golden_id)
+        used_predicted.add(predicted_id)
+        associated_by_golden[golden_id] = {
+            "golden_instance_id": golden_id,
+            "predicted_instance_id": predicted_id,
+            "iou": iou,
+            "meets_threshold": iou >= iou_threshold,
+        }
+
+    rows = []
+    for golden_id in sorted(golden_by_id):
+        rows.append(
+            associated_by_golden.get(
+                golden_id,
+                {
+                    "golden_instance_id": golden_id,
+                    "predicted_instance_id": None,
+                    "iou": 0.0,
+                    "meets_threshold": False,
+                },
+            )
+        )
+    true_positive_rows = [
+        row for row in rows if row["meets_threshold"]
+    ]
+    true_positive_count = len(true_positive_rows)
+    matched_golden = {
+        row["golden_instance_id"] for row in true_positive_rows
+    }
+    matched_predicted = {
+        row["predicted_instance_id"] for row in true_positive_rows
+    }
+    missing_golden = sorted(set(golden_by_id) - matched_golden)
+    extra_predicted = sorted(set(predicted_by_id) - matched_predicted)
+    false_positive_count = len(extra_predicted)
+    false_negative_count = len(missing_golden)
     precision = _safe_divide(
         true_positive_count, true_positive_count + false_positive_count
     )
@@ -370,6 +404,8 @@ def build_bbox_metrics(
         "true_positive_count": true_positive_count,
         "false_positive_count": false_positive_count,
         "false_negative_count": false_negative_count,
+        "missing_golden_instance_ids": missing_golden,
+        "extra_predicted_object_ids": extra_predicted,
         "box_precision": precision,
         "box_recall": recall,
         "box_f1": _f1(precision, recall),
