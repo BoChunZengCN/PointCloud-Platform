@@ -286,6 +286,7 @@ function renderDashboard(project) {
   renderQualityInsights(asset, null);
   renderAnalysisOverview(project, null);
   renderObjectSegmentation(asset, null);
+  renderSegmentationRun(asset, null);
   renderQualityGateStatus(asset, null);
   renderDeliveryGateNotice(asset, null);
   renderProjectGateStatus(null);
@@ -303,6 +304,9 @@ function renderDashboard(project) {
     fetchObjectSegmentation(asset.id)
       .then((segments) => renderObjectSegmentation(asset, segments))
       .catch(() => renderObjectSegmentation(asset, { object_count: 0, noise_point_count: 0, objects: [] }));
+    fetchSegmentationRuns(asset.id)
+      .then((runs) => renderSegmentationRun(asset, runs))
+      .catch(() => renderSegmentationRun(asset, { run_count: 0, runs: [] }));
     fetchQualityGate(asset.id)
       .then((gate) => renderQualityGateStatus(asset, gate))
       .catch(() => renderQualityGateStatus(asset, { status: "review_required", severity: "warning", finding_count: 0 }));
@@ -663,6 +667,49 @@ async function fetchPointCloudAnalysis(assetId) {
 async function fetchObjectSegmentation(assetId) {
   const encodedAssetId = encodeURIComponent(assetId);
   return await loadJson(`${API_BASE_URL}/segments/${encodedAssetId}/objects`);
+}
+
+async function fetchSegmentationRuns(assetId) {
+  const encodedAssetId = encodeURIComponent(assetId);
+  return await loadJson(`${API_BASE_URL}/segmentation-runs/${encodedAssetId}`);
+}
+
+function renderSegmentationRun(asset, payload) {
+  const node = document.getElementById("segmentation-run-summary");
+  if (!node) {
+    return;
+  }
+  if (!asset) {
+    node.replaceChildren(textElement("span", "暂无资产"));
+    return;
+  }
+  if (!payload) {
+    node.replaceChildren(
+      textElement("span", "运行质量代理指标"),
+      textElement("strong", "读取中"),
+      textElement("small", "正在读取 Phase 13A 分割运行"),
+    );
+    return;
+  }
+  const runs = payload.runs || [];
+  const latest = runs.length ? runs[runs.length - 1] : null;
+  if (!latest) {
+    node.replaceChildren(
+      textElement("span", "运行质量代理指标"),
+      textElement("strong", "暂无运行"),
+      textElement("small", "请先执行 run-segmentation"),
+    );
+    return;
+  }
+  const findingCodes = (latest.quality?.findings || [])
+    .slice(0, 3)
+    .map((finding) => finding.code)
+    .join(" · ");
+  node.replaceChildren(
+    textElement("span", `${latest.run_id} · ${latest.executed_engine || latest.requested_engine}`),
+    textElement("strong", latest.quality?.status || latest.status),
+    textElement("small", findingCodes || "运行质量代理指标未发现风险"),
+  );
 }
 
 function renderObjectSegmentation(asset, segments) {

@@ -28,6 +28,7 @@ from pc_system.commands.phase6 import run_analyze_asset, run_analyze_point_cloud
 from pc_system.commands.phase8 import run_check_quality_gate
 from pc_system.commands.phase10 import run_segment_asset_objects, run_segment_objects
 from pc_system.commands.phase11 import run_check_project_gate, run_plan_batch_run
+from pc_system.commands.phase13 import run_phase13_segmentation
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -63,7 +64,7 @@ def main(
 
     args = build_parser().parse_args(argv)
     try:
-        for field in ("asset_id", "job_id", "step_id", "name", "slice_name", "segment_name", "splat_name"):
+        for field in ("asset_id", "job_id", "run_id", "step_id", "name", "slice_name", "segment_name", "splat_name"):
             value = getattr(args, field, None)
             if value:
                 validate_identifier(value, field)
@@ -189,6 +190,18 @@ def main(
             return run_check_project_gate(args.project_root)
         if args.command == "plan-batch-run":
             return run_plan_batch_run(args.project_root, args.operations)
+        if args.command == "run-segmentation":
+            return run_phase13_segmentation(
+                args.project_root,
+                args.asset_id,
+                args.run_id,
+                args.engine,
+                args.allow_fallback,
+                args.distance_threshold,
+                args.min_points,
+                args.voxel_size,
+                args.max_points,
+            )
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

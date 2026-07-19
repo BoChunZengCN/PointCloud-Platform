@@ -199,6 +199,16 @@ def build_parser() -> argparse.ArgumentParser:
     batch_run = subparsers.add_parser("plan-batch-run", help="Create a Phase 11 batch run plan for all indexed assets.")
     batch_run.add_argument("--project-root", required=True, type=Path)
     batch_run.add_argument("--operations", nargs="+")
+    run_segmentation = subparsers.add_parser("run-segmentation", help="Run a versioned Phase 13A object segmentation.")
+    run_segmentation.add_argument("--project-root", required=True, type=Path)
+    run_segmentation.add_argument("--asset-id", required=True)
+    run_segmentation.add_argument("--run-id", required=True)
+    run_segmentation.add_argument("--engine", default="builtin_geometric")
+    run_segmentation.add_argument("--allow-fallback", action="store_true")
+    run_segmentation.add_argument("--distance-threshold", default=1.0, type=float)
+    run_segmentation.add_argument("--min-points", default=10, type=int)
+    run_segmentation.add_argument("--voxel-size", type=float)
+    run_segmentation.add_argument("--max-points", default=10000, type=int)
     return parser
 
 

@@ -740,6 +740,34 @@ h2 {
   font-size: 22px;
   line-height: 1.15;
 }
+
+.segmentation-run-panel {
+  border-color: rgba(51, 123, 97, 0.34);
+}
+
+.segmentation-run-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  min-height: 82px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf8;
+}
+
+.segmentation-run-summary span,
+.segmentation-run-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segmentation-run-summary strong {
+  color: var(--green);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
 .delivery-gate-notice {
   border-color: rgba(23, 111, 122, 0.28);
 }
