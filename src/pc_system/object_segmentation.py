@@ -91,6 +91,7 @@ def segment_object_candidates(
     points: list[dict[str, Any]],
     distance_threshold: float = 1.0,
     min_points: int = 10,
+    include_membership: bool = False,
 ) -> dict[str, Any]:
     """从点记录中生成物体候选分割报告。
 
@@ -120,6 +121,8 @@ def segment_object_candidates(
             "center": _center(bounds),
             "method": "geometric_cluster",
         }
+        if include_membership:
+            item["_point_indices"] = list(cluster)
         rgb_mean = _rgb_mean(cluster_points)
         if rgb_mean:
             item["rgb_mean"] = rgb_mean

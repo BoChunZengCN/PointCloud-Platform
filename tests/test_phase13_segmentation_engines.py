@@ -68,3 +68,21 @@ def test_injected_runner_records_requested_engine_as_executed():
 def test_phase10_open3d_adapter_requires_real_runner():
     with pytest.raises(RuntimeError, match="runner"):
         segment_with_open3d_adapter("scan", sample_points(), min_points=1)
+
+
+def test_builtin_segmentation_exposes_internal_membership_indices():
+    report = segment_object_candidates(
+        "scan",
+        sample_points(),
+        distance_threshold=1.0,
+        min_points=1,
+        include_membership=True,
+    )
+
+    assert report["objects"][0]["_point_indices"] == [0, 1]
+
+
+def test_phase10_default_report_does_not_expose_internal_membership_indices():
+    report = segment_object_candidates("scan", sample_points(), distance_threshold=1.0, min_points=1)
+
+    assert "_point_indices" not in report["objects"][0]

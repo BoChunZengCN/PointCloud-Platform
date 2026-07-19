@@ -10,6 +10,7 @@ def execute_engine(
     points: list[dict],
     config: dict,
     runners: dict | None = None,
+    include_membership: bool = False,
 ) -> tuple[dict, dict]:
     """执行指定引擎，并准确记录实际执行者和回退原因。"""
 
@@ -24,6 +25,7 @@ def execute_engine(
             points,
             distance_threshold=distance_threshold,
             min_points=min_points,
+            include_membership=include_membership,
         )
         executed = "builtin_geometric"
         fallback_reason = None
@@ -37,6 +39,7 @@ def execute_engine(
             points,
             distance_threshold=distance_threshold,
             min_points=min_points,
+            include_membership=include_membership,
         )
         executed = "builtin_geometric"
         fallback_reason = "runner_unavailable"
