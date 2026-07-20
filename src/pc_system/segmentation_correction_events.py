@@ -15,6 +15,10 @@ from pc_system.segmentation_corrections import (
     load_correction_baseline,
     load_correction_session,
 )
+from pc_system.segmentation_review_queue import (
+    build_correction_diff,
+    build_review_queue,
+)
 
 
 SUPPORTED_OPERATIONS = {
@@ -431,6 +435,26 @@ def apply_correction_event(
         for item in objects["objects"]:
             if item["instance_id"] in confirmed:
                 item["review_state"] = "confirmed"
+        quality_path = (
+            project_root
+            / "reports"
+            / "segmentation_runs"
+            / asset_id
+            / str(session["segmentation_run_id"])
+            / "segmentation_quality.json"
+        )
+        quality = (
+            json.loads(quality_path.read_text(encoding="utf-8"))
+            if quality_path.is_file()
+            else None
+        )
+        correction_diff = build_correction_diff(baseline, materialized)
+        queue = build_review_queue(
+            session=session,
+            baseline=baseline,
+            draft=materialized,
+            quality=quality,
+        )
         updated = {
             **session,
             "revision": next_revision,
@@ -442,6 +466,7 @@ def apply_correction_event(
             "draft_fingerprint": materialized["draft_fingerprint"],
             "undo_available": materialized["undo_available"],
             "redo_available": materialized["redo_available"],
+            "correction_diff": correction_diff,
             "last_event": public_event,
         }
         stored_event = {**public_event, "accepted_response": updated}
@@ -455,6 +480,8 @@ def apply_correction_event(
             os.fsync(handle.fileno())
         write_json(materialized, session_dir / "draft_labels.json")
         write_json(objects, session_dir / "draft_objects.json")
+        write_json(queue, session_dir / "review_queue.json")
+        write_json(correction_diff, session_dir / "correction_diff.json")
         write_json(updated, session_dir / "correction_session.json")
         return updated
     finally:

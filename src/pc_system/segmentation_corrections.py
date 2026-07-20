@@ -12,6 +12,10 @@ from pc_system.las_sampling import sample_points_from_source
 from pc_system.segmentation_benchmarks import load_benchmark_sample
 from pc_system.segmentation_correspondence import match_point_labels
 from pc_system.segmentation_provenance import fingerprint_points
+from pc_system.segmentation_review_queue import (
+    build_correction_diff,
+    build_review_queue,
+)
 
 
 MAX_POINT_PAGE_SIZE = 50_000
@@ -360,6 +364,9 @@ def create_correction_session(
         **baseline,
         "baseline_fingerprint": _assignment_fingerprint(assignments),
         "draft_fingerprint": _assignment_fingerprint(assignments),
+        "confirmed_instance_ids": [],
+        "undo_available": False,
+        "redo_available": False,
     }
     created_at = _iso_now()
     session = {
@@ -377,14 +384,29 @@ def create_correction_session(
         "updated_at": created_at,
         "baseline": baseline_metadata,
         "draft_fingerprint": draft["draft_fingerprint"],
+        "correction_diff": build_correction_diff(baseline, draft),
         "supersedes_release_id": None,
         "artifacts": {
             "baseline_labels": "baseline_labels.json",
             "events": "events.jsonl",
             "draft_labels": "draft_labels.json",
             "draft_objects": "draft_objects.json",
+            "review_queue": "review_queue.json",
+            "correction_diff": "correction_diff.json",
         },
     }
+    quality_path = run_dir / "segmentation_quality.json"
+    quality = (
+        _read_json(quality_path, "invalid_operational_quality")
+        if quality_path.is_file()
+        else None
+    )
+    queue = build_review_queue(
+        session=session,
+        baseline=baseline,
+        draft=draft,
+        quality=quality,
+    )
     final_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = final_dir.with_name(
         f".{final_dir.name}.staging-{uuid.uuid4().hex}"
@@ -393,6 +415,8 @@ def create_correction_session(
         write_json(baseline, staging / "baseline_labels.json")
         write_json(draft, staging / "draft_labels.json")
         write_json(_object_document(assignments), staging / "draft_objects.json")
+        write_json(queue, staging / "review_queue.json")
+        write_json(session["correction_diff"], staging / "correction_diff.json")
         (staging / "events.jsonl").write_text("", encoding="utf-8")
         write_json(session, staging / "correction_session.json")
         if final_dir.exists():
