@@ -92,3 +92,17 @@ def write_development_benchmark(project: Path) -> None:
     (root / "samples" / "sample-001" / "labels.json").write_text(
         json.dumps(labels), encoding="utf-8"
     )
+
+
+def correction_session(project: Path, *, actor: str = "alice") -> dict:
+    from pc_system.segmentation_corrections import create_correction_session
+
+    write_completed_run(project)
+    return create_correction_session(
+        project,
+        asset_id="scan",
+        run_id="run-001",
+        session_id="session-001",
+        sample_id="sample-001",
+        actor=actor,
+    )
