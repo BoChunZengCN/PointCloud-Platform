@@ -291,9 +291,8 @@ def create_correction_session(
             "benchmark_id and baseline_release_id cannot be used together.",
         )
     if baseline_release_id is not None:
-        raise CorrectionError(
-            "release_baseline_not_available",
-            "Correction release restoration is not available until publication support.",
+        baseline_release_id = validate_identifier(
+            baseline_release_id, "baseline_release_id"
         )
     final_dir = _session_dir(project_root, asset_id, session_id)
     if final_dir.exists():
@@ -352,6 +351,50 @@ def create_correction_session(
             "segmentation_run_id": run_id,
             **overlay,
         }
+    elif baseline_release_id:
+        release_dir = (
+            project_root
+            / "reports"
+            / "segmentation_correction_releases"
+            / asset_id
+            / baseline_release_id
+        )
+        release = _read_json(
+            release_dir / "correction_release.json", "release_not_found"
+        )
+        labels = _read_json(release_dir / "labels.json", "release_not_found")
+        if release.get("source_fingerprint") != run.get("source_fingerprint"):
+            raise CorrectionError(
+                "release_source_mismatch",
+                "Correction release source does not match the segmentation run.",
+            )
+        by_index = {
+            int(item["point_index"]): item
+            for item in labels.get("point_labels", [])
+        }
+        if set(by_index) != set(range(len(assignments))):
+            raise CorrectionError(
+                "incomplete_release_baseline",
+                "Correction release must cover the complete point set.",
+            )
+        assignments = [
+            {
+                **item,
+                "instance_id": validate_identifier(
+                    str(by_index[index]["instance_id"]), "instance_id"
+                ),
+                "class_id": validate_identifier(
+                    str(by_index[index]["class_id"]), "class_id"
+                ),
+                "is_noise": bool(by_index[index]["is_noise"]),
+            }
+            for index, item in enumerate(assignments)
+        ]
+        baseline_metadata = {
+            "kind": "correction_release",
+            "segmentation_run_id": run_id,
+            "release_id": baseline_release_id,
+        }
     baseline = {
         "schema_version": "1.0",
         "asset_id": asset_id,
@@ -385,7 +428,7 @@ def create_correction_session(
         "baseline": baseline_metadata,
         "draft_fingerprint": draft["draft_fingerprint"],
         "correction_diff": build_correction_diff(baseline, draft),
-        "supersedes_release_id": None,
+        "supersedes_release_id": baseline_release_id,
         "artifacts": {
             "baseline_labels": "baseline_labels.json",
             "events": "events.jsonl",
