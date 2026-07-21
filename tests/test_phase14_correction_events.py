@@ -249,3 +249,51 @@ def test_invalid_operation_does_not_advance_revision(tmp_path, operation, code):
 
     assert exc_info.value.code == code
     assert read_correction_events(tmp_path, "scan", "session-001") == []
+
+
+def test_merge_with_different_classes_requires_explicit_target_class(tmp_path):
+    session = correction_session(tmp_path)
+    session = apply_operation(
+        tmp_path,
+        session,
+        {"type": "relabel", "instance_ids": ["obj-001"], "class_id": "pipe"},
+        request_id="request-relabel-first",
+    )
+
+    with pytest.raises(CorrectionError) as exc_info:
+        apply_operation(
+            tmp_path,
+            session,
+            {
+                "type": "merge",
+                "instance_ids": ["obj-001", "obj-002"],
+                "target_instance_id": "obj-001",
+            },
+            request_id="request-conflicting-merge",
+        )
+
+    assert exc_info.value.code == "merge_class_conflict"
+
+
+def test_partial_restore_cannot_create_mixed_class_instance(tmp_path):
+    session = correction_session(tmp_path)
+    session = apply_operation(
+        tmp_path,
+        session,
+        {"type": "relabel", "instance_ids": ["obj-001"], "class_id": "pipe"},
+        request_id="request-relabel",
+    )
+
+    with pytest.raises(CorrectionError) as exc_info:
+        apply_operation(
+            tmp_path,
+            session,
+            {
+                "type": "restore",
+                "scope": "points",
+                "source_point_indices": [0],
+            },
+            request_id="request-partial-restore",
+        )
+
+    assert exc_info.value.code == "inconsistent_instance_class"

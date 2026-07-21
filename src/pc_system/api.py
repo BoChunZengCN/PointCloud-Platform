@@ -9,6 +9,26 @@ from pc_system.config import ProjectConfig
 from pc_system.identifiers import validate_identifier
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
 from pc_system.phase11_report_center import build_report_center
+from pc_system.segmentation_correction_events import (
+    apply_correction_event,
+    read_correction_events,
+)
+from pc_system.segmentation_correction_releases import (
+    list_correction_releases,
+    load_correction_release,
+    publish_correction_release,
+    retry_publication_tasks,
+    transition_correction_session,
+)
+from pc_system.segmentation_corrections import (
+    CorrectionError,
+    _session_dir,
+    create_correction_session,
+    list_correction_sessions,
+    load_correction_objects,
+    load_correction_points,
+    load_correction_session,
+)
 
 
 def _registry_path(project_root: Path) -> Path:
@@ -116,6 +136,34 @@ def _summarize_jobs(jobs: list[dict]) -> dict:
         "status_summary": status_summary,
     }
 
+
+def _correction_http_error(exc: CorrectionError) -> HTTPException:
+    if exc.code in {"session_locked", "session_busy"}:
+        status_code = 423
+    elif exc.code.endswith("_not_found") or exc.code in {
+        "release_not_found",
+        "session_not_found",
+    }:
+        status_code = 404
+    elif exc.code in {
+        "stale_revision",
+        "session_exists",
+        "active_session_exists",
+        "release_exists",
+        "derived_benchmark_exists",
+        "feedback_release_exists",
+        "invalid_session_state",
+        "invalid_session_transition",
+        "session_immutable",
+    }:
+        status_code = 409
+    else:
+        status_code = 400
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
 def create_app(project_root: Path, api_key: str | None = None, run_mode: str | None = None) -> FastAPI:
     """创建最小 API 应用。"""
 
@@ -138,6 +186,20 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
 
         if resolved_api_key and x_api_key != resolved_api_key:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    def correction_action(function, /, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except CorrectionError as exc:
+            raise _correction_http_error(exc) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_correction_input",
+                    "message": str(exc),
+                },
+            ) from exc
 
     @app.get("/health")
     def health() -> dict:
@@ -500,6 +562,225 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
             "trial_count": len(trials),
             "trials": trials,
         }
+
+    @app.get("/segmentation-corrections/{asset_id}")
+    def get_correction_sessions(asset_id: str) -> dict:
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        sessions = correction_action(
+            list_correction_sessions, project_root, asset_id
+        )
+        return {
+            "asset_id": asset_id,
+            "session_count": len(sessions),
+            "sessions": sessions,
+        }
+
+    @app.post(
+        "/segmentation-corrections/{asset_id}",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def post_correction_session(
+        asset_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            create_correction_session,
+            project_root,
+            asset_id=asset_id,
+            run_id=payload.get("run_id"),
+            session_id=payload.get("session_id"),
+            sample_id=payload.get("sample_id"),
+            actor=payload.get("actor"),
+            benchmark_id=payload.get("benchmark_id"),
+            baseline_release_id=payload.get("baseline_release_id"),
+            lock_ttl_seconds=payload.get("lock_ttl_seconds", 900),
+        )
+
+    @app.get("/segmentation-corrections/{asset_id}/{session_id}")
+    def get_correction_session(asset_id: str, session_id: str) -> dict:
+        return correction_action(
+            load_correction_session,
+            project_root,
+            asset_id,
+            session_id,
+        )
+
+    @app.get("/segmentation-corrections/{asset_id}/{session_id}/points")
+    def get_correction_points(
+        asset_id: str,
+        session_id: str,
+        offset: int = 0,
+        limit: int = 10_000,
+    ) -> dict:
+        return correction_action(
+            load_correction_points,
+            project_root,
+            asset_id,
+            session_id,
+            offset=offset,
+            limit=limit,
+        )
+
+    @app.get("/segmentation-corrections/{asset_id}/{session_id}/objects")
+    def get_correction_objects(asset_id: str, session_id: str) -> dict:
+        return correction_action(
+            load_correction_objects,
+            project_root,
+            asset_id,
+            session_id,
+        )
+
+    @app.get("/segmentation-corrections/{asset_id}/{session_id}/queue")
+    def get_correction_queue(asset_id: str, session_id: str) -> dict:
+        root = correction_action(
+            _session_dir, project_root, asset_id, session_id
+        )
+        correction_action(
+            load_correction_session, project_root, asset_id, session_id
+        )
+        return _read_json_or_404(root / "review_queue.json", "Correction queue")
+
+    @app.get("/segmentation-corrections/{asset_id}/{session_id}/events")
+    def get_correction_events(asset_id: str, session_id: str) -> dict:
+        events = correction_action(
+            read_correction_events,
+            project_root,
+            asset_id,
+            session_id,
+        )
+        public_events = [
+            {key: value for key, value in event.items() if key != "accepted_response"}
+            for event in events
+        ]
+        return {
+            "asset_id": asset_id,
+            "session_id": session_id,
+            "event_count": len(public_events),
+            "events": public_events,
+        }
+
+    @app.post("/segmentation-corrections/{asset_id}/{session_id}/events")
+    def post_correction_event(
+        asset_id: str,
+        session_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            apply_correction_event,
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            actor=payload.get("actor"),
+            expected_revision=payload.get("expected_revision"),
+            client_request_id=payload.get("client_request_id"),
+            operation=payload.get("operation"),
+        )
+
+    @app.post("/segmentation-corrections/{asset_id}/{session_id}/submit")
+    def submit_correction_session(
+        asset_id: str,
+        session_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            transition_correction_session,
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            action="submit",
+            actor=payload.get("actor"),
+            expected_revision=payload.get("expected_revision"),
+        )
+
+    @app.post("/segmentation-corrections/{asset_id}/{session_id}/return")
+    def return_correction_session(
+        asset_id: str,
+        session_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            transition_correction_session,
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            action="return",
+            actor=payload.get("actor"),
+            expected_revision=payload.get("expected_revision"),
+        )
+
+    @app.post(
+        "/segmentation-corrections/{asset_id}/{session_id}/publish",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def publish_correction_session(
+        asset_id: str,
+        session_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            publish_correction_release,
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            release_id=payload.get("release_id"),
+            reviewer=payload.get("reviewer"),
+            expected_revision=payload.get("expected_revision"),
+            benchmark_split=payload.get("benchmark_split"),
+            license_name=payload.get("license"),
+            evaluation_config=payload.get("evaluation_config"),
+            baseline_evaluation_id=payload.get("baseline_evaluation_id"),
+            regression_thresholds=payload.get("regression_thresholds"),
+            search_config=payload.get("search_config"),
+        )
+
+    @app.get("/segmentation-correction-releases/{asset_id}")
+    def get_correction_releases(asset_id: str) -> dict:
+        asset_id = _validate_api_identifier(asset_id, "asset_id")
+        releases = correction_action(
+            list_correction_releases, project_root, asset_id
+        )
+        return {
+            "asset_id": asset_id,
+            "release_count": len(releases),
+            "releases": releases,
+        }
+
+    @app.get("/segmentation-correction-releases/{asset_id}/{release_id}")
+    def get_correction_release(asset_id: str, release_id: str) -> dict:
+        return correction_action(
+            load_correction_release,
+            project_root,
+            asset_id,
+            release_id,
+        )
+
+    @app.post(
+        "/segmentation-correction-releases/{asset_id}/{release_id}/retry"
+    )
+    def retry_correction_publication(
+        asset_id: str,
+        release_id: str,
+        payload: dict,
+        x_api_key: str | None = Header(default=None),
+    ) -> dict:
+        require_write_key(x_api_key)
+        return correction_action(
+            retry_publication_tasks,
+            project_root,
+            asset_id=asset_id,
+            release_id=release_id,
+            actor=payload.get("actor"),
+        )
 
     @app.get("/project-gate")
     def get_project_gate() -> dict:

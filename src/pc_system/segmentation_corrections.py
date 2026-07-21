@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -42,6 +43,33 @@ def _session_dir(project_root: Path, asset_id: str, session_id: str) -> Path:
     return _corrections_root(project_root, asset_id) / validate_identifier(
         session_id, "session_id"
     )
+
+
+def _acquire_session_write_lock(
+    project_root: Path, asset_id: str, session_id: str
+) -> Path:
+    session_dir = _session_dir(project_root, asset_id, session_id)
+    manifest = session_dir / "correction_session.json"
+    if not manifest.is_file():
+        raise CorrectionError("session_not_found", f"Session not found: {session_id}")
+    lock_path = session_dir / ".write.lock"
+    try:
+        handle = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(handle)
+    except FileExistsError as exc:
+        session = _read_json(manifest, "session_not_found")
+        stale_after = max(int(session.get("lock_ttl_seconds", 900)), 60)
+        if time.time() - lock_path.stat().st_mtime > stale_after:
+            lock_path.unlink(missing_ok=True)
+            return _acquire_session_write_lock(project_root, asset_id, session_id)
+        raise CorrectionError(
+            "session_busy", "Session write is already in progress."
+        ) from exc
+    return lock_path
+
+
+def _release_session_write_lock(lock_path: Path) -> None:
+    lock_path.unlink(missing_ok=True)
 
 
 def _read_json(path: Path, code: str) -> dict:
@@ -132,12 +160,18 @@ def _automatic_assignments(
                     "class_id",
                 ),
                 "is_noise": False,
+                "origin": "automatic_segmentation",
             }
     assignments = []
     for index, point in enumerate(points):
         assignment = assigned.get(
             index,
-            {"instance_id": "noise", "class_id": "noise", "is_noise": True},
+            {
+                "instance_id": "noise",
+                "class_id": "noise",
+                "is_noise": True,
+                "origin": "automatic_segmentation",
+            },
         )
         assignments.append(
             {
@@ -206,6 +240,7 @@ def _overlay_benchmark_labels(
                     str(label["class_id"]), "class_id"
                 ),
                 "is_noise": bool(label.get("is_noise", False)),
+                "origin": "existing_labels",
             }
         )
     return overlaid, {
@@ -297,6 +332,18 @@ def create_correction_session(
     final_dir = _session_dir(project_root, asset_id, session_id)
     if final_dir.exists():
         raise CorrectionError("session_exists", f"Session already exists: {session_id}")
+    correction_root = _corrections_root(project_root, asset_id)
+    if correction_root.exists():
+        for path in correction_root.glob("*/correction_session.json"):
+            existing = _read_json(path, "invalid_correction_artifact")
+            if (
+                existing.get("sample_id") == sample_id
+                and existing.get("status") in {"draft", "in_review"}
+            ):
+                raise CorrectionError(
+                    "active_session_exists",
+                    f"Sample already has an active correction session: {existing.get('session_id')}",
+                )
     run_dir = (
         project_root / "reports" / "segmentation_runs" / asset_id / run_id
     )
@@ -451,6 +498,18 @@ def create_correction_session(
         quality=quality,
     )
     final_dir.parent.mkdir(parents=True, exist_ok=True)
+    active_registry = final_dir.parent / f".active-{sample_id}.lock"
+    try:
+        registry_handle = os.open(
+            active_registry, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        )
+        os.write(registry_handle, session_id.encode("utf-8"))
+        os.close(registry_handle)
+    except FileExistsError as exc:
+        raise CorrectionError(
+            "active_session_exists",
+            f"Sample already has an active correction session: {sample_id}",
+        ) from exc
     staging = final_dir.with_name(
         f".{final_dir.name}.staging-{uuid.uuid4().hex}"
     )
@@ -470,6 +529,7 @@ def create_correction_session(
     except Exception:
         if staging.exists():
             shutil.rmtree(staging)
+        active_registry.unlink(missing_ok=True)
         raise
     return session
 
@@ -477,11 +537,77 @@ def create_correction_session(
 def load_correction_session(
     project_root: Path, asset_id: str, session_id: str
 ) -> dict:
-    return _read_json(
-        _session_dir(project_root, asset_id, session_id)
-        / "correction_session.json",
-        "session_not_found",
+    session_dir = _session_dir(project_root, asset_id, session_id)
+    session = _read_json(
+        session_dir / "correction_session.json", "session_not_found"
     )
+    events_path = session_dir / "events.jsonl"
+    if not events_path.is_file():
+        return session
+    try:
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except json.JSONDecodeError as exc:
+        raise CorrectionError("invalid_event_log", str(exc)) from exc
+    latest_revision = max(
+        (int(event.get("resulting_revision", 0)) for event in events),
+        default=0,
+    )
+    if latest_revision <= int(session.get("revision", 0)):
+        return session
+    from pc_system.segmentation_correction_events import materialize_correction
+
+    baseline = _read_json(
+        session_dir / "baseline_labels.json", "session_not_found"
+    )
+    materialized = materialize_correction(baseline, events)
+    objects = _object_document(materialized["assignments"])
+    confirmed = set(materialized["confirmed_instance_ids"])
+    for item in objects["objects"]:
+        if item["instance_id"] in confirmed:
+            item["review_state"] = "confirmed"
+    last_response = events[-1].get("accepted_response")
+    if isinstance(last_response, dict):
+        recovered = dict(last_response)
+    else:
+        recovered = {
+            **session,
+            "revision": latest_revision,
+            "updated_at": events[-1].get("timestamp", _iso_now()),
+        }
+    correction_diff = build_correction_diff(baseline, materialized)
+    quality_path = (
+        project_root
+        / "reports"
+        / "segmentation_runs"
+        / validate_identifier(asset_id, "asset_id")
+        / str(session["segmentation_run_id"])
+        / "segmentation_quality.json"
+    )
+    quality = (
+        _read_json(quality_path, "invalid_operational_quality")
+        if quality_path.is_file()
+        else None
+    )
+    queue = build_review_queue(
+        session=recovered,
+        baseline=baseline,
+        draft=materialized,
+        quality=quality,
+    )
+    recovered["revision"] = latest_revision
+    recovered["draft_fingerprint"] = materialized["draft_fingerprint"]
+    recovered["correction_diff"] = correction_diff
+    recovered["recovered_from_event_log"] = True
+    write_json(materialized, session_dir / "draft_labels.json")
+    write_json(objects, session_dir / "draft_objects.json")
+    write_json(queue, session_dir / "review_queue.json")
+    write_json(correction_diff, session_dir / "correction_diff.json")
+    write_json(recovered, session_dir / "correction_session.json")
+    return recovered
 
 
 def load_correction_baseline(

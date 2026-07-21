@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>点云分割纠正工作台</title>
+    <link rel="stylesheet" href="correction.css" />
+  </head>
+  <body>
+    <main class="correction-shell">
+      <header class="correction-header">
+        <div>
+          <p class="eyebrow">Phase 14 · Human in the loop</p>
+          <h1>点云分割纠正</h1>
+          <p>系统先分割，人员只做确认与必要纠正。</p>
+        </div>
+        <nav aria-label="工作台导航">
+          <a href="index.html">项目驾驶舱</a>
+          <a href="viewer.html">项目展示页</a>
+        </nav>
+        <div id="session-status" class="status-pill">等待会话</div>
+      </header>
+
+      <div id="conflict-banner" class="conflict-banner" hidden></div>
+
+      <section class="correction-grid">
+        <aside class="panel queue-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Review queue</p>
+              <h2>系统建议</h2>
+            </div>
+            <span id="queue-count">0</span>
+          </div>
+          <p class="panel-hint">建议不会自动修改标签，需由人员确认。</p>
+          <div id="review-queue" class="review-queue"></div>
+        </aside>
+
+        <section class="viewer-panel" aria-label="点云纠正视图">
+          <div class="viewer-toolbar">
+            <div class="button-group" aria-label="观察方向">
+              <button data-view="top" class="active">俯视</button>
+              <button data-view="front">前视</button>
+              <button data-view="side">侧视</button>
+            </div>
+            <div class="button-group" aria-label="选择工具">
+              <button data-tool="object" class="active">对象</button>
+              <button data-tool="box">框选</button>
+              <button data-tool="lasso">套索</button>
+              <button data-tool="brush">画笔</button>
+            </div>
+            <button id="fit-view">适配视图</button>
+            <label><input id="show-baseline" type="checkbox" /> 对比基线</label>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="correction-canvas" width="1200" height="720">
+              浏览器不支持 Canvas。
+            </canvas>
+            <div id="canvas-empty" class="canvas-empty">请通过 URL 指定 asset_id 与 session_id</div>
+          </div>
+          <div class="selection-status">
+            <span id="selection-summary">未选择点或对象</span>
+            <span>滚轮缩放 · 拖动平移 · 点击选择</span>
+          </div>
+        </section>
+
+        <aside class="panel object-panel" id="object-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Object first</p>
+              <h2>对象与操作</h2>
+            </div>
+            <span id="object-count">0</span>
+          </div>
+          <div id="selected-objects" class="selected-objects"></div>
+          <label class="field">
+            类别
+            <input id="class-id" value="object_candidate" autocomplete="off" />
+          </label>
+          <div class="primary-actions">
+            <button class="primary" data-action="confirm">确认正确</button>
+            <button data-action="merge">合并对象</button>
+            <button data-action="split">拆分选中点</button>
+            <button data-action="relabel">修改类别</button>
+            <button data-action="noise">标为噪点</button>
+          </div>
+          <details>
+            <summary>高级工具</summary>
+            <p>精确点选择、噪点恢复和局部基线恢复仅在需要时展开。</p>
+            <button data-action="restore-noise">恢复噪点到对象</button>
+          </details>
+          <section class="diff-card">
+            <h3>纠正差异</h3>
+            <dl id="diff-summary"></dl>
+          </section>
+        </aside>
+      </section>
+
+      <footer class="correction-footer">
+        <div class="button-group">
+          <button data-action="undo">撤销</button>
+          <button data-action="redo">重做</button>
+          <button data-action="restore">恢复基线</button>
+        </div>
+        <p id="save-state">事件自动保存</p>
+        <div class="button-group">
+          <button id="return-draft">退回纠正</button>
+          <button id="submit-review" class="primary">提交审查</button>
+          <button id="publish-release">发布版本</button>
+          <span class="confirmation-label">人工已确认状态会随版本保存</span>
+        </div>
+      </footer>
+    </main>
+    <script src="segmentation-correction.js"></script>
+    <script src="correction.js" defer></script>
+  </body>
+</html>

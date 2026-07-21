@@ -193,6 +193,17 @@ LAS/LAZ or FLS source
 | P13B-M5 参数搜索 / Parameter search | 已完成 / Done | 有界网格搜索和固定种子随机搜索。 | `recommendation.json` |
 | P13B-M6 公共接口 / Public surfaces | 已完成 / Done | CLI、只读 API、前端黄金评估摘要和文档。 | CLI, API, dashboard |
 
+## Phase 14: 分割纠正闭环 / Segmentation Correction Loop
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P14-M1 会话与基线 / Session and baseline | 已完成 / Done | 从 Phase 13A 运行或历史发布创建有界、精确索引的纠正草稿。 | `correction_session.json`, `baseline_labels.json` |
+| P14-M2 事件回放 / Event replay | 已完成 / Done | 处理确认、合并、拆分、改类、噪点、撤销/重做和恢复。 | `events.jsonl`, `draft_labels.json` |
+| P14-M3 审查队列 / Review queue | 已完成 / Done | 区分系统建议与人工确认，输出对象级纠正差异。 | `review_queue.json`, `correction_diff.json` |
+| P14-M4 不可变发布 / Immutable publication | 已完成 / Done | 冻结审查修订并生成标签版本、派生 benchmark 与谱系。 | correction release, benchmark |
+| P14-M5 反馈与训练策略 / Feedback and training policy | 已完成 / Done | 输出纠正前后标签、操作、许可和训练资格，隔离黄金回归数据。 | `segmentation_feedback`, `training_policy.json` |
+| P14-M6 公共接口 / Public surfaces | 已完成 / Done | 提供受保护 API、CLI、Canvas 纠正工作台和恢复文档。 | CLI, API, `correction.html` |
+
 ```powershell
 python -m pc_system.cli init --project-root .\workspace
 python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.las
@@ -230,6 +241,7 @@ python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --
 | --- | --- | --- |
 | 项目驾驶舱 / Dashboard | `frontend/index.html` | 资产、任务、分析、质量门禁、交付状态总览。 |
 | 展示页 / Showcase viewer | `frontend/viewer.html` | 单资产展示型查看器入口。 |
+| 分割纠正 / Segmentation correction | `frontend/correction.html` | 系统建议、对象确认、点选择、纠正与送审。 |
 | 设计候选 / Design options | `frontend/design-options/` | UI 风格候选页面。 |
 
 ## 当前后续建议 / Recommended Next Iterations

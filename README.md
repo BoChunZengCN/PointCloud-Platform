@@ -739,3 +739,19 @@ python -m pc_system.cli search-segmentation-params `
 ```
 
 Search recommendations are advisory and never modify production configuration. See `docs/phase13b-golden-segmentation-evaluation.md`.
+
+### Phase 14 分割纠正闭环 / Segmentation Correction Loop
+
+Phase 14 从已完成的 Phase 13A 运行创建人员确认与纠正草稿，支持精确点索引的确认、合并、拆分、改类、噪点纠正、撤销/重做和基线恢复，并发布不可覆盖的标签版本。
+
+```powershell
+python -m pc_system.cli create-segmentation-correction `
+  --project-root workspace `
+  --asset-id scan `
+  --run-id seg-run-001 `
+  --session-id correction-001 `
+  --sample-id scan-001 `
+  --actor alice
+```
+
+浏览器入口为 `frontend/correction.html`。发布会生成派生 Phase 13B benchmark 与 `datasets/segmentation_feedback/<release_id>/`；黄金回归数据始终仅用于评估。完整说明见 `docs/phase14-segmentation-correction-loop.md`。

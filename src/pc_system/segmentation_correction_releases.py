@@ -6,16 +6,27 @@ from pathlib import Path
 
 from pc_system.identifiers import validate_identifier
 from pc_system.json_io import write_json
+from pc_system.las_sampling import sample_points_from_source
+from pc_system.segmentation_provenance import fingerprint_points
 from pc_system.segmentation_benchmarks import BENCHMARK_SPLITS
-from pc_system.segmentation_correction_events import read_correction_events
+from pc_system.segmentation_evaluation import evaluate_segmentation_run
+from pc_system.segmentation_regression import compare_evaluations
+from pc_system.segmentation_correction_events import (
+    materialize_correction,
+    read_correction_events,
+)
 from pc_system.segmentation_corrections import (
     CorrectionError,
+    _acquire_session_write_lock,
     _iso_now,
+    _object_document,
+    _release_session_write_lock,
     _session_dir,
     load_correction_baseline,
     load_correction_objects,
     load_correction_session,
 )
+from pc_system.segmentation_review_queue import build_correction_diff
 
 
 TRANSITIONS = {
@@ -55,7 +66,7 @@ def _read_json(path: Path, code: str) -> dict:
     return payload
 
 
-def transition_correction_session(
+def _transition_correction_session_unlocked(
     project_root: Path,
     *,
     asset_id: str,
@@ -69,6 +80,11 @@ def transition_correction_session(
     session = load_correction_session(project_root, asset_id, session_id)
     if not isinstance(actor, str) or not actor.strip():
         raise CorrectionError("invalid_actor", "actor must be a non-empty string.")
+    if action in {"submit", "abandon"} and session.get("active_editor") != actor.strip():
+        raise CorrectionError(
+            "session_locked",
+            f"Session is owned by {session.get('active_editor')}.",
+        )
     if (
         isinstance(expected_revision, bool)
         or not isinstance(expected_revision, int)
@@ -103,7 +119,37 @@ def transition_correction_session(
         _session_dir(project_root, asset_id, session_id)
         / "correction_session.json",
     )
+    if target in {"published", "abandoned"}:
+        (
+            _session_dir(project_root, asset_id, session_id).parent
+            / f".active-{session['sample_id']}.lock"
+        ).unlink(missing_ok=True)
     return updated
+
+
+def transition_correction_session(
+    project_root: Path,
+    *,
+    asset_id: str,
+    session_id: str,
+    action: str,
+    actor: str,
+    expected_revision: int,
+) -> dict:
+    lock_path = _acquire_session_write_lock(
+        project_root, asset_id, session_id
+    )
+    try:
+        return _transition_correction_session_unlocked(
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            action=action,
+            actor=actor,
+            expected_revision=expected_revision,
+        )
+    finally:
+        _release_session_write_lock(lock_path)
 
 
 def _labels_from_assignments(draft: dict, objects: dict) -> dict:
@@ -118,6 +164,7 @@ def _labels_from_assignments(draft: dict, objects: dict) -> dict:
                 "instance_id": str(item["instance_id"]),
                 "class_id": str(item["class_id"]),
                 "is_noise": bool(item["is_noise"]),
+                "origin": item.get("origin", "unknown"),
             }
             for item in draft["assignments"]
         ],
@@ -138,8 +185,8 @@ def _training_policy(
     *, release_id: str, benchmark_split: str, license_name: str
 ) -> dict:
     if benchmark_split == "development":
-        eligibility = "eligible"
-        reasons = ["reviewed_development_labels", "compatible_license"]
+        eligibility = "blocked"
+        reasons = ["evaluation_not_completed"]
     else:
         eligibility = "evaluation_only"
         reasons = [f"{benchmark_split}_split_is_not_training_input"]
@@ -160,6 +207,7 @@ def _task_document(
     release_id: str,
     evaluation_config: dict | None,
     baseline_evaluation_id: str | None,
+    regression_thresholds: dict | None,
     search_config: dict | None,
 ) -> dict:
     evaluation_status = "planned" if evaluation_config is not None else "not_requested"
@@ -171,23 +219,27 @@ def _task_document(
             "evaluation": {
                 "status": evaluation_status,
                 "config": evaluation_config,
+                "attempt_count": 0,
                 "error": None,
             },
             "regression": {
                 "status": "planned" if regression_requested else "not_requested",
                 "baseline_evaluation_id": baseline_evaluation_id,
+                "thresholds": regression_thresholds,
+                "attempt_count": 0,
                 "error": None,
             },
             "parameter_search": {
                 "status": "planned" if search_config is not None else "not_requested",
                 "config": search_config,
+                "attempt_count": 0,
                 "error": None,
             },
         },
     }
 
 
-def publish_correction_release(
+def _publish_correction_release_unlocked(
     project_root: Path,
     *,
     asset_id: str,
@@ -229,6 +281,8 @@ def publish_correction_release(
             "missing_regression_thresholds",
             "Regression comparison requires thresholds.",
         )
+    if benchmark_split == "development" and evaluation_config is None:
+        evaluation_config = {}
     release_dir = _release_dir(project_root, asset_id, release_id)
     derived_benchmark_id = validate_identifier(
         f"{release_id}-benchmark", "benchmark_id"
@@ -265,28 +319,35 @@ def publish_correction_release(
         )
     session_dir = _session_dir(project_root, asset_id, session_id)
     baseline = load_correction_baseline(project_root, asset_id, session_id)
-    draft = _read_json(session_dir / "draft_labels.json", "session_not_found")
-    objects = load_correction_objects(project_root, asset_id, session_id)
+    persisted_draft = _read_json(
+        session_dir / "draft_labels.json", "session_not_found"
+    )
+    correction_events = read_correction_events(
+        project_root, asset_id, session_id
+    )
+    draft = materialize_correction(baseline, correction_events)
+    if (
+        draft["draft_fingerprint"] != persisted_draft.get("draft_fingerprint")
+        or draft["draft_fingerprint"] != session.get("draft_fingerprint")
+    ):
+        raise CorrectionError(
+            "draft_replay_mismatch",
+            "Persisted draft does not match deterministic event replay.",
+        )
+    indices = [item["source_point_index"] for item in draft["assignments"]]
+    if len(indices) != len(set(indices)) or sorted(indices) != list(range(len(indices))):
+        raise CorrectionError(
+            "invalid_draft_indices",
+            "Draft must contain each source point index exactly once.",
+        )
+    objects = _object_document(draft["assignments"])
     if draft.get("point_count") != baseline.get("point_count"):
         raise CorrectionError(
             "incomplete_draft", "Draft must cover the complete correction point set."
         )
     labels = _labels_from_assignments(draft, objects)
     before_labels = _labels_from_assignments(
-        baseline,
-        {
-            "objects": [
-                item
-                for item in _read_json(
-                    session_dir / "draft_objects.json", "session_not_found"
-                ).get("objects", [])
-                if item["instance_id"]
-                in {
-                    assignment["instance_id"]
-                    for assignment in baseline["assignments"]
-                }
-            ]
-        },
+        baseline, _object_document(baseline["assignments"])
     )
     run = _read_json(
         project_root
@@ -297,6 +358,27 @@ def publish_correction_release(
         / "segmentation_run.json",
         "segmentation_run_not_found",
     )
+    if baseline.get("source_fingerprint") != run.get("source_fingerprint"):
+        raise CorrectionError(
+            "source_fingerprint_mismatch",
+            "Correction baseline source does not match the segmentation run.",
+        )
+    source_path = Path(str(run["source_uri"]))
+    if not source_path.is_absolute() and not source_path.exists():
+        source_path = project_root / source_path
+    current_points = sample_points_from_source(
+        source_path,
+        max_points=int(
+            run.get("config", {}).get(
+                "max_points", run.get("source_point_count", 10_000)
+            )
+        ),
+    )
+    if fingerprint_points(current_points) != run.get("source_fingerprint"):
+        raise CorrectionError(
+            "source_fingerprint_mismatch",
+            "Current source points no longer match the reviewed run.",
+        )
     now = _iso_now()
     training_policy = _training_policy(
         release_id=release_id,
@@ -307,9 +389,10 @@ def publish_correction_release(
         release_id=release_id,
         evaluation_config=evaluation_config,
         baseline_evaluation_id=baseline_evaluation_id,
+        regression_thresholds=regression_thresholds,
         search_config=search_config,
     )
-    correction_diff = dict(session.get("correction_diff", {}))
+    correction_diff = build_correction_diff(baseline, draft)
     provenance = {
         "schema_version": "1.0",
         "asset_id": asset_id,
@@ -317,6 +400,9 @@ def publish_correction_release(
         "source_uri": run.get("source_uri"),
         "source_fingerprint": run.get("source_fingerprint"),
         "segmentation_run_id": session["segmentation_run_id"],
+        "segmentation_config_fingerprint": run.get("config_fingerprint"),
+        "segmentation_engine": run.get("executed_engine"),
+        "editor": session.get("active_editor"),
         "session_id": session_id,
         "source_revision": expected_revision,
         "reviewer": reviewer.strip(),
@@ -369,7 +455,7 @@ def publish_correction_release(
         ],
     }
     public_events = []
-    for event in read_correction_events(project_root, asset_id, session_id):
+    for event in correction_events:
         public_events.append(
             {key: value for key, value in event.items() if key != "accepted_response"}
         )
@@ -379,6 +465,12 @@ def publish_correction_release(
         "asset_id": asset_id,
         "session_id": session_id,
         "source_revision": expected_revision,
+        "parent_release_id": session.get("supersedes_release_id"),
+        "segmentation_run_id": session["segmentation_run_id"],
+        "segmentation_config_fingerprint": run.get("config_fingerprint"),
+        "editor": session.get("active_editor"),
+        "reviewer": reviewer.strip(),
+        "correction_diff": correction_diff,
         "source_fingerprint": run.get("source_fingerprint"),
         "benchmark_split": benchmark_split,
         "license": license_name.strip(),
@@ -450,7 +542,60 @@ def publish_correction_release(
         "published_release_id": release_id,
         "published_revision": expected_revision,
     }
-    write_json(updated_session, session_dir / "correction_session.json")
+    try:
+        write_json(updated_session, session_dir / "correction_session.json")
+    except Exception:
+        for destination in (release_dir, benchmark_dir, feedback_dir):
+            if destination.exists():
+                shutil.rmtree(destination)
+        raise
+    (
+        session_dir.parent / f".active-{session['sample_id']}.lock"
+    ).unlink(missing_ok=True)
+    return release
+
+
+def publish_correction_release(
+    project_root: Path,
+    *,
+    asset_id: str,
+    session_id: str,
+    release_id: str,
+    reviewer: str,
+    expected_revision: int,
+    benchmark_split: str,
+    license_name: str,
+    evaluation_config: dict | None = None,
+    baseline_evaluation_id: str | None = None,
+    regression_thresholds: dict | None = None,
+    search_config: dict | None = None,
+) -> dict:
+    lock_path = _acquire_session_write_lock(
+        project_root, asset_id, session_id
+    )
+    try:
+        release = _publish_correction_release_unlocked(
+            project_root,
+            asset_id=asset_id,
+            session_id=session_id,
+            release_id=release_id,
+            reviewer=reviewer,
+            expected_revision=expected_revision,
+            benchmark_split=benchmark_split,
+            license_name=license_name,
+            evaluation_config=evaluation_config,
+            baseline_evaluation_id=baseline_evaluation_id,
+            regression_thresholds=regression_thresholds,
+            search_config=search_config,
+        )
+    finally:
+        _release_session_write_lock(lock_path)
+    retry_publication_tasks(
+        project_root,
+        asset_id=asset_id,
+        release_id=release_id,
+        actor=reviewer.strip(),
+    )
     return release
 
 
@@ -478,13 +623,177 @@ def list_correction_releases(project_root: Path, asset_id: str) -> list[dict]:
 def retry_publication_tasks(
     project_root: Path, *, asset_id: str, release_id: str, actor: str
 ) -> dict:
-    """Return retryable task state; execution adapters are added with API/CLI wiring."""
+    """Execute planned or failed downstream tasks without republishing labels."""
 
     if not isinstance(actor, str) or not actor.strip():
         raise CorrectionError("invalid_actor", "actor must be a non-empty string.")
     root = _release_dir(project_root, asset_id, release_id)
+    release = load_correction_release(project_root, asset_id, release_id)
     tasks = _read_json(root / "publication_tasks.json", "release_not_found")
     tasks["last_retry_requested_by"] = actor.strip()
     tasks["last_retry_requested_at"] = _iso_now()
     write_json(tasks, root / "publication_tasks.json")
+
+    evaluation_task = tasks["tasks"]["evaluation"]
+    if evaluation_task["status"] in {"planned", "failed"}:
+        attempt = int(evaluation_task.get("attempt_count", 0)) + 1
+        evaluation_id = validate_identifier(
+            f"{release_id}-eval-{attempt:04d}", "evaluation_id"
+        )
+        evaluation_task.update(
+            {
+                "status": "running",
+                "attempt_count": attempt,
+                "evaluation_id": evaluation_id,
+                "error": None,
+            }
+        )
+        write_json(tasks, root / "publication_tasks.json")
+        try:
+            evaluate_segmentation_run(
+                project_root,
+                asset_id=release["asset_id"],
+                run_id=_read_json(
+                    root / "provenance.json", "invalid_release_artifact"
+                )["segmentation_run_id"],
+                benchmark_id=release["derived_benchmark_id"],
+                sample_id=release["sample_id"],
+                evaluation_id=evaluation_id,
+                config=dict(evaluation_task.get("config") or {}),
+            )
+            evaluation_task["status"] = "completed"
+            evaluation_task["completed_at"] = _iso_now()
+        except Exception as exc:
+            evaluation_task["status"] = "failed"
+            evaluation_task["error"] = {
+                "code": "evaluation_task_failed",
+                "message": str(exc),
+            }
+        write_json(tasks, root / "publication_tasks.json")
+
+    regression_task = tasks["tasks"]["regression"]
+    if regression_task["status"] in {"planned", "failed"}:
+        attempt = int(regression_task.get("attempt_count", 0)) + 1
+        comparison_id = validate_identifier(
+            f"{release_id}-cmp-{attempt:04d}", "comparison_id"
+        )
+        regression_task.update(
+            {
+                "status": "running",
+                "attempt_count": attempt,
+                "comparison_id": comparison_id,
+                "error": None,
+            }
+        )
+        write_json(tasks, root / "publication_tasks.json")
+        try:
+            candidate_evaluation_id = evaluation_task.get("evaluation_id")
+            if evaluation_task.get("status") != "completed" or not candidate_evaluation_id:
+                raise ValueError("Regression requires a completed release evaluation.")
+            compare_evaluations(
+                project_root,
+                asset_id=release["asset_id"],
+                comparison_id=comparison_id,
+                baseline_evaluation_id=regression_task["baseline_evaluation_id"],
+                candidate_evaluation_id=candidate_evaluation_id,
+                thresholds=dict(regression_task.get("thresholds") or {}),
+            )
+            regression_task["status"] = "completed"
+            regression_task["completed_at"] = _iso_now()
+        except Exception as exc:
+            regression_task["status"] = "failed"
+            regression_task["error"] = {
+                "code": "regression_task_failed",
+                "message": str(exc),
+            }
+        write_json(tasks, root / "publication_tasks.json")
+
+    search_task = tasks["tasks"]["parameter_search"]
+    if search_task["status"] in {"planned", "failed"}:
+        if release["benchmark_split"] == "golden_regression":
+            search_task["status"] = "failed"
+            search_task["error"] = {
+                "code": "golden_search_forbidden",
+                "message": "Golden-regression data cannot be used for parameter search.",
+            }
+            write_json(tasks, root / "publication_tasks.json")
+            return tasks
+        attempt = int(search_task.get("attempt_count", 0)) + 1
+        search_id = validate_identifier(
+            f"{release_id}-search-{attempt:04d}", "search_id"
+        )
+        search_task.update(
+            {
+                "status": "running",
+                "attempt_count": attempt,
+                "search_id": search_id,
+                "error": None,
+            }
+        )
+        write_json(tasks, root / "publication_tasks.json")
+        config_path = (
+            project_root
+            / "reports"
+            / "segmentation_correction_tasks"
+            / release["asset_id"]
+            / release_id
+            / f"search-{attempt:04d}.json"
+        )
+        try:
+            write_json(dict(search_task.get("config") or {}), config_path)
+            from pc_system.commands.phase13b import run_search_segmentation
+
+            run_search_segmentation(
+                project_root,
+                asset_id=release["asset_id"],
+                benchmark_id=release["derived_benchmark_id"],
+                sample_id=release["sample_id"],
+                search_id=search_id,
+                config_path=config_path,
+                baseline_evaluation_id=None,
+            )
+            search_task["status"] = "completed"
+            search_task["completed_at"] = _iso_now()
+        except Exception as exc:
+            search_task["status"] = "failed"
+            search_task["error"] = {
+                "code": "parameter_search_task_failed",
+                "message": str(exc),
+            }
+        write_json(tasks, root / "publication_tasks.json")
+    policy = _read_json(root / "training_policy.json", "release_not_found")
+    if release["benchmark_split"] == "development":
+        compatible_licenses = {"internal", "cc0", "cc-by", "cc-by-4.0"}
+        if (
+            str(release["license"]).lower() in compatible_licenses
+            and evaluation_task.get("status") == "completed"
+        ):
+            policy["eligibility"] = "eligible"
+            policy["reasons"] = [
+                "reviewed_development_labels",
+                "compatible_license",
+                "evaluation_completed",
+            ]
+        else:
+            policy["eligibility"] = "blocked"
+            policy["reasons"] = [
+                "incompatible_license"
+                if str(release["license"]).lower() not in compatible_licenses
+                else "evaluation_not_completed"
+            ]
+        write_json(policy, root / "training_policy.json")
+        feedback_path = (
+            project_root
+            / "datasets"
+            / "segmentation_feedback"
+            / release_id
+            / "feedback_manifest.json"
+        )
+        if feedback_path.is_file():
+            feedback = _read_json(
+                feedback_path, "invalid_release_artifact"
+            )
+            feedback["training_eligibility"] = policy["eligibility"]
+            feedback["training_policy_reasons"] = policy["reasons"]
+            write_json(feedback, feedback_path)
     return tasks

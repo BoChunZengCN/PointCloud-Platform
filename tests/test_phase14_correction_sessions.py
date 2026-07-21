@@ -157,6 +157,30 @@ def test_create_session_rejects_duplicate_session(tmp_path):
     assert exc_info.value.code == "session_exists"
 
 
+def test_sample_allows_only_one_active_editable_session(tmp_path):
+    write_completed_run(tmp_path)
+    create_correction_session(
+        tmp_path,
+        asset_id="scan",
+        run_id="run-001",
+        session_id="session-001",
+        sample_id="sample-001",
+        actor="alice",
+    )
+
+    with pytest.raises(CorrectionError) as exc_info:
+        create_correction_session(
+            tmp_path,
+            asset_id="scan",
+            run_id="run-001",
+            session_id="session-002",
+            sample_id="sample-001",
+            actor="bob",
+        )
+
+    assert exc_info.value.code == "active_session_exists"
+
+
 def test_source_fingerprint_mismatch_is_rejected(tmp_path):
     source = write_completed_run(tmp_path)
     source.write_text(

@@ -129,6 +129,13 @@ def test_publication_writes_derived_benchmark_and_feedback(tmp_path):
     assert (feedback_root / "before_labels.json").is_file()
     assert (feedback_root / "after_labels.json").is_file()
     assert (feedback_root / "operations.jsonl").is_file()
+    before = json.loads(
+        (feedback_root / "before_labels.json").read_text(encoding="utf-8")
+    )
+    before_classes = {
+        item["instance_id"]: item["class_id"] for item in before["boxes"]
+    }
+    assert before_classes["obj-001"] == "object_candidate"
 
 
 @pytest.mark.parametrize(
@@ -213,3 +220,109 @@ def test_only_in_review_session_can_publish(tmp_path):
         )
 
     assert exc_info.value.code == "invalid_session_state"
+
+
+def test_requested_evaluation_executes_after_release_is_frozen(tmp_path):
+    reviewed = reviewed_session(tmp_path)
+
+    release = publish_correction_release(
+        tmp_path,
+        asset_id="scan",
+        session_id="session-001",
+        release_id="release-evaluated",
+        reviewer="bob",
+        expected_revision=reviewed["revision"],
+        benchmark_split="development",
+        license_name="internal",
+        evaluation_config={},
+    )
+    tasks = json.loads(
+        (
+            release_root(tmp_path, release["release_id"])
+            / "publication_tasks.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert tasks["tasks"]["evaluation"]["status"] == "completed"
+    assert tasks["tasks"]["evaluation"]["evaluation_id"]
+
+
+def test_requested_parameter_search_executes_and_records_recommendation(tmp_path):
+    reviewed = reviewed_session(tmp_path)
+    search_config = {
+        "strategy": "grid",
+        "parameter_space": {
+            "distance_threshold": [0.2],
+            "min_points": [1],
+        },
+        "base_config": {"engine": "builtin_geometric", "max_points": 100},
+        "evaluation_config": {},
+        "max_trials": 1,
+        "seed": 7,
+        "trial_timeout_seconds": 30,
+        "weights": {
+            "instance_f1": 0.4,
+            "point_miou": 0.25,
+            "mean_box_iou": 0.2,
+            "noise_f1": 0.15,
+            "over_segmentation": 0.05,
+            "under_segmentation": 0.05,
+            "runtime_seconds": 0.001,
+        },
+    }
+
+    release = publish_correction_release(
+        tmp_path,
+        asset_id="scan",
+        session_id="session-001",
+        release_id="release-searched",
+        reviewer="bob",
+        expected_revision=reviewed["revision"],
+        benchmark_split="development",
+        license_name="internal",
+        search_config=search_config,
+    )
+    tasks = json.loads(
+        (
+            release_root(tmp_path, release["release_id"])
+            / "publication_tasks.json"
+        ).read_text(encoding="utf-8")
+    )
+    search_id = tasks["tasks"]["parameter_search"]["search_id"]
+    recommendation = json.loads(
+        (
+            tmp_path
+            / "reports"
+            / "segmentation_searches"
+            / "scan"
+            / search_id
+            / "recommendation.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert tasks["tasks"]["parameter_search"]["status"] == "completed"
+    assert recommendation["status"] == "recommended"
+
+
+def test_incompatible_license_remains_blocked_after_evaluation(tmp_path):
+    reviewed = reviewed_session(tmp_path)
+
+    release = publish_correction_release(
+        tmp_path,
+        asset_id="scan",
+        session_id="session-001",
+        release_id="release-no-training",
+        reviewer="bob",
+        expected_revision=reviewed["revision"],
+        benchmark_split="development",
+        license_name="NO-TRAINING",
+    )
+    policy = json.loads(
+        (
+            release_root(tmp_path, release["release_id"])
+            / "training_policy.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert policy["eligibility"] == "blocked"
+    assert policy["reasons"] == ["incompatible_license"]

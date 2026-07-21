@@ -35,6 +35,13 @@ from pc_system.commands.phase13b import (
     run_import_segmentation_benchmark,
     run_search_segmentation,
 )
+from pc_system.commands.phase14 import (
+    run_apply_segmentation_correction,
+    run_create_segmentation_correction,
+    run_publish_segmentation_correction,
+    run_retry_segmentation_publication,
+    run_submit_segmentation_correction,
+)
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -79,6 +86,10 @@ def main(
             "baseline_evaluation_id",
             "job_id",
             "run_id",
+            "session_id",
+            "release_id",
+            "client_request_id",
+            "baseline_release_id",
             "sample_id",
             "search_id",
             "step_id",
@@ -256,6 +267,49 @@ def main(
                 search_id=args.search_id,
                 config_path=args.config,
                 baseline_evaluation_id=args.baseline_evaluation_id,
+            )
+        if args.command == "create-segmentation-correction":
+            return run_create_segmentation_correction(
+                args.project_root,
+                asset_id=args.asset_id,
+                run_id=args.run_id,
+                session_id=args.session_id,
+                sample_id=args.sample_id,
+                actor=args.actor,
+                benchmark_id=args.benchmark_id,
+                baseline_release_id=args.baseline_release_id,
+            )
+        if args.command == "apply-segmentation-correction":
+            return run_apply_segmentation_correction(
+                args.project_root,
+                asset_id=args.asset_id,
+                session_id=args.session_id,
+                actor=args.actor,
+                expected_revision=args.expected_revision,
+                client_request_id=args.client_request_id,
+                operation_path=args.operation,
+            )
+        if args.command == "submit-segmentation-correction":
+            return run_submit_segmentation_correction(
+                args.project_root,
+                asset_id=args.asset_id,
+                session_id=args.session_id,
+                actor=args.actor,
+                expected_revision=args.expected_revision,
+            )
+        if args.command == "publish-segmentation-correction":
+            return run_publish_segmentation_correction(
+                args.project_root,
+                asset_id=args.asset_id,
+                session_id=args.session_id,
+                publication_path=args.publication,
+            )
+        if args.command == "retry-segmentation-publication":
+            return run_retry_segmentation_publication(
+                args.project_root,
+                asset_id=args.asset_id,
+                release_id=args.release_id,
+                actor=args.actor,
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except RuntimeError as exc:

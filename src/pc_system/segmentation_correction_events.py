@@ -8,10 +8,12 @@ from pc_system.json_io import write_json
 from pc_system.segmentation_corrections import (
     CorrectionError,
     _assignment_fingerprint,
+    _acquire_session_write_lock,
     _lock_expiry,
     _object_document,
     _session_dir,
     _iso_now,
+    _release_session_write_lock,
     load_correction_baseline,
     load_correction_session,
 )
@@ -141,9 +143,26 @@ def _apply_label_operation(
                 "invalid_merge",
                 "Merge instances must be active and include the target.",
             )
-        target_class = next(
-            assignments[index]["class_id"] for index in groups[target]
-        )
+        selected_classes = {
+            assignments[index]["class_id"]
+            for instance_id in instance_ids
+            for index in groups[instance_id]
+        }
+        if len(selected_classes) > 1:
+            requested_class = operation.get("target_class_id")
+            if requested_class is None:
+                raise CorrectionError(
+                    "merge_class_conflict",
+                    "Merging objects with different classes requires target_class_id.",
+                )
+            try:
+                target_class = validate_identifier(
+                    requested_class, "target_class_id"
+                )
+            except (TypeError, ValueError) as exc:
+                raise CorrectionError("merge_class_conflict", str(exc)) from exc
+        else:
+            target_class = next(iter(selected_classes))
         for item in assignments.values():
             if item["instance_id"] in instance_ids and not item["is_noise"]:
                 item["instance_id"] = target
@@ -311,6 +330,35 @@ def materialize_correction(baseline: dict, events: list[dict]) -> dict:
         _apply_label_operation(
             assignments, baseline_map, event["operation"], confirmed
         )
+    class_sets: dict[str, set[str]] = {}
+    for item in assignments.values():
+        if not item["is_noise"]:
+            class_sets.setdefault(item["instance_id"], set()).add(item["class_id"])
+    inconsistent = sorted(
+        instance_id
+        for instance_id, classes in class_sets.items()
+        if len(classes) > 1
+    )
+    if inconsistent:
+        raise CorrectionError(
+            "inconsistent_instance_class",
+            f"Instances contain conflicting classes: {', '.join(inconsistent)}",
+        )
+    for index, item in assignments.items():
+        baseline_item = baseline_map[index]
+        current_identity = (
+            item["instance_id"], item["class_id"], item["is_noise"]
+        )
+        baseline_identity = (
+            baseline_item["instance_id"],
+            baseline_item["class_id"],
+            baseline_item["is_noise"],
+        )
+        item["origin"] = (
+            baseline_item.get("origin", "automatic_segmentation")
+            if current_identity == baseline_identity
+            else "human_correction"
+        )
     ordered = [assignments[index] for index in sorted(assignments)]
     return {
         "schema_version": "1.0",
@@ -380,14 +428,9 @@ def apply_correction_event(
             "invalid_revision", "expected_revision must be a non-negative integer."
         )
     session_dir = _session_dir(project_root, asset_id, session_id)
-    lock_path = session_dir / ".write.lock"
-    try:
-        lock_handle = os.open(
-            lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        )
-        os.close(lock_handle)
-    except FileExistsError as exc:
-        raise CorrectionError("session_busy", "Session write is already in progress.") from exc
+    lock_path = _acquire_session_write_lock(
+        project_root, asset_id, session_id
+    )
     try:
         session = load_correction_session(project_root, asset_id, session_id)
         events = read_correction_events(project_root, asset_id, session_id)
@@ -485,4 +528,4 @@ def apply_correction_event(
         write_json(updated, session_dir / "correction_session.json")
         return updated
     finally:
-        lock_path.unlink(missing_ok=True)
+        _release_session_write_lock(lock_path)
