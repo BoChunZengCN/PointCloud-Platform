@@ -247,6 +247,54 @@ def build_parser() -> argparse.ArgumentParser:
     search_segmentation.add_argument("--search-id", required=True)
     search_segmentation.add_argument("--config", required=True, type=Path)
     search_segmentation.add_argument("--baseline-evaluation-id")
+    create_correction = subparsers.add_parser(
+        "create-segmentation-correction",
+        help="Create a Phase 14 correction draft from a completed segmentation run.",
+    )
+    create_correction.add_argument("--project-root", required=True, type=Path)
+    create_correction.add_argument("--asset-id", required=True)
+    create_correction.add_argument("--run-id", required=True)
+    create_correction.add_argument("--session-id", required=True)
+    create_correction.add_argument("--sample-id", required=True)
+    create_correction.add_argument("--actor", required=True)
+    create_correction.add_argument("--benchmark-id")
+    create_correction.add_argument("--baseline-release-id")
+    apply_correction = subparsers.add_parser(
+        "apply-segmentation-correction",
+        help="Append one validated Phase 14 correction event.",
+    )
+    apply_correction.add_argument("--project-root", required=True, type=Path)
+    apply_correction.add_argument("--asset-id", required=True)
+    apply_correction.add_argument("--session-id", required=True)
+    apply_correction.add_argument("--actor", required=True)
+    apply_correction.add_argument("--expected-revision", required=True, type=int)
+    apply_correction.add_argument("--client-request-id", required=True)
+    apply_correction.add_argument("--operation", required=True, type=Path)
+    submit_correction = subparsers.add_parser(
+        "submit-segmentation-correction",
+        help="Submit a Phase 14 correction draft for review.",
+    )
+    submit_correction.add_argument("--project-root", required=True, type=Path)
+    submit_correction.add_argument("--asset-id", required=True)
+    submit_correction.add_argument("--session-id", required=True)
+    submit_correction.add_argument("--actor", required=True)
+    submit_correction.add_argument("--expected-revision", required=True, type=int)
+    publish_correction = subparsers.add_parser(
+        "publish-segmentation-correction",
+        help="Publish one reviewed Phase 14 correction release.",
+    )
+    publish_correction.add_argument("--project-root", required=True, type=Path)
+    publish_correction.add_argument("--asset-id", required=True)
+    publish_correction.add_argument("--session-id", required=True)
+    publish_correction.add_argument("--publication", required=True, type=Path)
+    retry_publication = subparsers.add_parser(
+        "retry-segmentation-publication",
+        help="Retry downstream tasks for a published correction release.",
+    )
+    retry_publication.add_argument("--project-root", required=True, type=Path)
+    retry_publication.add_argument("--asset-id", required=True)
+    retry_publication.add_argument("--release-id", required=True)
+    retry_publication.add_argument("--actor", required=True)
     return parser
 
 
