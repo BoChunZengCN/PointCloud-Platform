@@ -182,6 +182,17 @@ LAS/LAZ or FLS source
 | P13A-M5 运行质量代理 / Operational quality | 已完成 / Done | 识别噪声、疑似粘连、碎片和回退风险。 | `segmentation_quality.json`, `.md` |
 | P13A-M6 公共接口 / Public surfaces | 已完成 / Done | CLI、只读 API、前端摘要和文档。 | `run-segmentation`, API |
 
+## Phase 13B: 黄金分割评估 / Golden Segmentation Evaluation
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P13B-M1 黄金 benchmark / Golden benchmark | 已完成 / Done | 导入版本化 JSON/JSONL 点标签与三维包围盒。 | `benchmarks/<benchmark_id>/` |
+| P13B-M2 点对应 / Point correspondence | 已完成 / Done | 严格索引和显式 XYZ 容差对应。 | `correspondence.json` |
+| P13B-M3 黄金指标 / Golden metrics | 已完成 / Done | 计算 point mIoU、实例 F1、box IoU、拆分与粘连。 | metric JSON files |
+| P13B-M4 回归门禁 / Regression gate | 已完成 / Done | 比较候选与基线并阻止超阈值退化。 | `regression_gate.json` |
+| P13B-M5 参数搜索 / Parameter search | 已完成 / Done | 有界网格搜索和固定种子随机搜索。 | `recommendation.json` |
+| P13B-M6 公共接口 / Public surfaces | 已完成 / Done | CLI、只读 API、前端黄金评估摘要和文档。 | CLI, API, dashboard |
+
 ```powershell
 python -m pc_system.cli init --project-root .\workspace
 python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.las

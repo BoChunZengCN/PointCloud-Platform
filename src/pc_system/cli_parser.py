@@ -209,6 +209,44 @@ def build_parser() -> argparse.ArgumentParser:
     run_segmentation.add_argument("--min-points", default=10, type=int)
     run_segmentation.add_argument("--voxel-size", type=float)
     run_segmentation.add_argument("--max-points", default=10000, type=int)
+    import_benchmark = subparsers.add_parser(
+        "import-segmentation-benchmark",
+        help="Validate and import a Phase 13B golden benchmark.",
+    )
+    import_benchmark.add_argument("--project-root", required=True, type=Path)
+    import_benchmark.add_argument("--manifest", required=True, type=Path)
+    evaluate_segmentation = subparsers.add_parser(
+        "evaluate-segmentation-run",
+        help="Evaluate a Phase 13A run against golden labels.",
+    )
+    evaluate_segmentation.add_argument("--project-root", required=True, type=Path)
+    evaluate_segmentation.add_argument("--asset-id", required=True)
+    evaluate_segmentation.add_argument("--run-id", required=True)
+    evaluate_segmentation.add_argument("--benchmark-id", required=True)
+    evaluate_segmentation.add_argument("--sample-id", required=True)
+    evaluate_segmentation.add_argument("--evaluation-id", required=True)
+    evaluate_segmentation.add_argument("--config", required=True, type=Path)
+    compare_segmentation = subparsers.add_parser(
+        "compare-segmentation-runs",
+        help="Compare golden evaluations and write a regression gate.",
+    )
+    compare_segmentation.add_argument("--project-root", required=True, type=Path)
+    compare_segmentation.add_argument("--asset-id", required=True)
+    compare_segmentation.add_argument("--comparison-id", required=True)
+    compare_segmentation.add_argument("--baseline-evaluation-id", required=True)
+    compare_segmentation.add_argument("--candidate-evaluation-id", required=True)
+    compare_segmentation.add_argument("--thresholds", required=True, type=Path)
+    search_segmentation = subparsers.add_parser(
+        "search-segmentation-params",
+        help="Run a bounded deterministic Phase 13B parameter search.",
+    )
+    search_segmentation.add_argument("--project-root", required=True, type=Path)
+    search_segmentation.add_argument("--asset-id", required=True)
+    search_segmentation.add_argument("--benchmark-id", required=True)
+    search_segmentation.add_argument("--sample-id", required=True)
+    search_segmentation.add_argument("--search-id", required=True)
+    search_segmentation.add_argument("--config", required=True, type=Path)
+    search_segmentation.add_argument("--baseline-evaluation-id")
     return parser
 
 

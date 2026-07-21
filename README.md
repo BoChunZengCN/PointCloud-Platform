@@ -710,3 +710,32 @@ $env:PYTHONPATH="src"; python -m pc_system.cli run-segmentation `
 ```
 
 运行结果保存在 `reports/segmentation_runs/<asset_id>/<run_id>/`，质量结果是无黄金标注的运行质量代理指标，不代表真实准确率。
+
+### Phase 13B 黄金分割评估 / Golden Segmentation Evaluation
+
+Phase 13B imports versioned JSON/JSONL golden labels, measures point and instance accuracy, compares candidates with a baseline, and runs bounded deterministic parameter search.
+
+```powershell
+python -m pc_system.cli import-segmentation-benchmark `
+  --project-root workspace `
+  --manifest benchmark-source/benchmark.json
+
+python -m pc_system.cli evaluate-segmentation-run `
+  --project-root workspace `
+  --asset-id scan `
+  --run-id seg-run-001 `
+  --benchmark-id plant-golden-v1 `
+  --sample-id scan-001 `
+  --evaluation-id eval-001 `
+  --config evaluation-config.json
+
+python -m pc_system.cli search-segmentation-params `
+  --project-root workspace `
+  --asset-id scan `
+  --benchmark-id plant-golden-v1 `
+  --sample-id scan-001 `
+  --search-id search-001 `
+  --config search-config.json
+```
+
+Search recommendations are advisory and never modify production configuration. See `docs/phase13b-golden-segmentation-evaluation.md`.

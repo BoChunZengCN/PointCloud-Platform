@@ -37,6 +37,7 @@ def run_phase13_segmentation(
             "allow_fallback": allow_fallback,
             "distance_threshold": distance_threshold,
             "min_points": min_points,
+            "max_points": max_points,
         }
         if voxel_size is not None:
             config["voxel_size"] = voxel_size
