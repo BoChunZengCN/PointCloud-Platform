@@ -222,6 +222,8 @@ git commit -m "feat: add Phase 15 trusted principals"
 **Files:**
 - Create: `src/pc_system/model_matching_audit.py`
 - Create: `tests/test_phase15a_audit.py`
+- Modify: `docs/superpowers/specs/2026-07-22-phase15-model-library-retrieval-registration-design.md`
+- Modify: `docs/superpowers/plans/2026-07-22-phase15a-cad-model-library-audit.md`
 
 **Interfaces:**
 - Consumes: `Principal`, `ModelMatchingError`, `validate_identifier`, `write_json`.
@@ -416,7 +418,15 @@ def start_operation(project_root: Path, *, operation_id: str,
     return operation, False
 ```
 
-`_claim_idempotency_index` uses exclusive file creation. If another request wins the race, remove only the unstarted operation directory created by the losing request, then execute the existing-index replay/conflict branch. Implement an exclusive `.write.lock` with `os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)`. Always release it in `finally`. A concurrent append returns `operation_busy`; no event is partially written.
+`_claim_idempotency_index` writes canonical JSON to a unique temporary file in the same `reports/model_matching_idempotency` directory, flushes and `fsync`s it, then atomically publishes without replacement through a platform-verified hard-link adapter. Never use `os.replace` or an overwrite fallback. If another request wins the hard-link race, remove only the unstarted operation directory created by the losing request, then execute the existing-index replay/conflict branch. Always attempt temporary-name cleanup; a crash or cleanup error before publication leaves only an invisible partial temp, while one after publication leaves a complete final index plus a harmless temp hard link. POSIX must `fsync` the parent directory where supported. Windows guarantees process-crash safety only on supported local NTFS-like storage.
+
+Use the stable external lock path `reports/model_matching_locks/<operation_id>.lock`; it is outside the operation directory so cleanup and atomic rename cannot change lock identity. Lock files are persistent coordination artifacts and are never unlinked. Acquire a nonblocking OS kernel byte lock through a focused standard-library adapter (`msvcrt` on Windows, `fcntl` on POSIX). Kernel ownership alone proves liveness. Owner token, PID, purpose, and acquisition time are diagnostic metadata written only after acquisition. Always release the kernel lock and close its descriptor in `finally`, including when metadata write or `fsync` fails.
+
+Hold the indexed operation's kernel lock continuously across idempotency-index publication and the durable `operation.started` append. A concurrent append or live-initializer replay returns `operation_busy`; no event is partially written. A replayer may reconcile a no-event initializer only after acquiring that same indexed-operation kernel lock; elapsed time alone must never terminalize a live initializer. Validate the index fingerprint against the indexed operation and validate hash plus lifecycle semantics before append. Reject `operation.started` after any terminal event.
+
+The Task 2 regression set must cover a live delayed initializer, abandoned-owner restart, lock metadata write/fsync failure, stale and incomplete lock metadata, lifecycle rejection, separately audited integrity failures, non-`FileExistsError` index I/O cleanup/audit, index fingerprint mismatch, concurrent denied-marker recovery, and corrupt-marker isolation/reporting.
+
+Add a startup/write preflight suitable for reuse by later adapters. It verifies both nonblocking kernel-lock exclusion and hard-link no-replace behavior, caches only a successful result per project root and process, and returns stable `audit_persistence_error` without silent degradation when unavailable. Test winner races, crash before publication, crash after publication before temp cleanup, cleanup interruption, partial temp leftovers, complete destination visibility, unsupported hard links, capability-probe failure/retry, and no overwrite.
 
 - [ ] **Step 5: Implement completion, failure, reads, and verification**
 

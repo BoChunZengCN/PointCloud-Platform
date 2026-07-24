@@ -1,4 +1,5 @@
 import hashlib
+import errno
 import json
 import os
 import shutil
@@ -7,12 +8,22 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Iterator
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from pc_system.identifiers import validate_identifier
 from pc_system.json_io import write_json
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal
+
+
+_CAPABILITY_CACHE: set[tuple[int, str]] = set()
+_CAPABILITY_CACHE_LOCK = Lock()
 
 
 def utc_now() -> str:
@@ -34,6 +45,16 @@ def _idempotency_path(project_root: Path, idempotency_key: str) -> Path:
     )
 
 
+def _operation_lock_path(project_root: Path, operation_id: str) -> Path:
+    operation_id = validate_identifier(operation_id, "operation_id")
+    return (
+        Path(project_root)
+        / "reports"
+        / "model_matching_locks"
+        / f"{operation_id}.lock"
+    )
+
+
 def _canonical_hash(payload: dict) -> str:
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -47,9 +68,35 @@ def _event_hash(event: dict) -> str:
     )
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError as exc:
+            if exc.errno not in {
+                errno.EBADF,
+                errno.EINVAL,
+                getattr(errno, "ENOTSUP", errno.EINVAL),
+            }:
+                raise
+    finally:
+        os.close(descriptor)
+
+
+def _publish_no_replace(source: Path, destination: Path) -> None:
+    os.link(source, destination)
+    _fsync_directory(destination.parent)
+
+
 def _claim_idempotency_index(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    temporary_path = path.parent / f".tmp-{uuid.uuid4().hex}"
+    descriptor = os.open(
+        temporary_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(
@@ -61,37 +108,185 @@ def _claim_idempotency_index(path: Path, payload: dict) -> None:
             )
             handle.flush()
             os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+        _publish_no_replace(temporary_path, path)
+    finally:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            # A published destination is already complete and authoritative;
+            # an invisible temporary hard link is safe for later cleanup.
+            pass
+
+
+def _acquire_kernel_byte_lock(descriptor: int) -> None:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if os.name == "nt":
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _release_kernel_byte_lock(descriptor: int) -> None:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if os.name == "nt":
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        if written <= 0:
+            raise OSError("Audit coordination metadata write made no progress.")
+        offset += written
 
 
 @contextmanager
-def _operation_write_lock(root: Path) -> Iterator[None]:
-    lock_path = root / ".write.lock"
-    owner_token = uuid.uuid4().hex
+def _kernel_file_lock(
+    lock_path: Path,
+    *,
+    owner_token: str | None = None,
+    purpose: str,
+) -> Iterator[dict]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor: int | None = None
+    acquired = False
+    yielded = False
+    metadata = {
+        "schema_version": "1.0",
+        "owner_token": owner_token or uuid.uuid4().hex,
+        "pid": os.getpid(),
+        "purpose": purpose,
+        "acquired_at": utc_now(),
+    }
     try:
-        descriptor = os.open(
-            lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        )
-    except FileExistsError as exc:
-        raise ModelMatchingError(
-            "operation_busy", "Operation is currently being updated."
-        ) from exc
-    try:
-        os.write(descriptor, owner_token.encode("ascii"))
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    try:
-        yield
-    finally:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+        if os.fstat(descriptor).st_size == 0:
+            _write_all(descriptor, b"\0")
+            os.fsync(descriptor)
         try:
-            recorded_owner = lock_path.read_text(encoding="ascii")
-        except FileNotFoundError:
-            recorded_owner = None
-        if recorded_owner == owner_token:
-            lock_path.unlink(missing_ok=True)
+            _acquire_kernel_byte_lock(descriptor)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise ModelMatchingError(
+                    "operation_busy",
+                    "Operation is currently being updated.",
+                ) from exc
+            raise
+        acquired = True
+        serialized = json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        _write_all(descriptor, serialized)
+        os.ftruncate(descriptor, len(serialized))
+        os.fsync(descriptor)
+        yielded = True
+        yield metadata
+    except ModelMatchingError:
+        raise
+    except OSError as exc:
+        if yielded:
+            raise
+        raise ModelMatchingError(
+            "audit_persistence_error",
+            "Audit coordination storage is unavailable.",
+        ) from exc
+    finally:
+        if descriptor is not None:
+            if acquired:
+                try:
+                    _release_kernel_byte_lock(descriptor)
+                except OSError:
+                    pass
+            os.close(descriptor)
+
+
+def _probe_audit_storage_capabilities(project_root: Path) -> None:
+    probe_root = (
+        Path(project_root)
+        / "reports"
+        / ".model_matching_capability_probe"
+    )
+    probe_root.mkdir(parents=True, exist_ok=True)
+    probe_id = uuid.uuid4().hex
+    lock_path = probe_root / f"{probe_id}.lock"
+    source_a = probe_root / f"{probe_id}.a"
+    source_b = probe_root / f"{probe_id}.b"
+    destination = probe_root / f"{probe_id}.destination"
+    try:
+        with _kernel_file_lock(lock_path, purpose="capability_probe"):
+            with _busy_probe(lock_path):
+                pass
+        for source, payload in (
+            (source_a, b"first"),
+            (source_b, b"second"),
+        ):
+            with source.open("wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        _publish_no_replace(source_a, destination)
+        try:
+            _publish_no_replace(source_b, destination)
+        except FileExistsError:
+            pass
+        else:
+            raise OSError("Hard-link publication overwrote an existing path.")
+        if destination.read_bytes() != b"first":
+            raise OSError("Hard-link no-replace verification failed.")
+    finally:
+        for path in (destination, source_b, source_a, lock_path):
+            path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _busy_probe(lock_path: Path) -> Iterator[None]:
+    try:
+        with _kernel_file_lock(lock_path, purpose="capability_probe_contender"):
+            raise OSError("Kernel lock allowed a concurrent owner.")
+    except ModelMatchingError as exc:
+        if exc.code != "operation_busy":
+            raise
+    yield
+
+
+def _require_audit_storage_capabilities(project_root: Path) -> None:
+    cache_key = (os.getpid(), str(Path(project_root).resolve()))
+    with _CAPABILITY_CACHE_LOCK:
+        if cache_key in _CAPABILITY_CACHE:
+            return
+    try:
+        _probe_audit_storage_capabilities(project_root)
+    except Exception as exc:
+        raise ModelMatchingError(
+            "audit_persistence_error",
+            "Audit storage lacks required kernel-lock or no-replace semantics.",
+        ) from exc
+    with _CAPABILITY_CACHE_LOCK:
+        _CAPABILITY_CACHE.add(cache_key)
+
+
+@contextmanager
+def _operation_write_lock(
+    project_root: Path,
+    operation_id: str,
+    *,
+    owner_token: str | None = None,
+    purpose: str = "mutation",
+) -> Iterator[dict]:
+    _require_audit_storage_capabilities(project_root)
+    with _kernel_file_lock(
+        _operation_lock_path(project_root, operation_id),
+        owner_token=owner_token,
+        purpose=purpose,
+    ) as metadata:
+        yield metadata
 
 
 def load_operation(project_root: Path, operation_id: str) -> dict:
@@ -121,6 +316,62 @@ def _require_valid_operation_chain(events: list[dict]) -> None:
         raise ModelMatchingError(
             "audit_integrity_error",
             "Operation audit chain integrity verification failed.",
+        )
+
+
+def _lifecycle_is_valid(events: list[dict]) -> bool:
+    if not events:
+        return True
+    first_type = events[0].get("event_type")
+    if first_type not in {"operation.started", "operation.start_failed"}:
+        return False
+    terminal = first_type == "operation.start_failed"
+    for event in events[1:]:
+        event_type = event.get("event_type")
+        if event_type in {"operation.started", "operation.start_failed"}:
+            return False
+        if terminal:
+            if event_type not in {
+                "operation.replayed",
+                "operation.idempotency_conflict",
+            }:
+                return False
+            continue
+        if event_type in {"operation.completed", "operation.failed"}:
+            terminal = True
+    return True
+
+
+def _require_event_transition_allowed(
+    events: list[dict], event_type: str
+) -> None:
+    event_types = [event["event_type"] for event in events]
+    if not events:
+        if event_type not in {"operation.started", "operation.start_failed"}:
+            raise ModelMatchingError(
+                "operation_immutable",
+                "The first operation event must establish its start outcome.",
+            )
+        return
+    if event_type in {"operation.started", "operation.start_failed"}:
+        raise ModelMatchingError(
+            "operation_immutable",
+            "An operation start outcome can be recorded only once.",
+        )
+    if any(
+        terminal in event_types
+        for terminal in {
+            "operation.start_failed",
+            "operation.completed",
+            "operation.failed",
+        }
+    ) and event_type not in {
+        "operation.replayed",
+        "operation.idempotency_conflict",
+    }:
+        raise ModelMatchingError(
+            "operation_immutable",
+            "Completed and failed operations are immutable.",
         )
 
 
@@ -178,6 +429,7 @@ def _append_operation_event_locked(
 ) -> dict:
     events = read_operation_events(project_root, operation_id)
     _require_valid_operation_chain(events)
+    _require_event_transition_allowed(events, event_type)
     operation = _read_operation_document(project_root, operation_id)
     actor_id = principal.actor_id if principal else operation["actor_id"]
     roles = sorted(principal.roles) if principal else operation["roles"]
@@ -218,15 +470,19 @@ def append_operation_event(
     details: dict,
 ) -> dict:
     operation_id = validate_identifier(operation_id, "operation_id")
-    root = _operation_dir(project_root, operation_id)
     try:
-        with _operation_write_lock(root):
+        with _operation_write_lock(project_root, operation_id):
             return _append_operation_event_locked(
                 project_root, operation_id, event_type, details
             )
     except ModelMatchingError as exc:
-        if exc.code == "operation_busy":
-            _record_failed_mutation(
+        if exc.code in {
+            "operation_busy",
+            "operation_immutable",
+            "audit_integrity_error",
+            "audit_persistence_error",
+        }:
+            _record_failed_mutation_safely(
                 project_root,
                 target_operation_id=operation_id,
                 attempted_mutation=event_type,
@@ -276,6 +532,29 @@ def _record_failed_mutation(
     )
 
 
+def _record_failed_mutation_safely(
+    project_root: Path,
+    *,
+    target_operation_id: str,
+    attempted_mutation: str,
+    code: str,
+    message: str,
+) -> None:
+    try:
+        _record_failed_mutation(
+            project_root,
+            target_operation_id=target_operation_id,
+            attempted_mutation=attempted_mutation,
+            code=code,
+            message=message,
+        )
+    except Exception:
+        # Preserve the stable primary failure when audit storage itself is
+        # unavailable. A successful capability probe is cached only after it
+        # completes, so a transient failure can still be audited here.
+        pass
+
+
 def _append_event_with_lock(
     project_root: Path,
     operation_id: str,
@@ -284,8 +563,7 @@ def _append_event_with_lock(
     *,
     principal: Principal | None = None,
 ) -> dict:
-    root = _operation_dir(project_root, operation_id)
-    with _operation_write_lock(root):
+    with _operation_write_lock(project_root, operation_id):
         return _append_operation_event_locked(
             project_root,
             operation_id,
@@ -306,36 +584,32 @@ def _replay_or_reject(
     request_fingerprint: str,
 ) -> tuple[dict, bool]:
     deadline = time.monotonic() + 2
-    indexed_operation_id: str | None = None
-    while True:
-        try:
-            index = json.loads(idempotency_path.read_text(encoding="utf-8"))
-            indexed_operation_id = index["operation_id"]
-            existing = load_operation(project_root, indexed_operation_id)
-            events = read_operation_events(project_root, existing["operation_id"])
-            if events and events[0]["event_type"] in {
-                "operation.started",
-                "operation.start_failed",
-            }:
-                break
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
-        if time.monotonic() >= deadline:
-            if indexed_operation_id is None:
-                raise ModelMatchingError(
-                    "operation_busy",
-                    "Operation idempotency claim is incomplete.",
-                )
-            _record_start_failure(
-                project_root,
-                indexed_operation_id,
-                code="operation_start_interrupted",
-                message=(
-                    "Operation start was interrupted before its first audit event."
-                ),
+    index = _read_idempotency_index(idempotency_path)
+    existing = _load_indexed_operation(project_root, index)
+    events = read_operation_events(project_root, existing["operation_id"])
+    if not events:
+        with _operation_write_lock(
+            project_root,
+            existing["operation_id"],
+            purpose="initializer_recovery",
+        ):
+            index = _read_idempotency_index(idempotency_path)
+            existing = _load_indexed_operation(project_root, index)
+            events = read_operation_events(
+                project_root, existing["operation_id"]
             )
-            continue
-        time.sleep(0.005)
+            _require_valid_operation_chain(events)
+            if not events:
+                _record_start_failure_locked(
+                    project_root,
+                    existing["operation_id"],
+                    code="operation_start_interrupted",
+                    message=(
+                        "Operation start was interrupted before its first "
+                        "audit event."
+                    ),
+                )
+        existing = load_operation(project_root, existing["operation_id"])
 
     if (existing["operation_type"], existing["request_fingerprint"]) != (
         operation_type,
@@ -377,6 +651,70 @@ def _replay_or_reject(
     return existing, True
 
 
+def _read_idempotency_index(path: Path) -> dict:
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ModelMatchingError(
+            "audit_persistence_error",
+            "Operation idempotency index could not be read.",
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation idempotency index is not valid JSON.",
+        ) from exc
+    if not isinstance(index, dict):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation idempotency index must be an object.",
+        )
+    for field in {
+        "operation_id",
+        "request_fingerprint",
+        "initializer_owner_token",
+    }:
+        if not isinstance(index.get(field), str) or not index[field]:
+            raise ModelMatchingError(
+                "audit_integrity_error",
+                "Operation idempotency index is incomplete.",
+            )
+    return index
+
+
+def _load_indexed_operation(project_root: Path, index: dict) -> dict:
+    try:
+        indexed_operation_id = validate_identifier(
+            index["operation_id"], "operation_id"
+        )
+        existing = load_operation(project_root, indexed_operation_id)
+    except ModelMatchingError:
+        raise
+    except (OSError, json.JSONDecodeError, KeyError) as exc:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation idempotency index references an invalid operation.",
+        ) from exc
+    _require_index_operation_binding(index, existing, indexed_operation_id)
+    return existing
+
+
+def _require_index_operation_binding(
+    index: dict, operation: dict, indexed_operation_id: str
+) -> None:
+    if (
+        operation.get("operation_id") != indexed_operation_id
+        or operation.get("request_fingerprint")
+        != index["request_fingerprint"]
+        or operation.get("initializer_owner_token")
+        != index["initializer_owner_token"]
+    ):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation idempotency index does not match its operation.",
+        )
+
+
 def _append_idempotency_event(
     project_root: Path,
     operation_id: str,
@@ -408,7 +746,7 @@ def _discard_unstarted_operation(
 ) -> None:
     root = _operation_dir(project_root, operation_id)
     discarded = root.with_name(f".{root.name}.discarded-{uuid.uuid4().hex}")
-    with _operation_write_lock(root):
+    with _operation_write_lock(project_root, operation_id):
         operation = _read_operation_document(project_root, operation_id)
         events = read_operation_events(project_root, operation_id)
         if (
@@ -424,12 +762,13 @@ def _discard_unstarted_operation(
     shutil.rmtree(discarded)
 
 
-def _discard_empty_operation_root(root: Path) -> None:
+def _discard_empty_operation_root(
+    project_root: Path, operation_id: str
+) -> None:
+    root = _operation_dir(project_root, operation_id)
     discarded = root.with_name(f".{root.name}.discarded-{uuid.uuid4().hex}")
-    with _operation_write_lock(root):
-        remaining = {
-            path.name for path in root.iterdir() if path.name != ".write.lock"
-        }
+    with _operation_write_lock(project_root, operation_id):
+        remaining = {path.name for path in root.iterdir()}
         if remaining:
             raise ModelMatchingError(
                 "operation_immutable",
@@ -459,33 +798,45 @@ def _record_start_failure(
     code: str,
     message: str,
 ) -> bool:
-    root = _operation_dir(project_root, operation_id)
-    with _operation_write_lock(root):
-        events = read_operation_events(project_root, operation_id)
-        _require_valid_operation_chain(events)
-        if any(event["event_type"] == "operation.started" for event in events):
-            return True
-        if any(event["event_type"] == "operation.start_failed" for event in events):
-            return False
-        failure = {
-            "code": code,
-            "message": message,
-        }
-        event = _append_operation_event_locked(
+    with _operation_write_lock(project_root, operation_id):
+        return _record_start_failure_locked(
             project_root,
             operation_id,
-            "operation.start_failed",
-            failure,
+            code=code,
+            message=message,
         )
-        operation = _read_operation_document(project_root, operation_id)
-        failed = {
-            **operation,
-            "status": "failed",
-            "completed_at": event["timestamp"],
-            "result": None,
-            "error": failure,
-        }
-        write_json(failed, root / "operation.json")
+
+
+def _record_start_failure_locked(
+    project_root: Path,
+    operation_id: str,
+    *,
+    code: str,
+    message: str,
+) -> bool:
+    root = _operation_dir(project_root, operation_id)
+    events = read_operation_events(project_root, operation_id)
+    _require_valid_operation_chain(events)
+    if any(event["event_type"] == "operation.started" for event in events):
+        return True
+    if any(event["event_type"] == "operation.start_failed" for event in events):
+        return False
+    failure = {"code": code, "message": message}
+    event = _append_operation_event_locked(
+        project_root,
+        operation_id,
+        "operation.start_failed",
+        failure,
+    )
+    operation = _read_operation_document(project_root, operation_id)
+    failed = {
+        **operation,
+        "status": "failed",
+        "completed_at": event["timestamp"],
+        "result": None,
+        "error": failure,
+    }
+    write_json(failed, root / "operation.json")
     return False
 
 
@@ -498,10 +849,12 @@ def _start_operation(
     request_id: str,
     idempotency_key: str,
     request_payload: dict,
+    _recover_start_failure: bool = True,
 ) -> tuple[dict, bool]:
     operation_id = validate_identifier(operation_id, "operation_id")
     request_id = validate_identifier(request_id, "request_id")
     idempotency_key = validate_identifier(idempotency_key, "idempotency_key")
+    _require_audit_storage_capabilities(project_root)
     request_fingerprint = _canonical_hash(request_payload)
     idempotency_path = _idempotency_path(project_root, idempotency_key)
     replay_arguments = {
@@ -522,6 +875,7 @@ def _start_operation(
         raise ModelMatchingError(
             "operation_exists", "Operation ID already exists."
         ) from exc
+    initializer_owner_token = uuid.uuid4().hex
     operation = {
         "schema_version": "1.0",
         "operation_id": operation_id,
@@ -535,6 +889,7 @@ def _start_operation(
             idempotency_key.encode("utf-8")
         ).hexdigest(),
         "request_fingerprint": request_fingerprint,
+        "initializer_owner_token": initializer_owner_token,
         "started_at": utc_now(),
         "completed_at": None,
         "result": None,
@@ -556,38 +911,65 @@ def _start_operation(
                     "Operation projection could not be persisted safely.",
                 ) from read_exc
         else:
-            _discard_empty_operation_root(root)
+            _discard_empty_operation_root(project_root, operation_id)
             raise ModelMatchingError(
                 "operation_persistence_failed",
                 "Operation projection could not be persisted safely.",
             ) from exc
+    claim_won = False
     try:
-        _claim_idempotency_index(
-            idempotency_path,
-            {
-                "operation_id": operation_id,
-                "request_fingerprint": request_fingerprint,
-            },
-        )
-    except FileExistsError:
+        with _operation_write_lock(
+            project_root,
+            operation_id,
+            owner_token=initializer_owner_token,
+            purpose="initializer",
+        ):
+            try:
+                _claim_idempotency_index(
+                    idempotency_path,
+                    {
+                        "operation_id": operation_id,
+                        "request_fingerprint": request_fingerprint,
+                        "initializer_owner_token": initializer_owner_token,
+                    },
+                )
+                claim_won = True
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise ModelMatchingError(
+                    "audit_persistence_error",
+                    "Operation idempotency index could not be published.",
+                ) from exc
+            if claim_won:
+                _append_operation_event_locked(
+                    project_root,
+                    operation_id,
+                    "operation.started",
+                    {
+                        "request_id": request_id,
+                        "request_fingerprint": request_fingerprint,
+                    },
+                )
+    except BaseException as exc:
+        if not claim_won:
+            try:
+                _discard_unstarted_operation(
+                    project_root, operation_id, request_fingerprint
+                )
+            except Exception:
+                pass
+            raise
+        if _recover_start_failure and _recover_started_event_failure(
+            project_root, operation_id, exc
+        ):
+            return operation, False
+        raise
+    if not claim_won:
         _discard_unstarted_operation(
             project_root, operation_id, request_fingerprint
         )
         return _replay_or_reject(project_root, **replay_arguments)
-    try:
-        _append_event_with_lock(
-            project_root,
-            operation_id,
-            "operation.started",
-            {
-                "request_id": request_id,
-                "request_fingerprint": request_fingerprint,
-            },
-        )
-    except BaseException as exc:
-        if _recover_started_event_failure(project_root, operation_id, exc):
-            return operation, False
-        raise
     return operation, False
 
 
@@ -617,8 +999,10 @@ def start_operation(
             "operation_immutable",
             "operation_exists",
             "operation_persistence_failed",
+            "audit_integrity_error",
+            "audit_persistence_error",
         }:
-            _record_failed_mutation(
+            _record_failed_mutation_safely(
                 project_root,
                 target_operation_id=operation_id,
                 attempted_mutation="operation.started",
@@ -645,7 +1029,7 @@ def complete_operation(
     operation_id = validate_identifier(operation_id, "operation_id")
     root = _operation_dir(project_root, operation_id)
     try:
-        with _operation_write_lock(root):
+        with _operation_write_lock(project_root, operation_id):
             operation = load_operation(project_root, operation_id)
             _require_running(operation)
             event = _append_operation_event_locked(
@@ -666,8 +1050,10 @@ def complete_operation(
         if _audit_rejection and exc.code in {
             "operation_busy",
             "operation_immutable",
+            "audit_integrity_error",
+            "audit_persistence_error",
         }:
-            _record_failed_mutation(
+            _record_failed_mutation_safely(
                 project_root,
                 target_operation_id=operation_id,
                 attempted_mutation="operation.completed",
@@ -689,7 +1075,7 @@ def fail_operation(
     operation_id = validate_identifier(operation_id, "operation_id")
     root = _operation_dir(project_root, operation_id)
     try:
-        with _operation_write_lock(root):
+        with _operation_write_lock(project_root, operation_id):
             operation = load_operation(project_root, operation_id)
             _require_running(operation)
             error = {"code": code, "message": message}
@@ -708,8 +1094,10 @@ def fail_operation(
         if _audit_rejection and exc.code in {
             "operation_busy",
             "operation_immutable",
+            "audit_integrity_error",
+            "audit_persistence_error",
         }:
-            _record_failed_mutation(
+            _record_failed_mutation_safely(
                 project_root,
                 target_operation_id=operation_id,
                 attempted_mutation="operation.failed",
@@ -730,7 +1118,7 @@ def verify_operation_chain(events: list[dict]) -> bool:
         ):
             return False
         previous_hash = event["event_hash"]
-    return True
+    return _lifecycle_is_valid(events)
 
 
 def _denied_recovery_path(project_root: Path, operation_id: str) -> Path:
@@ -739,6 +1127,16 @@ def _denied_recovery_path(project_root: Path, operation_id: str) -> Path:
         / "reports"
         / "model_matching_denied_recovery"
         / f"{validate_identifier(operation_id, 'operation_id')}.json"
+    )
+
+
+def _denied_marker_lock_path(project_root: Path, marker_name: str) -> Path:
+    marker_hash = hashlib.sha256(marker_name.encode("utf-8")).hexdigest()
+    return (
+        Path(project_root)
+        / "reports"
+        / "model_matching_denied_recovery_locks"
+        / f"{marker_hash}.lock"
     )
 
 
@@ -759,7 +1157,7 @@ def _ensure_denied_initial_operation(
     }
     if not operation_path.exists():
         if root.exists():
-            _discard_empty_operation_root(root)
+            _discard_empty_operation_root(project_root, operation_id)
         try:
             _start_operation(
                 project_root,
@@ -769,36 +1167,59 @@ def _ensure_denied_initial_operation(
                 request_id=recovery["request_id"],
                 idempotency_key=operation_id,
                 request_payload=request_payload,
+                _recover_start_failure=False,
             )
         except Exception:
             if not operation_path.exists():
                 raise
-
+    expected_fingerprint = _canonical_hash(request_payload)
     idempotency_path = _idempotency_path(project_root, operation_id)
-    if not idempotency_path.exists():
+    with _operation_write_lock(
+        project_root, operation_id, purpose="denied_initializer_recovery"
+    ):
         operation = _read_operation_document(project_root, operation_id)
-        try:
-            _claim_idempotency_index(
-                idempotency_path,
+        if (
+            operation.get("operation_type") != "security.permission_denied"
+            or operation.get("request_id") != recovery["request_id"]
+            or operation.get("request_fingerprint") != expected_fingerprint
+            or not isinstance(operation.get("initializer_owner_token"), str)
+        ):
+            raise ModelMatchingError(
+                "audit_integrity_error",
+                "Denied recovery operation does not match its marker.",
+            )
+        if idempotency_path.exists():
+            index = _read_idempotency_index(idempotency_path)
+            _require_index_operation_binding(index, operation, operation_id)
+        else:
+            try:
+                _claim_idempotency_index(
+                    idempotency_path,
+                    {
+                        "operation_id": operation_id,
+                        "request_fingerprint": expected_fingerprint,
+                        "initializer_owner_token": operation[
+                            "initializer_owner_token"
+                        ],
+                    },
+                )
+            except FileExistsError:
+                index = _read_idempotency_index(idempotency_path)
+                _require_index_operation_binding(
+                    index, operation, operation_id
+                )
+        events = read_operation_events(project_root, operation_id)
+        _require_valid_operation_chain(events)
+        if not events:
+            _append_operation_event_locked(
+                project_root,
+                operation_id,
+                "operation.started",
                 {
-                    "operation_id": operation_id,
-                    "request_fingerprint": operation["request_fingerprint"],
+                    "request_id": recovery["request_id"],
+                    "request_fingerprint": expected_fingerprint,
                 },
             )
-        except FileExistsError:
-            pass
-    events = read_operation_events(project_root, operation_id)
-    _require_valid_operation_chain(events)
-    if not events:
-        _record_start_failure(
-            project_root,
-            operation_id,
-            code="operation_start_interrupted",
-            message=(
-                "Denied operation start was interrupted before its first "
-                "audit event."
-            ),
-        )
 
 
 def _ensure_denied_operation(
@@ -808,7 +1229,7 @@ def _ensure_denied_operation(
 ) -> None:
     root = _operation_dir(project_root, operation_id)
     principal = Principal("system-api", frozenset(), "system")
-    with _operation_write_lock(root):
+    with _operation_write_lock(project_root, operation_id):
         events = read_operation_events(project_root, operation_id)
         _require_valid_operation_chain(events)
         if not any(
@@ -870,6 +1291,7 @@ def _recover_denied_entry(
 
 
 def recover_denied_operations(project_root: Path) -> list[str]:
+    _require_audit_storage_capabilities(project_root)
     recovery_root = (
         Path(project_root) / "reports" / "model_matching_denied_recovery"
     )
@@ -877,19 +1299,112 @@ def recover_denied_operations(project_root: Path) -> list[str]:
         return []
     recovered = []
     for recovery_path in sorted(recovery_root.glob("*.json")):
+        try:
+            with _kernel_file_lock(
+                _denied_marker_lock_path(project_root, recovery_path.name),
+                purpose="denied_recovery_claim",
+            ):
+                if not recovery_path.exists():
+                    continue
+                try:
+                    recovery = _read_denied_recovery_marker(recovery_path)
+                except ModelMatchingError as exc:
+                    _record_denied_recovery_failure(
+                        project_root, recovery_path, exc.code, str(exc)
+                    )
+                    continue
+                try:
+                    _recover_denied_entry(project_root, recovery)
+                except Exception as exc:
+                    _record_denied_recovery_failure(
+                        project_root,
+                        recovery_path,
+                        (
+                            exc.code
+                            if isinstance(exc, ModelMatchingError)
+                            else "audit_persistence_error"
+                        ),
+                        str(exc),
+                    )
+                    continue
+                recovery_path.unlink(missing_ok=True)
+                recovered.append(recovery["operation_id"])
+        except ModelMatchingError as exc:
+            if exc.code != "operation_busy":
+                raise
+    return recovered
+
+
+def _read_denied_recovery_marker(recovery_path: Path) -> dict:
+    try:
         recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Denied recovery marker is unreadable or invalid.",
+        ) from exc
+    if not isinstance(recovery, dict):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Denied recovery marker must be an object.",
+        )
+    try:
         operation_id = validate_identifier(
             recovery["operation_id"], "operation_id"
         )
-        if recovery_path.stem != operation_id:
-            raise ModelMatchingError(
-                "audit_integrity_error",
-                "Denied recovery index does not match its operation ID.",
-            )
-        _recover_denied_entry(project_root, recovery)
-        recovery_path.unlink()
-        recovered.append(operation_id)
-    return recovered
+        for field in {"request_id", "route", "reason", "token_fingerprint"}:
+            if not isinstance(recovery[field], str):
+                raise KeyError(field)
+    except (KeyError, ModelMatchingError) as exc:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Denied recovery marker is incomplete.",
+        ) from exc
+    if recovery_path.stem != operation_id:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Denied recovery index does not match its operation ID.",
+        )
+    return recovery
+
+
+def _record_denied_recovery_failure(
+    project_root: Path,
+    recovery_path: Path,
+    code: str,
+    message: str,
+) -> None:
+    try:
+        raw = recovery_path.read_bytes()
+    except OSError:
+        raw = recovery_path.name.encode("utf-8")
+    fingerprint = hashlib.sha256(raw).hexdigest()
+    report_path = (
+        recovery_path.parent
+        / "errors"
+        / f"{recovery_path.stem}-{fingerprint[:16]}.json"
+    )
+    report = {
+        "schema_version": "1.0",
+        "marker_name": recovery_path.name,
+        "marker_fingerprint": fingerprint,
+        "code": code,
+        "message": message,
+        "recorded_at": utc_now(),
+    }
+    try:
+        _claim_idempotency_index(report_path, report)
+    except FileExistsError:
+        return
+    except OSError:
+        return
+    _record_failed_mutation_safely(
+        project_root,
+        target_operation_id=recovery_path.stem,
+        attempted_mutation="security.permission_denied.recovery",
+        code=code,
+        message=message,
+    )
 
 
 def record_denied_operation(
@@ -900,6 +1415,7 @@ def record_denied_operation(
     token: str | None,
     reason: str,
 ) -> str:
+    _require_audit_storage_capabilities(project_root)
     suffix = str(uuid.uuid4())
     operation_id = f"denied-{suffix}"
     token_fingerprint = hashlib.sha256((token or "").encode("utf-8")).hexdigest()
@@ -912,7 +1428,17 @@ def record_denied_operation(
         "token_fingerprint": token_fingerprint,
     }
     recovery_path = _denied_recovery_path(project_root, operation_id)
-    _claim_idempotency_index(recovery_path, recovery)
-    _recover_denied_entry(project_root, recovery)
-    recovery_path.unlink()
+    with _kernel_file_lock(
+        _denied_marker_lock_path(project_root, recovery_path.name),
+        purpose="denied_recovery_claim",
+    ):
+        try:
+            _claim_idempotency_index(recovery_path, recovery)
+        except OSError as exc:
+            raise ModelMatchingError(
+                "audit_persistence_error",
+                "Denied recovery marker could not be published.",
+            ) from exc
+        _recover_denied_entry(project_root, recovery)
+        recovery_path.unlink(missing_ok=True)
     return operation_id
