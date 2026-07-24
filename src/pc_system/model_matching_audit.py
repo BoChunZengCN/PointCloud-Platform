@@ -86,7 +86,13 @@ def _operation_write_lock(root: Path) -> Iterator[None]:
 
 def load_operation(project_root: Path, operation_id: str) -> dict:
     path = _operation_dir(project_root, operation_id) / "operation.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    operation = json.loads(path.read_text(encoding="utf-8"))
+    projected = _project_operation(
+        operation, read_operation_events(project_root, operation_id)
+    )
+    if projected != operation:
+        write_json(projected, path)
+    return projected
 
 
 def read_operation_events(project_root: Path, operation_id: str) -> list[dict]:
@@ -100,14 +106,65 @@ def read_operation_events(project_root: Path, operation_id: str) -> list[dict]:
     ]
 
 
+def _project_operation(operation: dict, events: list[dict]) -> dict:
+    terminal = next(
+        (
+            event
+            for event in events
+            if event["event_type"] in {"operation.completed", "operation.failed"}
+        ),
+        None,
+    )
+    if terminal is None:
+        terminal = next(
+            (
+                event
+                for event in events
+                if event["event_type"] == "operation.start_failed"
+            ),
+            None,
+        )
+    if terminal is None:
+        return operation
+    if terminal["event_type"] == "operation.completed":
+        return {
+            **operation,
+            "status": "completed",
+            "completed_at": terminal["timestamp"],
+            "result": dict(terminal["details"]["result"]),
+            "error": None,
+        }
+    return {
+        **operation,
+        "status": "failed",
+        "completed_at": terminal["timestamp"],
+        "result": None,
+        "error": {
+            "code": terminal["details"]["code"],
+            "message": terminal["details"]["message"],
+        },
+    }
+
+
+def _read_operation_document(project_root: Path, operation_id: str) -> dict:
+    path = _operation_dir(project_root, operation_id) / "operation.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _append_operation_event_locked(
     project_root: Path,
     operation_id: str,
     event_type: str,
     details: dict,
+    principal: Principal | None = None,
 ) -> dict:
     events = read_operation_events(project_root, operation_id)
-    operation = load_operation(project_root, operation_id)
+    operation = _read_operation_document(project_root, operation_id)
+    actor_id = principal.actor_id if principal else operation["actor_id"]
+    roles = sorted(principal.roles) if principal else operation["roles"]
+    principal_source = (
+        principal.source if principal else operation["principal_source"]
+    )
     sequence = len(events) + 1
     event = {
         "schema_version": "1.0",
@@ -116,9 +173,9 @@ def _append_operation_event_locked(
         "sequence": sequence,
         "event_type": event_type,
         "timestamp": utc_now(),
-        "actor_id": operation["actor_id"],
-        "roles": operation["roles"],
-        "principal_source": operation["principal_source"],
+        "actor_id": actor_id,
+        "roles": roles,
+        "principal_source": principal_source,
         "previous_event_hash": events[-1]["event_hash"] if events else None,
         "details": dict(details),
     }
@@ -143,9 +200,79 @@ def append_operation_event(
 ) -> dict:
     operation_id = validate_identifier(operation_id, "operation_id")
     root = _operation_dir(project_root, operation_id)
+    try:
+        with _operation_write_lock(root):
+            return _append_operation_event_locked(
+                project_root, operation_id, event_type, details
+            )
+    except ModelMatchingError as exc:
+        if exc.code == "operation_busy":
+            _record_failed_mutation(
+                project_root,
+                target_operation_id=operation_id,
+                attempted_mutation=event_type,
+                code=exc.code,
+                message=str(exc),
+            )
+        raise
+
+
+def _record_failed_mutation(
+    project_root: Path,
+    *,
+    target_operation_id: str,
+    attempted_mutation: str,
+    code: str,
+    message: str,
+) -> None:
+    audit_id = f"audit-{uuid.uuid4()}"
+    principal = Principal("system-audit", frozenset(), "system")
+    details = {
+        "target_operation_id": target_operation_id,
+        "attempted_mutation": attempted_mutation,
+        "code": code,
+        "message": message,
+    }
+    _start_operation(
+        project_root,
+        operation_id=audit_id,
+        operation_type="audit.mutation_failure",
+        principal=principal,
+        request_id=audit_id,
+        idempotency_key=audit_id,
+        request_payload=details,
+    )
+    append_operation_event(
+        project_root,
+        audit_id,
+        "operation.mutation_rejected",
+        details,
+    )
+    fail_operation(
+        project_root,
+        audit_id,
+        code,
+        message,
+        _audit_rejection=False,
+    )
+
+
+def _append_event_with_lock(
+    project_root: Path,
+    operation_id: str,
+    event_type: str,
+    details: dict,
+    *,
+    principal: Principal | None = None,
+) -> dict:
+    root = _operation_dir(project_root, operation_id)
     with _operation_write_lock(root):
         return _append_operation_event_locked(
-            project_root, operation_id, event_type, details
+            project_root,
+            operation_id,
+            event_type,
+            details,
+            principal,
         )
 
 
@@ -165,7 +292,10 @@ def _replay_or_reject(
             index = json.loads(idempotency_path.read_text(encoding="utf-8"))
             existing = load_operation(project_root, index["operation_id"])
             events = read_operation_events(project_root, existing["operation_id"])
-            if events and events[0]["event_type"] == "operation.started":
+            if events and events[0]["event_type"] in {
+                "operation.started",
+                "operation.start_failed",
+            }:
                 break
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             pass
@@ -187,8 +317,12 @@ def _replay_or_reject(
                 "requested_operation_id": operation_id,
                 "request_id": request_id,
                 "request_fingerprint": request_fingerprint,
+                "actor_id": principal.actor_id,
+                "roles": sorted(principal.roles),
+                "principal_source": principal.source,
             },
             deadline,
+            principal,
         )
         raise ModelMatchingError(
             "idempotency_conflict",
@@ -202,8 +336,11 @@ def _replay_or_reject(
             "requested_operation_id": operation_id,
             "request_id": request_id,
             "actor_id": principal.actor_id,
+            "roles": sorted(principal.roles),
+            "principal_source": principal.source,
         },
         deadline,
+        principal,
     )
     return existing, True
 
@@ -214,11 +351,16 @@ def _append_idempotency_event(
     event_type: str,
     details: dict,
     deadline: float,
+    principal: Principal,
 ) -> None:
     while True:
         try:
-            append_operation_event(
-                project_root, operation_id, event_type, details
+            _append_event_with_lock(
+                project_root,
+                operation_id,
+                event_type,
+                details,
+                principal=principal,
             )
             return
         except ModelMatchingError as exc:
@@ -227,7 +369,62 @@ def _append_idempotency_event(
         time.sleep(0.005)
 
 
-def start_operation(
+def _discard_unstarted_operation(
+    project_root: Path,
+    operation_id: str,
+    request_fingerprint: str,
+) -> None:
+    root = _operation_dir(project_root, operation_id)
+    discarded = root.with_name(f".{root.name}.discarded-{uuid.uuid4().hex}")
+    with _operation_write_lock(root):
+        operation = _read_operation_document(project_root, operation_id)
+        events = read_operation_events(project_root, operation_id)
+        if (
+            operation["status"] != "running"
+            or operation["request_fingerprint"] != request_fingerprint
+            or events
+        ):
+            raise ModelMatchingError(
+                "operation_immutable",
+                "Only an unstarted losing operation may be discarded.",
+            )
+        os.replace(root, discarded)
+    shutil.rmtree(discarded)
+
+
+def _recover_started_event_failure(
+    project_root: Path,
+    operation_id: str,
+    error: BaseException,
+) -> bool:
+    root = _operation_dir(project_root, operation_id)
+    with _operation_write_lock(root):
+        events = read_operation_events(project_root, operation_id)
+        if any(event["event_type"] == "operation.started" for event in events):
+            return True
+        failure = {
+            "code": "operation_start_failed",
+            "message": f"{type(error).__name__}: {error}",
+        }
+        event = _append_operation_event_locked(
+            project_root,
+            operation_id,
+            "operation.start_failed",
+            failure,
+        )
+        operation = _read_operation_document(project_root, operation_id)
+        failed = {
+            **operation,
+            "status": "failed",
+            "completed_at": event["timestamp"],
+            "result": None,
+            "error": failure,
+        }
+        write_json(failed, root / "operation.json")
+    return False
+
+
+def _start_operation(
     project_root: Path,
     *,
     operation_id: str,
@@ -283,18 +480,57 @@ def start_operation(
             },
         )
     except FileExistsError:
-        shutil.rmtree(root)
+        _discard_unstarted_operation(
+            project_root, operation_id, request_fingerprint
+        )
         return _replay_or_reject(project_root, **replay_arguments)
-    append_operation_event(
-        project_root,
-        operation_id,
-        "operation.started",
-        {
-            "request_id": request_id,
-            "request_fingerprint": request_fingerprint,
-        },
-    )
+    try:
+        _append_event_with_lock(
+            project_root,
+            operation_id,
+            "operation.started",
+            {
+                "request_id": request_id,
+                "request_fingerprint": request_fingerprint,
+            },
+        )
+    except BaseException as exc:
+        if _recover_started_event_failure(project_root, operation_id, exc):
+            return operation, False
+        raise
     return operation, False
+
+
+def start_operation(
+    project_root: Path,
+    *,
+    operation_id: str,
+    operation_type: str,
+    principal: Principal,
+    request_id: str,
+    idempotency_key: str,
+    request_payload: dict,
+) -> tuple[dict, bool]:
+    try:
+        return _start_operation(
+            project_root,
+            operation_id=operation_id,
+            operation_type=operation_type,
+            principal=principal,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            request_payload=request_payload,
+        )
+    except ModelMatchingError as exc:
+        if exc.code in {"operation_busy", "operation_immutable"}:
+            _record_failed_mutation(
+                project_root,
+                target_operation_id=operation_id,
+                attempted_mutation="operation.started",
+                code=exc.code,
+                message=str(exc),
+            )
+        raise
 
 
 def _require_running(operation: dict) -> None:
@@ -305,27 +541,45 @@ def _require_running(operation: dict) -> None:
 
 
 def complete_operation(
-    project_root: Path, operation_id: str, result: dict
+    project_root: Path,
+    operation_id: str,
+    result: dict,
+    *,
+    _audit_rejection: bool = True,
 ) -> dict:
     operation_id = validate_identifier(operation_id, "operation_id")
     root = _operation_dir(project_root, operation_id)
-    with _operation_write_lock(root):
-        operation = load_operation(project_root, operation_id)
-        _require_running(operation)
-        _append_operation_event_locked(
-            project_root,
-            operation_id,
-            "operation.completed",
-            {"result": dict(result)},
-        )
-        completed = {
-            **operation,
-            "status": "completed",
-            "completed_at": utc_now(),
-            "result": dict(result),
-            "error": None,
-        }
-        write_json(completed, root / "operation.json")
+    try:
+        with _operation_write_lock(root):
+            operation = load_operation(project_root, operation_id)
+            _require_running(operation)
+            event = _append_operation_event_locked(
+                project_root,
+                operation_id,
+                "operation.completed",
+                {"result": dict(result)},
+            )
+            completed = {
+                **operation,
+                "status": "completed",
+                "completed_at": event["timestamp"],
+                "result": dict(result),
+                "error": None,
+            }
+            write_json(completed, root / "operation.json")
+    except ModelMatchingError as exc:
+        if _audit_rejection and exc.code in {
+            "operation_busy",
+            "operation_immutable",
+        }:
+            _record_failed_mutation(
+                project_root,
+                target_operation_id=operation_id,
+                attempted_mutation="operation.completed",
+                code=exc.code,
+                message=str(exc),
+            )
+        raise
     return completed
 
 
@@ -334,24 +588,40 @@ def fail_operation(
     operation_id: str,
     code: str,
     message: str,
+    *,
+    _audit_rejection: bool = True,
 ) -> dict:
     operation_id = validate_identifier(operation_id, "operation_id")
     root = _operation_dir(project_root, operation_id)
-    with _operation_write_lock(root):
-        operation = load_operation(project_root, operation_id)
-        _require_running(operation)
-        error = {"code": code, "message": message}
-        _append_operation_event_locked(
-            project_root, operation_id, "operation.failed", error
-        )
-        failed = {
-            **operation,
-            "status": "failed",
-            "completed_at": utc_now(),
-            "result": None,
-            "error": error,
-        }
-        write_json(failed, root / "operation.json")
+    try:
+        with _operation_write_lock(root):
+            operation = load_operation(project_root, operation_id)
+            _require_running(operation)
+            error = {"code": code, "message": message}
+            event = _append_operation_event_locked(
+                project_root, operation_id, "operation.failed", error
+            )
+            failed = {
+                **operation,
+                "status": "failed",
+                "completed_at": event["timestamp"],
+                "result": None,
+                "error": error,
+            }
+            write_json(failed, root / "operation.json")
+    except ModelMatchingError as exc:
+        if _audit_rejection and exc.code in {
+            "operation_busy",
+            "operation_immutable",
+        }:
+            _record_failed_mutation(
+                project_root,
+                target_operation_id=operation_id,
+                attempted_mutation="operation.failed",
+                code=exc.code,
+                message=str(exc),
+            )
+        raise
     return failed
 
 
@@ -368,6 +638,65 @@ def verify_operation_chain(events: list[dict]) -> bool:
     return True
 
 
+def _ensure_denied_operation(
+    project_root: Path,
+    operation_id: str,
+    denial_details: dict,
+) -> None:
+    root = _operation_dir(project_root, operation_id)
+    principal = Principal("system-api", frozenset(), "system")
+    with _operation_write_lock(root):
+        events = read_operation_events(project_root, operation_id)
+        if not any(
+            event["event_type"] == "security.permission_denied"
+            for event in events
+        ):
+            _append_operation_event_locked(
+                project_root,
+                operation_id,
+                "security.permission_denied",
+                denial_details,
+                principal,
+            )
+            events = read_operation_events(project_root, operation_id)
+        if not any(
+            event["event_type"] == "operation.failed" for event in events
+        ):
+            _append_operation_event_locked(
+                project_root,
+                operation_id,
+                "operation.failed",
+                {
+                    "code": "permission_denied",
+                    "message": "Request was denied.",
+                },
+                principal,
+            )
+            events = read_operation_events(project_root, operation_id)
+        operation = _read_operation_document(project_root, operation_id)
+        failed = _project_operation(operation, events)
+        write_json(failed, root / "operation.json")
+
+
+def _recover_denied_operation(
+    project_root: Path,
+    operation_id: str,
+    denial_details: dict,
+) -> None:
+    last_error: Exception | None = None
+    for _ in range(4):
+        try:
+            _ensure_denied_operation(
+                project_root, operation_id, denial_details
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.005)
+    assert last_error is not None
+    raise last_error
+
+
 def record_denied_operation(
     project_root: Path,
     *,
@@ -380,35 +709,31 @@ def record_denied_operation(
     operation_id = f"denied-{suffix}"
     token_fingerprint = hashlib.sha256((token or "").encode("utf-8")).hexdigest()
     principal = Principal("system-api", frozenset(), "system")
-    start_operation(
-        project_root,
-        operation_id=operation_id,
-        operation_type="security.permission_denied",
-        principal=principal,
-        request_id=request_id,
-        idempotency_key=operation_id,
-        request_payload={
-            "route": route,
-            "reason": reason,
-            "token_fingerprint": token_fingerprint,
-        },
-    )
-    append_operation_event(
-        project_root,
-        operation_id,
-        "security.permission_denied",
-        {
-            "request_id": request_id,
-            "route": route,
-            "code": "permission_denied",
-            "reason": reason,
-            "token_fingerprint": token_fingerprint,
-        },
-    )
-    fail_operation(
-        project_root,
-        operation_id,
-        "permission_denied",
-        "Request was denied.",
+    denial_details = {
+        "request_id": request_id,
+        "route": route,
+        "code": "permission_denied",
+        "reason": reason,
+        "token_fingerprint": token_fingerprint,
+    }
+    try:
+        start_operation(
+            project_root,
+            operation_id=operation_id,
+            operation_type="security.permission_denied",
+            principal=principal,
+            request_id=request_id,
+            idempotency_key=operation_id,
+            request_payload={
+                "route": route,
+                "reason": reason,
+                "token_fingerprint": token_fingerprint,
+            },
+        )
+    except Exception:
+        if not _operation_dir(project_root, operation_id).is_dir():
+            raise
+    _recover_denied_operation(
+        project_root, operation_id, denial_details
     )
     return operation_id
