@@ -1,4 +1,5 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
@@ -532,3 +533,280 @@ def test_denied_audit_recovers_each_write_boundary(
     assert "secret-token" not in json.dumps(
         {"operation": operation, "events": events}
     )
+
+
+def test_existing_operation_id_uses_stable_audited_error(tmp_path):
+    start_operation(
+        tmp_path, operation_id="op-001", operation_type="model_asset.create",
+        principal=PRINCIPAL, request_id="request-001", idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    operation_before = load_operation(tmp_path, "op-001")
+    events_before = read_operation_events(tmp_path, "op-001")
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path, operation_id="op-001", operation_type="model_asset.create",
+            principal=PRINCIPAL, request_id="request-002",
+            idempotency_key="idem-002",
+            request_payload={"model_id": "pump-b"},
+        )
+    assert exc_info.value.code == "operation_exists"
+    assert load_operation(tmp_path, "op-001") == operation_before
+    assert read_operation_events(tmp_path, "op-001") == events_before
+    audits = mutation_failure_audits(tmp_path, "op-001")
+    assert len(audits) == 1
+    assert any(
+        event["event_type"] == "operation.mutation_rejected"
+        and event["details"]["code"] == "operation_exists"
+        for event in audits[0][1]
+    )
+
+
+def test_initial_projection_failure_uses_stable_audited_error(
+    tmp_path, monkeypatch
+):
+    original_write_json = audit_module.write_json
+    failed_once = {"value": False}
+
+    def interrupted_write_json(payload, path):
+        if payload.get("operation_id") == "op-001" and not failed_once["value"]:
+            failed_once["value"] = True
+            raise OSError("simulated initial projection failure")
+        return original_write_json(payload, path)
+
+    monkeypatch.setattr(audit_module, "write_json", interrupted_write_json)
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path, operation_id="op-001", operation_type="model_asset.create",
+            principal=PRINCIPAL, request_id="request-001",
+            idempotency_key="idem-001",
+            request_payload={"model_id": "pump-a"},
+        )
+    assert exc_info.value.code == "operation_persistence_failed"
+    target_root = (
+        tmp_path / "reports" / "model_matching_operations" / "op-001"
+    )
+    assert not target_root.exists()
+    audits = mutation_failure_audits(tmp_path, "op-001")
+    assert len(audits) == 1
+    assert any(
+        event["event_type"] == "operation.mutation_rejected"
+        and event["details"]["code"] == "operation_persistence_failed"
+        for event in audits[0][1]
+    )
+
+
+def test_restart_reconciles_claim_without_initial_event(tmp_path, monkeypatch):
+    start_operation(
+        tmp_path, operation_id="op-001", operation_type="model_asset.create",
+        principal=PRINCIPAL, request_id="request-001", idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-001"
+        / "events.jsonl"
+    )
+    events_path.unlink()
+    monotonic_values = iter([0.0, 3.0])
+    monkeypatch.setattr(
+        audit_module.time,
+        "monotonic",
+        lambda: next(monotonic_values, 3.0),
+    )
+    monkeypatch.setattr(audit_module.time, "sleep", lambda _seconds: None)
+
+    operation, replayed = start_operation(
+        tmp_path, operation_id="op-002", operation_type="model_asset.create",
+        principal=PRINCIPAL, request_id="request-002", idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    assert replayed is True
+    assert operation["status"] == "failed"
+    assert operation["error"]["code"] == "operation_start_interrupted"
+    events = read_operation_events(tmp_path, "op-001")
+    assert [event["event_type"] for event in events] == [
+        "operation.start_failed",
+        "operation.replayed",
+    ]
+    assert verify_operation_chain(events) is True
+
+
+def _denied_recovery_paths(project_root):
+    recovery_root = (
+        project_root / "reports" / "model_matching_denied_recovery"
+    )
+    return sorted(recovery_root.glob("*.json")) if recovery_root.exists() else []
+
+
+def _assert_recovered_denial(project_root, operation_id):
+    operation = load_operation(project_root, operation_id)
+    events = read_operation_events(project_root, operation_id)
+    assert operation["status"] == "failed"
+    assert operation["error"]["code"] == "permission_denied"
+    assert sum(
+        event["event_type"] == "security.permission_denied" for event in events
+    ) == 1
+    assert sum(event["event_type"] == "operation.failed" for event in events) == 1
+    assert verify_operation_chain(events) is True
+    assert "secret-token" not in json.dumps(
+        {"operation": operation, "events": events}
+    )
+
+
+def test_denied_restart_recovers_absent_initial_projection(tmp_path, monkeypatch):
+    original_write_json = audit_module.write_json
+
+    def unavailable_initial_projection(payload, path):
+        if (
+            payload.get("operation_type") == "security.permission_denied"
+            and payload.get("status") == "running"
+        ):
+            raise OSError("simulated unavailable initial projection")
+        return original_write_json(payload, path)
+
+    monkeypatch.setattr(
+        audit_module, "write_json", unavailable_initial_projection
+    )
+    with pytest.raises(Exception, match="projection"):
+        record_denied_operation(
+            tmp_path,
+            request_id="request-denied-001",
+            route="POST /model-library/models",
+            token="secret-token",
+            reason="permission_denied",
+        )
+    recovery_paths = _denied_recovery_paths(tmp_path)
+    assert len(recovery_paths) == 1
+    serialized_recovery = recovery_paths[0].read_text(encoding="utf-8")
+    assert "secret-token" not in serialized_recovery
+
+    monkeypatch.setattr(audit_module, "write_json", original_write_json)
+    recovered = audit_module.recover_denied_operations(tmp_path)
+    assert len(recovered) == 1
+    _assert_recovered_denial(tmp_path, recovered[0])
+    assert _denied_recovery_paths(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "failure_boundary",
+    [
+        "security.permission_denied",
+        "operation.failed",
+        "failed_projection",
+    ],
+)
+def test_denied_restart_recovers_partial_workflow(
+    tmp_path, monkeypatch, failure_boundary
+):
+    original_append = audit_module._append_operation_event_locked
+    original_write_json = audit_module.write_json
+
+    def unavailable_event(
+        project_root, operation_id, event_type, details, *args, **kwargs
+    ):
+        if event_type == failure_boundary:
+            raise OSError(f"simulated persistent {failure_boundary} failure")
+        return original_append(
+            project_root, operation_id, event_type, details, *args, **kwargs
+        )
+
+    def unavailable_projection(payload, path):
+        if (
+            failure_boundary == "failed_projection"
+            and payload.get("operation_type") == "security.permission_denied"
+            and payload.get("status") == "failed"
+        ):
+            raise OSError("simulated persistent failed_projection failure")
+        return original_write_json(payload, path)
+
+    monkeypatch.setattr(
+        audit_module, "_append_operation_event_locked", unavailable_event
+    )
+    monkeypatch.setattr(audit_module, "write_json", unavailable_projection)
+    with pytest.raises(Exception, match="simulated persistent"):
+        record_denied_operation(
+            tmp_path,
+            request_id="request-denied-001",
+            route="POST /model-library/models",
+            token="secret-token",
+            reason="permission_denied",
+        )
+    recovery_paths = _denied_recovery_paths(tmp_path)
+    assert len(recovery_paths) == 1
+    operation_id = recovery_paths[0].stem
+
+    monkeypatch.setattr(
+        audit_module, "_append_operation_event_locked", original_append
+    )
+    monkeypatch.setattr(audit_module, "write_json", original_write_json)
+    assert audit_module.recover_denied_operations(tmp_path) == [operation_id]
+    _assert_recovered_denial(tmp_path, operation_id)
+    assert _denied_recovery_paths(tmp_path) == []
+
+
+def test_tampered_terminal_event_cannot_repair_projection(tmp_path):
+    start_operation(
+        tmp_path, operation_id="op-001", operation_type="model_asset.create",
+        principal=PRINCIPAL, request_id="request-001", idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    complete_operation(tmp_path, "op-001", {"model_id": "pump-a"})
+    operation_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-001"
+        / "operation.json"
+    )
+    stale_projection = json.loads(operation_path.read_text(encoding="utf-8"))
+    stale_projection.update(
+        {"status": "running", "completed_at": None, "result": None}
+    )
+    operation_path.write_text(
+        json.dumps(stale_projection, indent=2), encoding="utf-8"
+    )
+    events_path = operation_path.with_name("events.jsonl")
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    events[-1]["details"]["result"]["model_id"] = "tampered"
+    events_path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    projection_before = operation_path.read_text(encoding="utf-8")
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_operation(tmp_path, "op-001")
+    assert exc_info.value.code == "audit_integrity_error"
+    assert operation_path.read_text(encoding="utf-8") == projection_before
+
+
+def test_lock_owner_does_not_unlink_new_owner_after_directory_aba(tmp_path):
+    root = tmp_path / "operation"
+    discarded = tmp_path / "discarded"
+    root.mkdir()
+    first_renamed = Event()
+    second_locked = Event()
+    release_second = Event()
+
+    def second_owner():
+        assert first_renamed.wait(timeout=2)
+        root.mkdir()
+        with audit_module._operation_write_lock(root):
+            second_locked.set()
+            assert release_second.wait(timeout=2)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(second_owner)
+        with audit_module._operation_write_lock(root):
+            os.replace(root, discarded)
+            first_renamed.set()
+            assert second_locked.wait(timeout=2)
+        assert (root / ".write.lock").is_file()
+        release_second.set()
+        future.result(timeout=2)
