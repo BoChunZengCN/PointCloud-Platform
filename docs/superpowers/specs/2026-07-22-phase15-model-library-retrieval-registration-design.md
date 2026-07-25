@@ -595,6 +595,8 @@ P15-M5 引入 `scanned_reference`：
 
 幂等索引采用同目录原子 no-replace 发布：先把 canonical JSON 写入 `reports/model_matching_idempotency` 中唯一临时文件，刷新并 `fsync`，再通过经过能力探测的硬链接原语原子发布最终名称。不得使用 `os.replace` 或任何覆盖回退。目标已存在时，完整目标是唯一 winner，进入正常重放/冲突流程；发布前崩溃只留下读者不可见的临时文件，发布后清理前崩溃留下完整目标及无害临时硬链接。POSIX 在支持时还要 `fsync` 父目录；Windows 的承诺边界是在支持硬链接与非阻塞字节锁的本地 NTFS 类存储上的进程崩溃安全。
 
+no-replace 适配器必须显式返回三种发布状态，不能让调用方从异常猜测链接是否可见：`not_published` 表示最终名称从未可见，也是唯一允许清理候选操作的状态；`published_confirmed` 表示完整最终名称可见且父目录耐久性已确认；`published_unconfirmed` 表示链接已经可见、内容完整，但链接后的父目录 `fsync` 失败。`published_unconfirmed` 必须保留被索引操作，返回并另行审计稳定的 `audit_persistence_error`，由后续幂等重放在同一内核锁下确定性恢复；任何链接后的异常都不得降格成 `not_published`。
+
 审计写入前必须执行存储能力预检，验证非阻塞内核锁和硬链接 no-replace 语义；每个进程、每个项目根目录只缓存成功结果，失败不得缓存或静默降级。能力缺失返回稳定 `audit_persistence_error`，且不得暴露部分索引或修改既有索引。网络文件系统或不提供这些本地协调语义的存储不在本阶段支持边界内。
 
 ### 17.3 身份信任

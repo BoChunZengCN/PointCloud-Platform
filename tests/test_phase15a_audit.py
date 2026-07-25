@@ -175,10 +175,11 @@ def test_concurrent_idempotency_replay_follows_started_event(tmp_path, monkeypat
     original_replay = audit_module._replay_or_reject
 
     def delayed_claim(path, payload):
-        original_claim(path, payload)
+        result = original_claim(path, payload)
         if payload["operation_id"] == "op-001":
             index_claimed.set()
             assert release_claimant.wait(timeout=2)
+        return result
 
     def observed_replay(*args, **kwargs):
         replay_entered.set()
@@ -377,12 +378,16 @@ def test_losing_claim_cleanup_requires_unstarted_unlocked_operation(tmp_path):
     assert exc_info.value.code == "operation_busy"
     assert operation_root.is_dir()
 
-    append_operation_event(
-        tmp_path,
-        "op-loser",
-        "operation.started",
-        {"request_id": "request-001"},
-    )
+    with audit_module._operation_write_lock(tmp_path, "op-loser"):
+        audit_module._append_operation_event_locked(
+            tmp_path,
+            "op-loser",
+            "operation.started",
+            {
+                "request_id": "request-001",
+                "request_fingerprint": operation["request_fingerprint"],
+            },
+        )
     with pytest.raises(ModelMatchingError) as exc_info:
         audit_module._discard_unstarted_operation(
             tmp_path, "op-loser", operation["request_fingerprint"]
@@ -832,10 +837,11 @@ def test_live_delayed_initializer_is_never_terminalized_by_timeout(
     original_claim = audit_module._claim_idempotency_index
 
     def delayed_claim(path, payload):
-        original_claim(path, payload)
+        result = original_claim(path, payload)
         if payload["operation_id"] == "op-live":
             index_claimed.set()
             assert release_initializer.wait(timeout=2)
+        return result
 
     monkeypatch.setattr(audit_module, "_claim_idempotency_index", delayed_claim)
     monotonic_values = iter([0.0, 3.0, 3.0])
@@ -1081,7 +1087,7 @@ def test_started_after_terminal_is_rejected_and_audited(tmp_path):
             "operation.started",
             {"request_id": "late"},
         )
-    assert exc_info.value.code == "operation_immutable"
+    assert exc_info.value.code == "invalid_audit_event"
     assert read_operation_events(tmp_path, "op-terminal") == events_before
     audits = mutation_failure_audits(tmp_path, "op-terminal")
     assert len(audits) == 1
@@ -1324,11 +1330,12 @@ def test_idempotency_publish_winner_race_never_overwrites(tmp_path):
     ]
 
     def claim(payload):
-        try:
-            audit_module._claim_idempotency_index(path, payload)
-        except FileExistsError:
-            return "lost"
-        return "won"
+        result = audit_module._claim_idempotency_index(path, payload)
+        return (
+            "won"
+            if result.state == "published_confirmed"
+            else "lost"
+        )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = list(executor.map(claim, payloads))
@@ -1359,11 +1366,12 @@ def test_crash_after_publish_leaves_complete_destination_visible(tmp_path):
     )
     os.link(leftover, path)
     assert json.loads(path.read_text(encoding="utf-8")) == payload
-    with pytest.raises(FileExistsError):
-        audit_module._claim_idempotency_index(
-            path,
-            {"operation_id": "op-other", "request_fingerprint": "other"},
-        )
+    result = audit_module._claim_idempotency_index(
+        path,
+        {"operation_id": "op-other", "request_fingerprint": "other"},
+    )
+    assert result.state == "not_published"
+    assert isinstance(result.error, FileExistsError)
     assert json.loads(path.read_text(encoding="utf-8")) == payload
     assert leftover.exists()
 
@@ -1445,3 +1453,522 @@ def test_capability_probe_failure_is_not_cached_and_is_stable(
     assert probe_calls["value"] >= 2
     audits = mutation_failure_audits(tmp_path, "op-probe")
     assert len(audits) == 1
+
+
+def test_no_replace_publication_returns_actual_link_state(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.json"
+    destination = tmp_path / "destination.json"
+    source.write_text('{"complete":true}', encoding="utf-8")
+
+    confirmed = audit_module._publish_no_replace(source, destination)
+    assert confirmed.state == "published_confirmed"
+
+    loser = tmp_path / "loser.json"
+    loser.write_text('{"complete":false}', encoding="utf-8")
+    not_published = audit_module._publish_no_replace(loser, destination)
+    assert not_published.state == "not_published"
+    assert isinstance(not_published.error, FileExistsError)
+    assert destination.read_text(encoding="utf-8") == '{"complete":true}'
+
+    unconfirmed_destination = tmp_path / "unconfirmed.json"
+    monkeypatch.setattr(
+        audit_module,
+        "_fsync_directory",
+        lambda _path: (_ for _ in ()).throw(
+            OSError("simulated directory durability failure")
+        ),
+    )
+    unconfirmed = audit_module._publish_no_replace(
+        loser, unconfirmed_destination
+    )
+    assert unconfirmed.state == "published_unconfirmed"
+    assert isinstance(unconfirmed.error, OSError)
+    assert unconfirmed_destination.read_text(encoding="utf-8") == (
+        '{"complete":false}'
+    )
+
+
+def test_unconfirmed_publication_preserves_operation_for_recovery(
+    tmp_path, monkeypatch
+):
+    audit_module._require_audit_storage_capabilities(tmp_path)
+    original_fsync_directory = audit_module._fsync_directory
+    failed_once = {"value": False}
+
+    def interrupted_directory_fsync(path):
+        if path.name == "model_matching_idempotency" and not failed_once["value"]:
+            failed_once["value"] = True
+            raise OSError("simulated post-link directory fsync failure")
+        return original_fsync_directory(path)
+
+    monkeypatch.setattr(
+        audit_module, "_fsync_directory", interrupted_directory_fsync
+    )
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path,
+            operation_id="op-unconfirmed",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-001",
+            idempotency_key="idem-unconfirmed",
+            request_payload={"model_id": "pump-a"},
+        )
+    assert exc_info.value.code == "audit_persistence_error"
+    operation_root = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-unconfirmed"
+    )
+    assert operation_root.is_dir()
+    assert read_operation_events(tmp_path, "op-unconfirmed") == []
+    assert audit_module._idempotency_path(
+        tmp_path, "idem-unconfirmed"
+    ).is_file()
+    audits = mutation_failure_audits(tmp_path, "op-unconfirmed")
+    assert len(audits) == 1
+
+    monkeypatch.setattr(
+        audit_module, "_fsync_directory", original_fsync_directory
+    )
+    recovered, replayed = start_operation(
+        tmp_path,
+        operation_id="op-retry",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-002",
+        idempotency_key="idem-unconfirmed",
+        request_payload={"model_id": "pump-a"},
+    )
+    assert replayed is True
+    assert recovered["operation_id"] == "op-unconfirmed"
+    assert recovered["error"]["code"] == "operation_start_interrupted"
+
+
+def test_invalid_index_operation_id_is_stable_audited_integrity_error(
+    tmp_path
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-indexed",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-invalid-id",
+        request_payload={"model_id": "pump-a"},
+    )
+    index_path = audit_module._idempotency_path(
+        tmp_path, "idem-invalid-id"
+    )
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["operation_id"] = "invalid/operation"
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    events_before = read_operation_events(tmp_path, "op-indexed")
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path,
+            operation_id="op-retry",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-002",
+            idempotency_key="idem-invalid-id",
+            request_payload={"model_id": "pump-a"},
+        )
+    assert exc_info.value.code == "audit_integrity_error"
+    assert read_operation_events(tmp_path, "op-indexed") == events_before
+    audits = mutation_failure_audits(tmp_path, "op-retry")
+    assert len(audits) == 1
+
+
+@pytest.mark.parametrize(
+    ("operation_id", "token_fingerprint"),
+    [
+        ("invalid/operation", "0" * 64),
+        ("000-invalid", "not-a-sha256"),
+    ],
+)
+def test_invalid_denied_marker_is_reported_and_does_not_abort_later_marker(
+    tmp_path, operation_id, token_fingerprint
+):
+    recovery_root = (
+        tmp_path / "reports" / "model_matching_denied_recovery"
+    )
+    recovery_root.mkdir(parents=True)
+    corrupt_path = recovery_root / "000-invalid.json"
+    corrupt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "operation_id": operation_id,
+                "request_id": "request-corrupt",
+                "route": "POST /model-library/models",
+                "reason": "permission_denied",
+                "token_fingerprint": token_fingerprint,
+            }
+        ),
+        encoding="utf-8",
+    )
+    valid_operation_id = "denied-valid"
+    valid_marker = audit_module._denied_recovery_path(
+        tmp_path, valid_operation_id
+    )
+    valid_marker.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "operation_id": valid_operation_id,
+                "request_id": "request-valid",
+                "route": "POST /model-library/models",
+                "reason": "permission_denied",
+                "token_fingerprint": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert audit_module.recover_denied_operations(tmp_path) == [
+        valid_operation_id
+    ]
+    _assert_recovered_denial(tmp_path, valid_operation_id)
+    assert corrupt_path.exists()
+    reports = list((recovery_root / "errors").glob("*.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text(encoding="utf-8"))["code"] == (
+        "audit_integrity_error"
+    )
+    assert len(mutation_failure_audits(tmp_path, "000-invalid")) == 1
+
+
+@pytest.mark.parametrize(
+    ("malformation", "attempted_mutation"),
+    [
+        ("invalid_json", "model_asset.validated"),
+        ("non_object", "operation.completed"),
+        ("invalid_structure", "operation.failed"),
+    ],
+)
+def test_malformed_event_ledger_rejects_and_audits_public_mutation(
+    tmp_path, malformation, attempted_mutation
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-malformed",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-malformed",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-malformed"
+        / "events.jsonl"
+    )
+    if malformation == "invalid_json":
+        malformed = '{"event_id":'
+    elif malformation == "non_object":
+        malformed = "[]"
+    else:
+        event = read_operation_events(tmp_path, "op-malformed")[0]
+        event["details"] = []
+        event["event_hash"] = audit_module._event_hash(event)
+        malformed = json.dumps(event, sort_keys=True)
+    events_path.write_text(malformed + "\n", encoding="utf-8")
+    malformed_before = events_path.read_text(encoding="utf-8")
+
+    if attempted_mutation == "operation.completed":
+        mutation = lambda: complete_operation(
+            tmp_path, "op-malformed", {"model_id": "pump-a"}
+        )
+    elif attempted_mutation == "operation.failed":
+        mutation = lambda: fail_operation(
+            tmp_path, "op-malformed", "failed", "Failed."
+        )
+    else:
+        mutation = lambda: append_operation_event(
+            tmp_path, "op-malformed", attempted_mutation, {}
+        )
+    with pytest.raises(ModelMatchingError) as exc_info:
+        mutation()
+    assert exc_info.value.code == "audit_integrity_error"
+    assert events_path.read_text(encoding="utf-8") == malformed_before
+    audits = mutation_failure_audits(tmp_path, "op-malformed")
+    assert len(audits) == 1
+    assert any(
+        event["details"]["attempted_mutation"] == attempted_mutation
+        and event["details"]["code"] == "audit_integrity_error"
+        for event in audits[0][1]
+        if event["event_type"] == "operation.mutation_rejected"
+    )
+
+
+@pytest.mark.parametrize(
+    "reserved_event",
+    [
+        "operation.started",
+        "operation.start_failed",
+        "operation.completed",
+        "operation.failed",
+    ],
+)
+def test_generic_append_rejects_reserved_lifecycle_events(
+    tmp_path, reserved_event
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-reserved",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-reserved",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_before = read_operation_events(tmp_path, "op-reserved")
+    with pytest.raises(ModelMatchingError) as exc_info:
+        append_operation_event(
+            tmp_path, "op-reserved", reserved_event, {}
+        )
+    assert exc_info.value.code == "invalid_audit_event"
+    assert read_operation_events(tmp_path, "op-reserved") == events_before
+    audits = mutation_failure_audits(tmp_path, "op-reserved")
+    assert len(audits) == 1
+
+
+@pytest.mark.parametrize("invalid_transition", ["complete", "fail"])
+def test_dedicated_lifecycle_api_validates_details_before_append(
+    tmp_path, invalid_transition
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-invalid-details",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-invalid-details",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_before = read_operation_events(tmp_path, "op-invalid-details")
+    if invalid_transition == "complete":
+        mutation = lambda: complete_operation(
+            tmp_path, "op-invalid-details", ["not", "an", "object"]
+        )
+    else:
+        mutation = lambda: fail_operation(
+            tmp_path, "op-invalid-details", "", None
+        )
+    with pytest.raises(ModelMatchingError) as exc_info:
+        mutation()
+    assert exc_info.value.code == "invalid_audit_event"
+    assert read_operation_events(tmp_path, "op-invalid-details") == events_before
+    audits = mutation_failure_audits(tmp_path, "op-invalid-details")
+    assert len(audits) == 1
+
+
+def test_hash_valid_terminal_with_invalid_details_fails_integrity(tmp_path):
+    start_operation(
+        tmp_path,
+        operation_id="op-invalid-terminal",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-invalid-terminal",
+        request_payload={"model_id": "pump-a"},
+    )
+    events = read_operation_events(tmp_path, "op-invalid-terminal")
+    terminal = {
+        **events[0],
+        "event_id": "invalid-terminal",
+        "sequence": 2,
+        "event_type": "operation.completed",
+        "timestamp": audit_module.utc_now(),
+        "previous_event_hash": events[0]["event_hash"],
+        "details": {},
+    }
+    terminal["event_hash"] = audit_module._event_hash(terminal)
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-invalid-terminal"
+        / "events.jsonl"
+    )
+    events_path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in [events[0], terminal])
+        + "\n",
+        encoding="utf-8",
+    )
+    projection_path = events_path.with_name("operation.json")
+    projection_before = projection_path.read_text(encoding="utf-8")
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_operation(tmp_path, "op-invalid-terminal")
+    assert exc_info.value.code == "audit_integrity_error"
+    assert projection_path.read_text(encoding="utf-8") == projection_before
+
+
+def test_projection_repair_requires_operation_lock_and_revalidates(tmp_path):
+    start_operation(
+        tmp_path,
+        operation_id="op-repair-lock",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-repair-lock",
+        request_payload={"model_id": "pump-a"},
+    )
+    complete_operation(tmp_path, "op-repair-lock", {"model_id": "pump-a"})
+    projection_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-repair-lock"
+        / "operation.json"
+    )
+    stale = json.loads(projection_path.read_text(encoding="utf-8"))
+    stale.update(
+        {"status": "running", "completed_at": None, "result": None}
+    )
+    projection_path.write_text(json.dumps(stale), encoding="utf-8")
+    stale_before = projection_path.read_text(encoding="utf-8")
+
+    with audit_module._operation_write_lock(tmp_path, "op-repair-lock"):
+        with pytest.raises(ModelMatchingError) as exc_info:
+            load_operation(tmp_path, "op-repair-lock")
+        assert exc_info.value.code == "operation_busy"
+        assert projection_path.read_text(encoding="utf-8") == stale_before
+    assert load_operation(tmp_path, "op-repair-lock")["status"] == "completed"
+
+
+def test_corrupt_marker_audit_retries_until_durable_without_duplicate(
+    tmp_path, monkeypatch
+):
+    recovery_root = (
+        tmp_path / "reports" / "model_matching_denied_recovery"
+    )
+    recovery_root.mkdir(parents=True)
+    corrupt = recovery_root / "000-retry.json"
+    corrupt.write_text('{"operation_id":', encoding="utf-8")
+    original_record = audit_module._record_failed_mutation
+    attempts = {"value": 0}
+
+    def fail_first_audit(*args, **kwargs):
+        attempts["value"] += 1
+        if attempts["value"] == 1:
+            raise OSError("simulated transient failure audit interruption")
+        return original_record(*args, **kwargs)
+
+    monkeypatch.setattr(
+        audit_module, "_record_failed_mutation", fail_first_audit
+    )
+    assert audit_module.recover_denied_operations(tmp_path) == []
+    monkeypatch.setattr(
+        audit_module, "_record_failed_mutation", original_record
+    )
+    assert audit_module.recover_denied_operations(tmp_path) == []
+    audits = mutation_failure_audits(tmp_path, "000-retry")
+    assert len(audits) == 1
+    assert list((recovery_root / "errors" / "audited").glob("*.json"))
+
+    assert audit_module.recover_denied_operations(tmp_path) == []
+    assert len(mutation_failure_audits(tmp_path, "000-retry")) == 1
+
+
+def test_losing_operation_cleanup_interruption_does_not_mask_winner(
+    tmp_path, monkeypatch
+):
+    winner, _ = start_operation(
+        tmp_path,
+        operation_id="op-winner",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-winner",
+        idempotency_key="idem-winner",
+        request_payload={"model_id": "pump-a"},
+    )
+    original_claim = audit_module._claim_idempotency_index
+
+    def lose_claim(path, payload):
+        if payload["operation_id"] != "op-loser":
+            return original_claim(path, payload)
+        original_claim(
+            path,
+            {
+                "operation_id": "op-winner",
+                "request_fingerprint": winner["request_fingerprint"],
+                "initializer_owner_token": winner["initializer_owner_token"],
+            },
+        )
+        result_type = getattr(audit_module, "_PublicationResult", None)
+        if result_type is None:
+            raise FileExistsError(path)
+        return result_type("not_published", FileExistsError(path))
+
+    monkeypatch.setattr(audit_module, "_claim_idempotency_index", lose_claim)
+    monkeypatch.setattr(
+        audit_module.shutil,
+        "rmtree",
+        lambda _path: (_ for _ in ()).throw(
+            OSError("simulated discarded-tree cleanup interruption")
+        ),
+    )
+    replayed_operation, replayed = start_operation(
+        tmp_path,
+        operation_id="op-loser",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-loser",
+        idempotency_key="idem-race",
+        request_payload={"model_id": "pump-a"},
+    )
+    assert replayed is True
+    assert replayed_operation["operation_id"] == "op-winner"
+    operations_root = (
+        tmp_path / "reports" / "model_matching_operations"
+    )
+    assert list(operations_root.glob(".op-loser.discarded-*"))
+
+
+def test_task2_docs_converge_publication_state_and_staging_contract():
+    root = audit_module.Path(__file__).parents[1]
+    plan = (
+        root
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-07-22-phase15a-cad-model-library-audit.md"
+    ).read_text(encoding="utf-8")
+    design = (
+        root
+        / "docs"
+        / "superpowers"
+        / "specs"
+        / "2026-07-22-phase15-model-library-retrieval-registration-design.md"
+    ).read_text(encoding="utf-8")
+    report = (
+        root / ".superpowers" / "sdd" / "task-2-report.md"
+    ).read_text(encoding="utf-8")
+
+    for state in (
+        "not_published",
+        "published_confirmed",
+        "published_unconfirmed",
+    ):
+        assert state in plan
+        assert state in design
+    assert (
+        "docs/superpowers/specs/"
+        "2026-07-22-phase15-model-library-retrieval-registration-design.md"
+        in plan
+    )
+    assert (
+        "docs/superpowers/plans/"
+        "2026-07-22-phase15a-cad-model-library-audit.md"
+        in plan
+    )
+    top_status = report.split("## Implementation summary", 1)[0]
+    assert "BLOCKED" not in top_status
