@@ -345,24 +345,7 @@ def _load_operation_locked(project_root: Path, operation_id: str) -> dict:
 def _read_operation_projection(
     project_root: Path, operation_id: str
 ) -> tuple[dict, dict]:
-    path = _operation_dir(project_root, operation_id) / "operation.json"
-    try:
-        operation = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ModelMatchingError(
-            "audit_persistence_error",
-            "Operation projection could not be read.",
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise ModelMatchingError(
-            "audit_integrity_error",
-            "Operation projection is not valid JSON.",
-        ) from exc
-    if not isinstance(operation, dict):
-        raise ModelMatchingError(
-            "audit_integrity_error",
-            "Operation projection must be an object.",
-        )
+    operation = _read_operation_document(project_root, operation_id)
     events = read_operation_events(project_root, operation_id)
     _require_valid_operation_chain(events)
     projected = _project_operation(operation, events)
@@ -395,6 +378,11 @@ def read_operation_events(project_root: Path, operation_id: str) -> list[dict]:
             raise ModelMatchingError(
                 "audit_integrity_error",
                 "Operation audit ledger contains an invalid event.",
+            )
+        if event["operation_id"] != operation_id:
+            raise ModelMatchingError(
+                "audit_integrity_error",
+                "Operation audit event does not match its operation path.",
             )
         events.append(event)
     return events
@@ -575,7 +563,92 @@ def _project_operation(operation: dict, events: list[dict]) -> dict:
 
 def _read_operation_document(project_root: Path, operation_id: str) -> dict:
     path = _operation_dir(project_root, operation_id) / "operation.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        operation = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ModelMatchingError(
+            "audit_persistence_error",
+            "Operation projection could not be read.",
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation projection is not valid JSON.",
+        ) from exc
+    _require_valid_operation_document(operation, operation_id)
+    return operation
+
+
+def _require_valid_operation_document(
+    operation: object, expected_operation_id: str
+) -> None:
+    valid = isinstance(operation, dict)
+    if valid:
+        required_strings = {
+            "operation_type",
+            "actor_id",
+            "principal_source",
+            "request_id",
+            "started_at",
+            "initializer_owner_token",
+        }
+        valid = (
+            operation.get("schema_version") == "1.0"
+            and operation.get("operation_id") == expected_operation_id
+            and all(
+                isinstance(operation.get(field), str)
+                and bool(operation[field])
+                for field in required_strings
+            )
+            and _is_sha256(operation.get("idempotency_key_hash"))
+            and _is_sha256(operation.get("request_fingerprint"))
+            and isinstance(operation.get("roles"), list)
+            and all(
+                isinstance(role, str) for role in operation["roles"]
+            )
+            and operation.get("status")
+            in {"running", "completed", "failed"}
+        )
+    if valid:
+        status = operation["status"]
+        if status == "running":
+            valid = (
+                operation.get("completed_at") is None
+                and operation.get("result") is None
+                and operation.get("error") is None
+            )
+        elif status == "completed":
+            valid = (
+                isinstance(operation.get("completed_at"), str)
+                and bool(operation["completed_at"])
+                and isinstance(operation.get("result"), dict)
+                and operation.get("error") is None
+            )
+        else:
+            error = operation.get("error")
+            valid = (
+                isinstance(operation.get("completed_at"), str)
+                and bool(operation["completed_at"])
+                and operation.get("result") is None
+                and isinstance(error, dict)
+                and all(
+                    isinstance(error.get(field), str) and bool(error[field])
+                    for field in {"code", "message"}
+                )
+            )
+    if not valid:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation projection does not match its required schema or path.",
+        )
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _append_operation_event_locked(

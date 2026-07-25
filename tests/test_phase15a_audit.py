@@ -1972,3 +1972,166 @@ def test_task2_docs_converge_publication_state_and_staging_contract():
     )
     top_status = report.split("## Implementation summary", 1)[0]
     assert "BLOCKED" not in top_status
+
+
+def _start_binding_test_operation(tmp_path, operation_id):
+    start_operation(
+        tmp_path,
+        operation_id=operation_id,
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id=f"request-{operation_id}",
+        idempotency_key=f"idem-{operation_id}",
+        request_payload={"model_id": operation_id},
+    )
+
+
+def _operation_artifact_path(tmp_path, operation_id, filename):
+    return (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / operation_id
+        / filename
+    )
+
+
+def test_read_events_rejects_hash_valid_ledger_transplanted_from_other_operation(
+    tmp_path,
+):
+    _start_binding_test_operation(tmp_path, "op-source")
+    _start_binding_test_operation(tmp_path, "op-target")
+    source_events = _operation_artifact_path(
+        tmp_path, "op-source", "events.jsonl"
+    ).read_bytes()
+    target_events_path = _operation_artifact_path(
+        tmp_path, "op-target", "events.jsonl"
+    )
+    target_events_path.write_bytes(source_events)
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        read_operation_events(tmp_path, "op-target")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert target_events_path.read_bytes() == source_events
+
+
+@pytest.mark.parametrize(
+    "attempted_mutation",
+    ["model_asset.validated", "operation.completed", "operation.failed"],
+)
+def test_public_mutation_audits_transplanted_ledger_without_changing_target(
+    tmp_path, attempted_mutation
+):
+    _start_binding_test_operation(tmp_path, "op-source")
+    _start_binding_test_operation(tmp_path, "op-target")
+    source_events = _operation_artifact_path(
+        tmp_path, "op-source", "events.jsonl"
+    ).read_bytes()
+    target_events_path = _operation_artifact_path(
+        tmp_path, "op-target", "events.jsonl"
+    )
+    target_events_path.write_bytes(source_events)
+
+    if attempted_mutation == "operation.completed":
+        mutation = lambda: complete_operation(
+            tmp_path, "op-target", {"model_id": "op-target"}
+        )
+    elif attempted_mutation == "operation.failed":
+        mutation = lambda: fail_operation(
+            tmp_path, "op-target", "failed", "Failed."
+        )
+    else:
+        mutation = lambda: append_operation_event(
+            tmp_path, "op-target", attempted_mutation, {}
+        )
+    with pytest.raises(ModelMatchingError) as exc_info:
+        mutation()
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert target_events_path.read_bytes() == source_events
+    audits = mutation_failure_audits(tmp_path, "op-target")
+    assert len(audits) == 1
+    assert any(
+        event["event_type"] == "operation.mutation_rejected"
+        and event["details"]["attempted_mutation"] == attempted_mutation
+        and event["details"]["code"] == "audit_integrity_error"
+        for event in audits[0][1]
+    )
+
+
+def test_load_rejects_projection_transplanted_from_other_operation(tmp_path):
+    _start_binding_test_operation(tmp_path, "op-source")
+    _start_binding_test_operation(tmp_path, "op-target")
+    source_projection = _operation_artifact_path(
+        tmp_path, "op-source", "operation.json"
+    ).read_bytes()
+    target_projection_path = _operation_artifact_path(
+        tmp_path, "op-target", "operation.json"
+    )
+    target_projection_path.write_bytes(source_projection)
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_operation(tmp_path, "op-target")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert target_projection_path.read_bytes() == source_projection
+
+
+def test_load_rejects_empty_projection_object(tmp_path):
+    _start_binding_test_operation(tmp_path, "op-empty")
+    projection_path = _operation_artifact_path(
+        tmp_path, "op-empty", "operation.json"
+    )
+    projection_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_operation(tmp_path, "op-empty")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert projection_path.read_text(encoding="utf-8") == "{}"
+
+
+@pytest.mark.parametrize(
+    "attempted_mutation",
+    ["model_asset.validated", "operation.completed", "operation.failed"],
+)
+def test_public_mutation_audits_empty_projection_without_changing_target(
+    tmp_path, attempted_mutation
+):
+    _start_binding_test_operation(tmp_path, "op-empty")
+    projection_path = _operation_artifact_path(
+        tmp_path, "op-empty", "operation.json"
+    )
+    events_path = _operation_artifact_path(
+        tmp_path, "op-empty", "events.jsonl"
+    )
+    projection_path.write_text("{}", encoding="utf-8")
+    events_before = events_path.read_bytes()
+
+    if attempted_mutation == "operation.completed":
+        mutation = lambda: complete_operation(
+            tmp_path, "op-empty", {"model_id": "op-empty"}
+        )
+    elif attempted_mutation == "operation.failed":
+        mutation = lambda: fail_operation(
+            tmp_path, "op-empty", "failed", "Failed."
+        )
+    else:
+        mutation = lambda: append_operation_event(
+            tmp_path, "op-empty", attempted_mutation, {}
+        )
+    with pytest.raises(ModelMatchingError) as exc_info:
+        mutation()
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert projection_path.read_text(encoding="utf-8") == "{}"
+    assert events_path.read_bytes() == events_before
+    audits = mutation_failure_audits(tmp_path, "op-empty")
+    assert len(audits) == 1
+    assert any(
+        event["event_type"] == "operation.mutation_rejected"
+        and event["details"]["attempted_mutation"] == attempted_mutation
+        and event["details"]["code"] == "audit_integrity_error"
+        for event in audits[0][1]
+    )
