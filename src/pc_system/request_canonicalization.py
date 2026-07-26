@@ -164,12 +164,17 @@ class _CaptureBudget:
         return next_total <= self.limits.max_text_bytes
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class FrozenRequest:
     _schema_id: str
     _schema_version: str
     _request_errors: tuple[str, ...]
     _fields: tuple[_FrozenField, ...]
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise ValueError(
+            "FrozenRequest cannot be constructed directly."
+        )
 
     def __post_init__(self) -> None:
         if not _is_nonempty_ascii(self._schema_id):
@@ -258,6 +263,22 @@ class FrozenRequest:
                 field_name, field.capture.status
             )
         return field.capture
+
+
+def _new_frozen_request(
+    *,
+    schema_id: str,
+    schema_version: str,
+    request_errors: tuple[str, ...],
+    fields: tuple[_FrozenField, ...],
+) -> FrozenRequest:
+    frozen = object.__new__(FrozenRequest)
+    object.__setattr__(frozen, "_schema_id", schema_id)
+    object.__setattr__(frozen, "_schema_version", schema_version)
+    object.__setattr__(frozen, "_request_errors", request_errors)
+    object.__setattr__(frozen, "_fields", fields)
+    frozen.__post_init__()
+    return frozen
 
 
 def _text_hex(value: str) -> str:
@@ -453,11 +474,11 @@ def _freeze_missing_field(
 
 
 def _invalid_mapping_request(schema: RequestSchema) -> FrozenRequest:
-    return FrozenRequest(
-        _schema_id=schema.schema_id,
-        _schema_version=schema.schema_version,
-        _request_errors=("invalid_mapping",),
-        _fields=(),
+    return _new_frozen_request(
+        schema_id=schema.schema_id,
+        schema_version=schema.schema_version,
+        request_errors=("invalid_mapping",),
+        fields=(),
     )
 
 
@@ -504,11 +525,11 @@ def freeze_request(
         else _freeze_field(field, supplied[field.name], budget)
         for field in schema.fields
     )
-    return FrozenRequest(
-        _schema_id=schema.schema_id,
-        _schema_version=schema.schema_version,
-        _request_errors=request_errors,
-        _fields=frozen_fields,
+    return _new_frozen_request(
+        schema_id=schema.schema_id,
+        schema_version=schema.schema_version,
+        request_errors=request_errors,
+        fields=frozen_fields,
     )
 
 

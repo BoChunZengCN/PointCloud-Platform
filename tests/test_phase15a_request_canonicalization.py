@@ -8,6 +8,8 @@ from pc_system.request_canonicalization import (
     FrozenRequest,
     FrozenRequestValueError,
     RequestSchema,
+    _CaptureRecord,
+    _FrozenField,
     freeze_request,
 )
 
@@ -288,6 +290,27 @@ def test_frozen_request_constructor_rejects_unsafe_state(
             request_errors,
             fields,
         )
+
+
+def test_frozen_request_constructor_rejects_nested_mutable_state():
+    terms = ["Pump"]
+    term_hexes = ["50756d70"]
+    capture = _CaptureRecord(
+        status="ok",
+        terms=terms,
+        term_hexes=term_hexes,
+    )
+    field = _FrozenField(
+        name="keywords",
+        kind="term_list",
+        raw_type=None,
+        capture=capture,
+    )
+
+    with pytest.raises(
+        ValueError, match="cannot be constructed directly"
+    ):
+        FrozenRequest("schema", "1.0", (), (field,))
 
 
 class ExplodingMetadata(type):
