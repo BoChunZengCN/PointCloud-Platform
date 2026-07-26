@@ -10,7 +10,10 @@ from pc_system.identifiers import validate_identifier
 from pc_system.model_matching_audit import (
     append_operation_event,
     complete_operation,
+    ensure_operation_event,
     fail_operation,
+    load_operation,
+    read_operation_events,
     start_operation,
     utc_now,
 )
@@ -18,6 +21,7 @@ from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
 from pc_system.request_canonicalization import (
     FieldSpec,
+    FrozenRequest,
     FrozenRequestValueError,
     RequestSchema,
     freeze_request,
@@ -36,6 +40,7 @@ _MANIFEST_FIELDS = frozenset(
         "tags",
         "lifecycle_status",
         "created_by",
+        "operation_id",
         "created_at",
     }
 )
@@ -140,6 +145,12 @@ def _publish_model_asset(path: Path, manifest: dict) -> None:
     except ModelMatchingError:
         raise
     except OSError as exc:
+        if published:
+            raise ModelMatchingError(
+                "publication_recovery_required",
+                "Model asset is visible but its publication durability "
+                "could not be confirmed.",
+            ) from exc
         raise ModelMatchingError(
             "model_asset_persistence_error",
             "Model asset could not be published durably.",
@@ -183,32 +194,199 @@ def _record_failure(
 ) -> None:
     try:
         fail_operation(project_root, operation_id, error.code, str(error))
-    except Exception:
-        # The original stable business/audit failure remains authoritative.
-        # Task 2 independently audits rejected lifecycle transitions.
-        pass
+    except Exception as exc:
+        raise ModelMatchingError(
+            "audit_persistence_error",
+            "Model asset failure could not be recorded durably.",
+        ) from exc
 
 
-def _replay_model_asset(project_root: Path, operation: dict) -> dict:
-    if operation["status"] == "completed":
-        result = operation.get("result") or {}
-        model_id = result.get("model_id")
-        if not isinstance(model_id, str):
+def _normalize_model_request(
+    frozen_request: FrozenRequest,
+) -> dict[str, object]:
+    try:
+        normalized_model_id = validate_identifier(
+            frozen_request.require_identifier_text("model_id"),
+            "model_id",
+        )
+        normalized_category_id = validate_identifier(
+            frozen_request.require_identifier_text("category_id"),
+            "category_id",
+        )
+        normalized_display_name = frozen_request.require_text(
+            "display_name"
+        ).strip()
+        if not normalized_display_name:
+            raise ValueError("display_name must not be empty.")
+        normalized_display_name.encode("utf-8")
+        normalized_manufacturer = frozen_request.require_text(
+            "manufacturer"
+        ).strip()
+        normalized_model_number = frozen_request.require_text(
+            "model_number"
+        ).strip()
+        normalized_keywords = _terms(
+            frozen_request.require_term_texts("keywords"), "keywords"
+        )
+        normalized_tags = _terms(
+            frozen_request.require_term_texts("tags"), "tags"
+        )
+    except (FrozenRequestValueError, TypeError, ValueError) as exc:
+        raise ModelMatchingError(
+            "invalid_model_asset", str(exc)
+        ) from exc
+    return {
+        "model_id": normalized_model_id,
+        "display_name": normalized_display_name,
+        "category_id": normalized_category_id,
+        "manufacturer": normalized_manufacturer,
+        "model_number": normalized_model_number,
+        "keywords": normalized_keywords,
+        "tags": normalized_tags,
+    }
+
+
+def _operation_result(project_root: Path, model_id: str) -> dict:
+    path = model_asset_path(project_root, model_id)
+    return {
+        "model_id": model_id,
+        "artifact_path": path.relative_to(project_root).as_posix(),
+    }
+
+
+def _require_matching_manifest(
+    manifest: dict, operation: dict, normalized: dict[str, object]
+) -> None:
+    expected = {
+        "schema_version": "1.0",
+        **normalized,
+        "lifecycle_status": "active",
+        "created_by": operation["actor_id"],
+        "operation_id": operation["operation_id"],
+    }
+    if any(manifest.get(key) != value for key, value in expected.items()):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Published model asset does not match its canonical operation.",
+        )
+
+
+def _created_event_details(manifest: dict) -> dict:
+    return {
+        "model_id": manifest["model_id"],
+        "manifest_fingerprint": _canonical_hash(manifest),
+    }
+
+
+def _require_created_event(
+    project_root: Path, operation_id: str, manifest: dict
+) -> None:
+    expected = _created_event_details(manifest)
+    existing = [
+        event
+        for event in read_operation_events(project_root, operation_id)
+        if event["event_type"] == "model_asset.created"
+    ]
+    if len(existing) != 1 or existing[0]["details"] != expected:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Terminal model operation has no matching creation event.",
+        )
+
+
+def _ensure_created_event(
+    project_root: Path, operation_id: str, manifest: dict
+) -> None:
+    details = _created_event_details(manifest)
+    try:
+        ensure_operation_event(
+            project_root,
+            operation_id,
+            "model_asset.created",
+            details,
+        )
+    except ModelMatchingError as exc:
+        if exc.code == "operation_immutable":
             raise ModelMatchingError(
                 "audit_integrity_error",
-                "Completed model operation has no model identity.",
-            )
-        return load_model_asset(project_root, model_id)
+                "Terminal model operation is missing its creation event.",
+            ) from exc
+        raise
+
+
+def _complete_recovered_operation(
+    project_root: Path, operation_id: str, result: dict
+) -> None:
+    try:
+        complete_operation(project_root, operation_id, result)
+        return
+    except Exception as exc:
+        try:
+            current = load_operation(project_root, operation_id)
+        except Exception:
+            raise _audit_error(exc) from exc
+        if (
+            current["status"] == "completed"
+            and current.get("result") == result
+        ):
+            return
+        raise _audit_error(exc) from exc
+
+
+def _replay_model_asset(
+    project_root: Path,
+    operation: dict,
+    frozen_request: FrozenRequest,
+) -> dict:
     if operation["status"] == "failed":
         error = operation.get("error") or {}
         raise ModelMatchingError(
             str(error.get("code") or "model_asset_create_failed"),
             str(error.get("message") or "Model asset creation failed."),
         )
-    raise ModelMatchingError(
-        "operation_busy",
-        "The original model asset operation is still running.",
-    )
+    try:
+        normalized = _normalize_model_request(frozen_request)
+    except ModelMatchingError as error:
+        if operation["status"] == "running":
+            _record_failure(
+                project_root, operation["operation_id"], error
+            )
+        raise
+
+    model_id = normalized["model_id"]
+    if not isinstance(model_id, str):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Frozen model request has no model identity.",
+        )
+    path = model_asset_path(project_root, model_id)
+    result = _operation_result(project_root, model_id)
+    if operation["status"] == "running" and not path.is_file():
+        raise ModelMatchingError(
+            "operation_busy",
+            "The original model asset operation is still running.",
+        )
+    if operation["status"] == "completed" and operation.get(
+        "result"
+    ) != result:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Completed model operation result does not match its asset.",
+        )
+    manifest = load_model_asset(project_root, model_id)
+    _require_matching_manifest(manifest, operation, normalized)
+    if operation["status"] == "running":
+        _ensure_created_event(
+            project_root, operation["operation_id"], manifest
+        )
+        _complete_recovered_operation(
+            project_root, operation["operation_id"], result
+        )
+    else:
+        _require_created_event(
+            project_root, operation["operation_id"], manifest
+        )
+    return manifest
 
 
 def _record_replay_failure(
@@ -315,7 +493,9 @@ def create_model_asset(
     if replayed:
         try:
             require_any_role(principal, {"expert"})
-            return _replay_model_asset(project_root, operation)
+            return _replay_model_asset(
+                project_root, operation, frozen_request
+            )
         except Exception as exc:
             error = _model_error(exc)
             _record_replay_failure(
@@ -333,83 +513,52 @@ def create_model_asset(
     audited_operation_id = operation["operation_id"]
     try:
         require_any_role(principal, {"expert"})
-        try:
-            normalized_model_id = validate_identifier(
-                frozen_request.require_identifier_text("model_id"),
-                "model_id",
-            )
-            normalized_category_id = validate_identifier(
-                frozen_request.require_identifier_text("category_id"),
-                "category_id",
-            )
-            normalized_display_name = frozen_request.require_text(
-                "display_name"
-            ).strip()
-            if not normalized_display_name:
-                raise ValueError("display_name must not be empty.")
-            normalized_display_name.encode("utf-8")
-            normalized_manufacturer = frozen_request.require_text(
-                "manufacturer"
-            ).strip()
-            normalized_model_number = frozen_request.require_text(
-                "model_number"
-            ).strip()
-            normalized_keywords = _terms(
-                frozen_request.require_term_texts("keywords"),
-                "keywords",
-            )
-            normalized_tags = _terms(
-                frozen_request.require_term_texts("tags"), "tags"
-            )
-        except (FrozenRequestValueError, TypeError, ValueError) as exc:
+        normalized = _normalize_model_request(frozen_request)
+        normalized_model_id = normalized["model_id"]
+        if type(normalized_model_id) is not str:
             raise ModelMatchingError(
-                "invalid_model_asset", str(exc)
-            ) from exc
+                "audit_integrity_error",
+                "Frozen model request has no model identity.",
+            )
 
         manifest = {
             "schema_version": "1.0",
-            "model_id": normalized_model_id,
-            "display_name": normalized_display_name,
-            "category_id": normalized_category_id,
-            "manufacturer": normalized_manufacturer,
-            "model_number": normalized_model_number,
-            "keywords": normalized_keywords,
-            "tags": normalized_tags,
+            **normalized,
             "lifecycle_status": "active",
             "created_by": principal.actor_id,
+            "operation_id": audited_operation_id,
             "created_at": utc_now(),
         }
         path = model_asset_path(project_root, normalized_model_id)
         _publish_model_asset(path, manifest)
-        try:
-            append_operation_event(
-                project_root,
-                audited_operation_id,
-                "model_asset.created",
-                {
-                    "model_id": normalized_model_id,
-                    "manifest_fingerprint": _canonical_hash(manifest),
-                },
-            )
-            complete_operation(
-                project_root,
-                audited_operation_id,
-                {
-                    "model_id": normalized_model_id,
-                    "artifact_path": path.relative_to(
-                        project_root
-                    ).as_posix(),
-                },
-            )
-        except Exception as exc:
-            raise _audit_error(exc) from exc
-        return manifest
     except Exception as exc:
         error = _model_error(exc)
+        if error.code == "publication_recovery_required":
+            if error is exc:
+                raise
+            raise error from exc
         _record_failure(project_root, audited_operation_id, error)
         if error is exc:
             raise
         raise error from exc
+    try:
+        append_operation_event(
+            project_root,
+            audited_operation_id,
+            "model_asset.created",
+            {
+                "model_id": normalized_model_id,
+                "manifest_fingerprint": _canonical_hash(manifest),
+            },
+        )
+        complete_operation(
+            project_root,
+            audited_operation_id,
+            _operation_result(project_root, normalized_model_id),
+        )
+    except Exception as exc:
+        raise _audit_error(exc) from exc
+    return manifest
 
 
 def _validate_manifest(manifest: object, expected_model_id: str) -> dict:
@@ -433,6 +582,7 @@ def _validate_manifest(manifest: object, expected_model_id: str) -> dict:
         "manufacturer",
         "model_number",
         "created_by",
+        "operation_id",
         "created_at",
     ):
         if not isinstance(manifest[field], str):
@@ -446,6 +596,7 @@ def _validate_manifest(manifest: object, expected_model_id: str) -> dict:
         if not manifest["display_name"].strip():
             raise ValueError("Model display name is empty.")
         validate_identifier(manifest["created_by"], "created_by")
+        validate_identifier(manifest["operation_id"], "operation_id")
         created_at = datetime.fromisoformat(manifest["created_at"])
         if (
             created_at.tzinfo is None

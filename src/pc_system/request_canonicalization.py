@@ -150,6 +150,7 @@ class _CaptureBudget:
     limits: FreezeLimits
     nodes: int = 0
     text_bytes: int = 0
+    text_limit_exceeded: bool = False
 
     def consume_node(self, depth: int) -> bool:
         self.nodes += 1
@@ -161,7 +162,17 @@ class _CaptureBudget:
     def consume_text(self, encoded: bytes) -> bool:
         next_total = self.text_bytes + len(encoded)
         self.text_bytes = next_total
-        return next_total <= self.limits.max_text_bytes
+        if next_total > self.limits.max_text_bytes:
+            self.text_limit_exceeded = True
+            return False
+        return True
+
+    def allows_text_lower_bound(self, character_count: int) -> bool:
+        remaining = self.limits.max_text_bytes - self.text_bytes
+        if character_count <= remaining:
+            return True
+        self.text_limit_exceeded = True
+        return False
 
 
 @dataclass(frozen=True, init=False)
@@ -281,59 +292,62 @@ def _new_frozen_request(
     return frozen
 
 
-def _text_hex(value: str) -> str:
-    if type(value) is not str:
-        raise TypeError("text must be an exact string")
-    return bytes.hex(str.encode(value, "utf-8", "surrogatepass"))
-
-
-def _leaf_metadata(owner: object, name: str) -> _MetadataRecord:
+def _leaf_metadata(
+    owner: object, name: str, budget: _CaptureBudget
+) -> _MetadataRecord:
     try:
         raw = getattr(owner, name)
     except Exception:
         return _MetadataRecord(status="error")
     if type(raw) is not str:
         return _MetadataRecord(status="error")
-    try:
-        text_hex = _text_hex(raw)
-    except Exception:
+    captured = _capture_encoded_text(raw, budget)
+    if captured is None:
+        if budget.text_limit_exceeded:
+            return _MetadataRecord(status="limit_exceeded")
         return _MetadataRecord(status="error")
+    _, text_hex = captured
     return _MetadataRecord(status="ok", text_hex=text_hex)
 
 
-def _exception_type_identity(value: object) -> _TypeIdentityRecord:
+def _exception_type_identity(
+    value: object, budget: _CaptureBudget
+) -> _TypeIdentityRecord:
     value_type = type(value)
     return _TypeIdentityRecord(
-        module=_leaf_metadata(value_type, "__module__"),
-        qualname=_leaf_metadata(value_type, "__qualname__"),
+        module=_leaf_metadata(value_type, "__module__", budget),
+        qualname=_leaf_metadata(value_type, "__qualname__", budget),
     )
 
 
-def _metadata(owner: object, name: str) -> _MetadataRecord:
+def _metadata(
+    owner: object, name: str, budget: _CaptureBudget
+) -> _MetadataRecord:
     try:
         raw = getattr(owner, name)
     except Exception as exc:
         return _MetadataRecord(
             status="error",
-            error_type=_exception_type_identity(exc),
+            error_type=_exception_type_identity(exc, budget),
         )
     if type(raw) is not str:
         return _MetadataRecord(status="error")
-    try:
-        text_hex = _text_hex(raw)
-    except Exception as exc:
-        return _MetadataRecord(
-            status="error",
-            error_type=_exception_type_identity(exc),
-        )
+    captured = _capture_encoded_text(raw, budget)
+    if captured is None:
+        if budget.text_limit_exceeded:
+            return _MetadataRecord(status="limit_exceeded")
+        return _MetadataRecord(status="error")
+    _, text_hex = captured
     return _MetadataRecord(status="ok", text_hex=text_hex)
 
 
-def _type_identity(value: object) -> _TypeIdentityRecord:
+def _type_identity(
+    value: object, budget: _CaptureBudget
+) -> _TypeIdentityRecord:
     value_type = type(value)
     return _TypeIdentityRecord(
-        module=_metadata(value_type, "__module__"),
-        qualname=_metadata(value_type, "__qualname__"),
+        module=_metadata(value_type, "__module__", budget),
+        qualname=_metadata(value_type, "__qualname__", budget),
     )
 
 
@@ -342,12 +356,17 @@ def _capture_encoded_text(
 ) -> tuple[str, str] | None:
     if type(text) is not str:
         return None
+    if not budget.allows_text_lower_bound(len(text)):
+        return None
     try:
         encoded = str.encode(text, "utf-8", "surrogatepass")
-        text_hex = bytes.hex(encoded)
     except Exception:
         return None
     if not budget.consume_text(encoded):
+        return None
+    try:
+        text_hex = bytes.hex(encoded)
+    except Exception:
         return None
     return text, text_hex
 
@@ -444,8 +463,10 @@ def _freeze_field(
             raw_type=None,
             capture=_CaptureRecord(status="limit_exceeded"),
         )
-    raw_type = _type_identity(value)
-    if spec.kind == "identifier":
+    raw_type = _type_identity(value, budget)
+    if budget.text_limit_exceeded:
+        capture = _CaptureRecord(status="limit_exceeded")
+    elif spec.kind == "identifier":
         capture = _capture_identifier(value, budget)
     elif spec.kind == "text":
         capture = _capture_scalar_text(value, budget)

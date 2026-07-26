@@ -387,6 +387,36 @@ def test_type_metadata_failure_is_total_and_non_recursive():
     assert frozen.require_text("display_name") == "Pump A"
 
 
+def test_oversized_exact_type_metadata_exhausts_shared_text_budget():
+    value_type = type(
+        "BudgetedMetadata",
+        (),
+        {"__str__": lambda self: "Pump A"},
+    )
+    value_type.__module__ = "m" * 10_000
+
+    frozen = freeze_request(
+        SCHEMA,
+        request_values(display_name=value_type()),
+        limits=FreezeLimits(max_text_bytes=64),
+    )
+
+    payload = frozen.to_audit_payload()
+    display_name = next(
+        field for field in payload["fields"] if field["name"] == "display_name"
+    )
+    serialized = json.dumps(payload, ensure_ascii=True)
+    with pytest.raises(FrozenRequestValueError) as exc_info:
+        frozen.require_text("display_name")
+
+    assert exc_info.value.reason == "limit_exceeded"
+    assert display_name["raw_type"]["module"] == {
+        "status": "limit_exceeded"
+    }
+    assert len(serialized) < 2_000
+    assert "m" * 100 not in serialized
+
+
 class ExplodingMapping(dict):
     def __iter__(self):
         raise RuntimeError("mapping iteration exploded")

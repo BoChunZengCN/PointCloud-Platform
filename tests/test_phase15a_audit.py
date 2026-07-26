@@ -99,6 +99,76 @@ def test_same_operation_with_changed_payload_is_rejected(tmp_path):
     assert exc_info.value.code == "idempotency_conflict"
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("request_id", "../raw-request-secret"),
+        ("idempotency_key", "../raw-idempotency-secret"),
+    ],
+)
+def test_invalid_start_request_identifiers_are_independently_audited(
+    tmp_path, field, invalid_value
+):
+    arguments = {
+        "operation_id": "op-invalid-audit-request",
+        "operation_type": "model_asset.create",
+        "principal": PRINCIPAL,
+        "request_id": "request-valid",
+        "idempotency_key": "idem-valid",
+        "request_payload": {"model_id": "pump-a"},
+    }
+    arguments[field] = invalid_value
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(tmp_path, **arguments)
+
+    assert exc_info.value.code == "invalid_audit_request"
+    assert invalid_value not in str(exc_info.value)
+    audits = mutation_failure_audits(
+        tmp_path, "op-invalid-audit-request"
+    )
+    assert len(audits) == 1
+    operation, events = audits[0]
+    serialized = json.dumps(
+        {"operation": operation, "events": events},
+        ensure_ascii=True,
+    )
+    assert operation["status"] == "failed"
+    assert operation["error"]["code"] == "invalid_audit_request"
+    assert events[1]["event_type"] == "operation.mutation_rejected"
+    assert events[1]["details"] == {
+        "target_operation_id": "op-invalid-audit-request",
+        "attempted_mutation": "operation.started",
+        "code": "invalid_audit_request",
+        "message": "Audit request identifiers are invalid.",
+    }
+    assert invalid_value not in serialized
+
+
+def test_invalid_start_request_audit_failure_fails_closed(
+    tmp_path, monkeypatch
+):
+    def interrupt_failure_audit(*args, **kwargs):
+        raise OSError("simulated invalid request audit interruption")
+
+    monkeypatch.setattr(
+        audit_module, "_record_failed_mutation", interrupt_failure_audit
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path,
+            operation_id="op-invalid-audit-request",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="../raw-request-secret",
+            idempotency_key="idem-valid",
+            request_payload={"model_id": "pump-a"},
+        )
+
+    assert exc_info.value.code == "audit_persistence_error"
+
+
 def test_tampered_event_breaks_verification(tmp_path):
     start_operation(
         tmp_path, operation_id="op-001", operation_type="model_asset.create",

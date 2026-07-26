@@ -91,11 +91,17 @@ tests/test_phase15a_request_canonicalization.py
 Modify:
 
 ```text
+src/pc_system/model_matching_identity.py
+src/pc_system/model_matching_audit.py
 src/pc_system/model_library.py
+tests/test_phase15a_identity.py
+tests/test_phase15a_audit.py
 tests/test_phase15a_model_library.py
 ```
 
-Task 1 identity code and Task 2 audit lifecycle code remain unchanged.
+The final bounded review wave hardens direct principal construction, invalid
+audit-request handling, and published-asset audit recovery without changing
+the model-library public call signature.
 
 ## 6. Public interfaces
 
@@ -205,6 +211,9 @@ Rules:
 - Type identity comes from `type(value)`, never `value.__class__`.
 - Type metadata access and conversion are guarded and produce fixed error
   markers.
+- Exact-string type metadata consumes the same aggregate text budget as
+  captured business text. A character-count lower bound is checked before
+  UTF-8 encoding or hexadecimal allocation.
 - Field order is the schema order.
 - Term order is captured input order. Business normalization may later
   lowercase, deduplicate, and sort the captured terms.
@@ -254,6 +263,11 @@ not raise before audit start. Accessing that field after audit start raises
 `FrozenRequestValueError`, which the model library maps to stable
 `invalid_model_asset`.
 
+The aggregate text limit includes exact `__module__` and `__qualname__`
+metadata, including bounded exception-type metadata. If metadata exhausts the
+limit, the field capture is `limit_exceeded` and the payload contains only the
+bounded marker, never the oversized metadata text.
+
 Different invalid requests that exceed the same limit may share the same
 failure fingerprint. They cannot produce or replay a successful business
 mutation.
@@ -269,7 +283,9 @@ freeze MODEL_ASSET_CREATE_SCHEMA once
         v
 start_operation(frozen.to_audit_payload())
         |
-        +--> replay: authorize -> load/replay using original completed result
+        +--> replay: authorize -> validate from this FrozenRequest
+        |             -> replay terminal result, finish an invalid running
+        |                request, or recover a matching published asset
         |             failures use the independent replay-failure audit
         |
         v
@@ -304,6 +320,18 @@ Failures after terminal replay use the existing independent
 `model_asset.replay_failure` operation and never mutate the original terminal
 projection.
 
+If failure terminalization cannot be made durable, `audit_persistence_error`
+overrides the business error. A same-idempotency retry of a still-running
+invalid request validates the new call's one frozen capture and may finish the
+canonical operation as failed. A still-running valid request without a
+published asset remains `operation_busy`.
+
+Invalid `request_id` and `idempotency_key` values at the public audit-start
+boundary become stable `invalid_audit_request`. A separate
+`audit.mutation_failure` operation records only fixed bounded text and the
+valid target operation ID; failure to persist that audit fails closed as
+`audit_persistence_error`.
+
 ## 13. Persistence and compatibility
 
 The canonicalizer changes the request fingerprint representation used by the
@@ -314,7 +342,21 @@ merged into `main`. If a developer retains local WIP idempotency indexes, the
 new request fingerprint fails closed with `idempotency_conflict`; it never
 silently replays an operation under the old representation.
 
-The model asset manifest format and storage layout do not change.
+The model asset manifest adds the canonical `operation_id`. Once the immutable
+asset is published, audit append or completion interruption leaves the
+canonical operation running (or completed when completion was already
+durable); it is never changed to failed. A same-idempotency expert replay
+verifies every stable frozen business field, canonical actor and operation,
+and the exact `model_asset.created` fingerprint before completing and
+returning the existing asset. Matching events are reused; conflicts fail
+closed and the asset is never overwritten.
+
+Asset no-replace publication also distinguishes the actual `os.link` outcome.
+Failure before the link remains `model_asset_persistence_error` and may
+terminalize the operation. Failure of directory durability after a successful
+link returns `publication_recovery_required`, preserves the visible asset and
+running canonical operation, and uses the same verified replay recovery path;
+path existence is never used to guess publication ownership.
 
 ## 14. Testing strategy
 
@@ -332,6 +374,8 @@ The model asset manifest format and storage layout do not change.
 - Field order and canonical payload are deterministic.
 - Different valid captured values have different canonical payloads.
 - Missing/unknown fields and every resource limit produce stable markers.
+- Oversized exact type metadata consumes the shared budget without oversized
+  audit payload allocation.
 
 ### 14.2 Model-library integration tests
 
@@ -342,6 +386,12 @@ The model asset manifest format and storage layout do not change.
   `invalid_model_asset`, never a raw pre-audit exception.
 - Existing authorization, replay failure, concurrent no-replace publication,
   manifest integrity, and listing tests remain green.
+- Invalid audit identifiers are separately audited without raw values.
+- Failure-terminalization interruption is recoverable on same-idempotency
+  retry.
+- Append/completion interruption, manifest/event tampering, acknowledgement
+  loss, and concurrent published recovery preserve the immutable asset and
+  converge the canonical operation.
 
 ### 14.3 Regression gates
 

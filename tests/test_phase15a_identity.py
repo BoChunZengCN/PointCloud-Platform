@@ -56,3 +56,40 @@ def test_role_check_requires_one_allowed_role():
     with pytest.raises(ModelMatchingError) as exc_info:
         require_any_role(principal, {"expert", "approver"})
     assert exc_info.value.code == "permission_denied"
+
+
+class _TextSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("actor_id", "roles", "source"),
+    [
+        ("../alice", frozenset({"expert"}), "configured_token"),
+        ("alice", {"expert"}, "configured_token"),
+        ("alice", frozenset({"owner"}), "configured_token"),
+        (
+            "alice",
+            frozenset({_TextSubclass("expert")}),
+            "configured_token",
+        ),
+        ("alice", frozenset({"expert"}), "browser_headers"),
+        (
+            "alice",
+            frozenset({"expert"}),
+            _TextSubclass("configured_token"),
+        ),
+        ("alice", frozenset(), "configured_token"),
+    ],
+)
+def test_direct_principal_construction_rejects_untrusted_state(
+    actor_id, roles, source
+):
+    with pytest.raises(ValueError):
+        Principal(actor_id, roles, source)
+
+
+def test_system_principal_may_have_empty_roles():
+    principal = Principal("system-audit", frozenset(), "system")
+
+    assert principal.roles == frozenset()

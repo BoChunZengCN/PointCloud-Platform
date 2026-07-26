@@ -731,6 +731,39 @@ def append_operation_event(
         raise
 
 
+def ensure_operation_event(
+    project_root: Path,
+    operation_id: str,
+    event_type: str,
+    details: dict,
+) -> dict:
+    operation_id = validate_identifier(operation_id, "operation_id")
+    if event_type in _RESERVED_LIFECYCLE_EVENT_TYPES:
+        raise ModelMatchingError(
+            "invalid_audit_event",
+            "Lifecycle events require their dedicated mutation API.",
+        )
+    _require_event_details(event_type, details)
+    with _operation_write_lock(
+        project_root, operation_id, purpose="event_recovery"
+    ):
+        events = read_operation_events(project_root, operation_id)
+        _require_valid_operation_chain(events)
+        existing = [
+            event for event in events if event["event_type"] == event_type
+        ]
+        if existing:
+            if len(existing) == 1 and existing[0]["details"] == details:
+                return existing[0]
+            raise ModelMatchingError(
+                "audit_integrity_error",
+                "Existing recovered audit event conflicts with the result.",
+            )
+        return _append_operation_event_locked(
+            project_root, operation_id, event_type, details
+        )
+
+
 def _record_failed_mutation(
     project_root: Path,
     *,
@@ -1277,6 +1310,29 @@ def start_operation(
     idempotency_key: str,
     request_payload: dict,
 ) -> tuple[dict, bool]:
+    operation_id = validate_identifier(operation_id, "operation_id")
+    try:
+        validate_identifier(request_id, "request_id")
+        validate_identifier(idempotency_key, "idempotency_key")
+    except (TypeError, ValueError) as exc:
+        error = ModelMatchingError(
+            "invalid_audit_request",
+            "Audit request identifiers are invalid.",
+        )
+        try:
+            _record_failed_mutation(
+                project_root,
+                target_operation_id=operation_id,
+                attempted_mutation="operation.started",
+                code=error.code,
+                message=str(error),
+            )
+        except Exception as audit_exc:
+            raise ModelMatchingError(
+                "audit_persistence_error",
+                "Invalid audit request could not be recorded durably.",
+            ) from audit_exc
+        raise error from exc
     try:
         return _start_operation(
             project_root,

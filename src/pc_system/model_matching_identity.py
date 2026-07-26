@@ -6,6 +6,9 @@ from pc_system.model_matching_errors import ModelMatchingError
 
 
 ALLOWED_ROLES = frozenset({"operator", "expert", "approver", "auditor"})
+TRUSTED_PRINCIPAL_SOURCES = frozenset(
+    {"configured_token", "development_headers", "system"}
+)
 
 
 @dataclass(frozen=True)
@@ -13,6 +16,27 @@ class Principal:
     actor_id: str
     roles: frozenset[str]
     source: str
+
+    def __post_init__(self) -> None:
+        if type(self.actor_id) is not str:
+            raise ValueError("Principal actor ID must be an exact string.")
+        validate_identifier(self.actor_id, "actor_id")
+        if type(self.roles) is not frozenset or any(
+            type(role) is not str or role not in ALLOWED_ROLES
+            for role in self.roles
+        ):
+            raise ValueError(
+                "Principal roles must be an exact trusted role set."
+            )
+        if (
+            type(self.source) is not str
+            or self.source not in TRUSTED_PRINCIPAL_SOURCES
+        ):
+            raise ValueError("Principal source is not trusted.")
+        if self.source != "system" and not self.roles:
+            raise ValueError(
+                "Non-system principals must have at least one role."
+            )
 
 
 def _principal(actor_id: str, roles: list[str] | set[str], source: str) -> Principal:

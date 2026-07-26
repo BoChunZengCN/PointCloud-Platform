@@ -14,6 +14,7 @@ from pc_system.model_library import (
     model_version_dir,
 )
 from pc_system.model_matching_audit import (
+    append_operation_event,
     load_operation,
     read_operation_events,
 )
@@ -225,6 +226,7 @@ def test_create_load_and_list_model_asset_deterministically(tmp_path):
         "tags": ["motor-coupled", "pump"],
         "lifecycle_status": "active",
         "created_by": "alice",
+        "operation_id": "op-model-001",
         "created_at": created["created_at"],
     }
     assert created["created_at"].endswith("+00:00")
@@ -824,3 +826,327 @@ def test_published_asset_survives_audit_failure_without_becoming_overwritable(
     assert duplicate.value.code == "model_exists"
     assert load_model_asset(tmp_path, "pump-a") == published
     assert model_asset_path(tmp_path, "pump-a").read_bytes() == original_bytes
+
+
+def _interrupt_model_finalization_once(monkeypatch, failure_point):
+    tripped = False
+    if failure_point.startswith("append"):
+        original = library_module.append_operation_event
+
+        def interrupt(*args, **kwargs):
+            nonlocal tripped
+            if args[2] == "model_asset.created" and not tripped:
+                tripped = True
+                if failure_point == "append_after_write":
+                    original(*args, **kwargs)
+                raise OSError("simulated model created audit interruption")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            library_module, "append_operation_event", interrupt
+        )
+    else:
+        original = library_module.complete_operation
+
+        def interrupt(*args, **kwargs):
+            nonlocal tripped
+            if args[1] == "op-model-001" and not tripped:
+                tripped = True
+                if failure_point == "complete_after_write":
+                    original(*args, **kwargs)
+                raise OSError("simulated model completion interruption")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(library_module, "complete_operation", interrupt)
+
+
+def test_failure_audit_interruption_overrides_business_error_and_retry_finishes(
+    tmp_path, monkeypatch
+):
+    original_fail = library_module.fail_operation
+    interrupted = False
+
+    def interrupt_once(*args, **kwargs):
+        nonlocal interrupted
+        if args[1] == "op-model-001" and not interrupted:
+            interrupted = True
+            raise OSError("simulated failure audit interruption")
+        return original_fail(*args, **kwargs)
+
+    monkeypatch.setattr(library_module, "fail_operation", interrupt_once)
+
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path, display_name="   ")
+
+    assert first_error.value.code == "audit_persistence_error"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            display_name="   ",
+            operation_id="op-model-retry",
+            request_id="request-model-retry",
+        )
+
+    assert retry_error.value.code == "invalid_model_asset"
+    assert _failure_code(
+        tmp_path, "op-model-001"
+    ) == "invalid_model_asset"
+    assert not model_asset_path(tmp_path, "pump-a").exists()
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "status_after_first"),
+    [
+        ("append_before_write", "running"),
+        ("append_after_write", "running"),
+        ("complete_before_write", "running"),
+        ("complete_after_write", "completed"),
+    ],
+)
+def test_published_asset_recovers_each_audit_finalization_boundary(
+    tmp_path, monkeypatch, failure_point, status_after_first
+):
+    _interrupt_model_finalization_once(monkeypatch, failure_point)
+
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path)
+
+    assert first_error.value.code == "audit_persistence_error"
+    assert (
+        load_operation(tmp_path, "op-model-001")["status"]
+        == status_after_first
+    )
+    asset_path = model_asset_path(tmp_path, "pump-a")
+    published_bytes = asset_path.read_bytes()
+
+    recovered = create_pump(
+        tmp_path,
+        operation_id="op-model-recovery",
+        request_id="request-model-recovery",
+    )
+
+    assert recovered == load_model_asset(tmp_path, "pump-a")
+    assert asset_path.read_bytes() == published_bytes
+    operation = load_operation(tmp_path, "op-model-001")
+    assert operation["status"] == "completed"
+    assert operation["result"]["model_id"] == "pump-a"
+    events = read_operation_events(tmp_path, "op-model-001")
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("model_asset.created") == 1
+    assert event_types.count("operation.completed") == 1
+    assert "operation.failed" not in event_types
+
+
+def test_unconfirmed_asset_publication_preserves_running_operation_for_retry(
+    tmp_path, monkeypatch
+):
+    original_fsync_directory = library_module._fsync_directory
+    interrupted = False
+
+    def interrupt_after_link(path):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise OSError("simulated asset directory fsync interruption")
+        return original_fsync_directory(path)
+
+    monkeypatch.setattr(
+        library_module, "_fsync_directory", interrupt_after_link
+    )
+
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path)
+
+    assert first_error.value.code == "publication_recovery_required"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+    asset_path = model_asset_path(tmp_path, "pump-a")
+    published_bytes = asset_path.read_bytes()
+
+    recovered = create_pump(
+        tmp_path,
+        operation_id="op-model-recovery",
+        request_id="request-model-recovery",
+    )
+
+    assert recovered == load_model_asset(tmp_path, "pump-a")
+    assert asset_path.read_bytes() == published_bytes
+    assert load_operation(tmp_path, "op-model-001")["status"] == "completed"
+    events = read_operation_events(tmp_path, "op-model-001")
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("model_asset.created") == 1
+    assert event_types.count("operation.completed") == 1
+    assert "operation.failed" not in event_types
+
+
+def test_manifest_requires_valid_canonical_operation_id(tmp_path):
+    created = create_pump(tmp_path)
+    assert created["operation_id"] == "op-model-001"
+    path = model_asset_path(tmp_path, "pump-a")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["operation_id"] = "../operation"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_model_asset(tmp_path, "pump-a")
+
+    assert exc_info.value.code == "model_asset_integrity_error"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("operation_id", "op-other"),
+        ("display_name", "Pump Tampered"),
+        ("created_by", "mallory"),
+    ],
+)
+def test_running_recovery_rejects_published_manifest_mismatch(
+    tmp_path, monkeypatch, field, value
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path)
+    assert first_error.value.code == "audit_persistence_error"
+
+    path = model_asset_path(tmp_path, "pump-a")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    tampered_bytes = path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-recovery",
+            request_id="request-model-recovery",
+        )
+
+    assert retry_error.value.code == "audit_integrity_error"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+    assert path.read_bytes() == tampered_bytes
+
+
+def test_running_recovery_rejects_conflicting_created_event(
+    tmp_path, monkeypatch
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError):
+        create_pump(tmp_path)
+    append_operation_event(
+        tmp_path,
+        "op-model-001",
+        "model_asset.created",
+        {
+            "model_id": "pump-a",
+            "manifest_fingerprint": "0" * 64,
+        },
+    )
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-recovery",
+            request_id="request-model-recovery",
+        )
+
+    assert retry_error.value.code == "audit_integrity_error"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+
+
+def test_concurrent_completed_replay_with_matching_result_succeeds(
+    tmp_path, monkeypatch
+):
+    created = create_pump(tmp_path)
+    asset_path = model_asset_path(tmp_path, "pump-a")
+    published_bytes = asset_path.read_bytes()
+    authorization_barrier = threading.Barrier(2)
+    original_require = library_module.require_any_role
+
+    def synchronized_authorization(principal, allowed):
+        original_require(principal, allowed)
+        authorization_barrier.wait(timeout=5)
+
+    monkeypatch.setattr(
+        library_module, "require_any_role", synchronized_authorization
+    )
+
+    def replay(suffix):
+        try:
+            return (
+                "created",
+                create_pump(
+                    tmp_path,
+                    operation_id=f"op-replay-{suffix}",
+                    request_id=f"request-replay-{suffix}",
+                ),
+            )
+        except ModelMatchingError as exc:
+            return ("failed", exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(replay, ["a", "b"]))
+
+    assert [status for status, _ in results] == ["created", "created"]
+    assert all(value == created for _, value in results)
+    assert asset_path.read_bytes() == published_bytes
+    events = read_operation_events(tmp_path, "op-model-001")
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("model_asset.created") == 1
+    assert event_types.count("operation.completed") == 1
+
+
+def test_concurrent_published_recovery_never_overwrites_and_completes(
+    tmp_path, monkeypatch
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError):
+        create_pump(tmp_path)
+    asset_path = model_asset_path(tmp_path, "pump-a")
+    published_bytes = asset_path.read_bytes()
+
+    authorization_barrier = threading.Barrier(2)
+    original_require = library_module.require_any_role
+
+    def synchronized_authorization(principal, allowed):
+        original_require(principal, allowed)
+        authorization_barrier.wait(timeout=5)
+
+    monkeypatch.setattr(
+        library_module, "require_any_role", synchronized_authorization
+    )
+
+    def recover(suffix):
+        try:
+            return (
+                "created",
+                create_pump(
+                    tmp_path,
+                    operation_id=f"op-recovery-{suffix}",
+                    request_id=f"request-recovery-{suffix}",
+                ),
+            )
+        except ModelMatchingError as exc:
+            return ("failed", exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(recover, ["a", "b"]))
+
+    created = [value for status, value in results if status == "created"]
+    failed = [value for status, value in results if status == "failed"]
+    assert created
+    assert all(error.code == "operation_busy" for error in failed)
+    assert asset_path.read_bytes() == published_bytes
+    assert load_operation(tmp_path, "op-model-001")["status"] == "completed"
+    events = read_operation_events(tmp_path, "op-model-001")
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("model_asset.created") == 1
+    assert event_types.count("operation.completed") == 1
+    assert "operation.failed" not in event_types

@@ -173,6 +173,7 @@ Phase 15 不包含：
 - `tags`
 - `lifecycle_status`
 - `created_by`
+- `operation_id`
 - `created_at`
 
 ### 7.2 `model_version`
@@ -382,6 +383,13 @@ reports/model_matching_operations/<operation_id>/
 9. 原子发布模型版本和索引状态。
 
 任一步骤失败都必须删除未发布暂存工件，但保留失败审计事件。已发布版本不可修改或删除；业务停用通过状态变更完成。
+
+模型资产的 no-replace 发布以 `os.link` 的真实返回边界区分状态：链接前失败
+表示未发布；链接成功后目录 `fsync` 失败表示完整资产已可见但耐久性未确认。
+后者返回 `publication_recovery_required`，保留 canonical operation 为
+running，绝不根据 `path.exists()` 猜测 owner，也不删除或覆盖资产；同幂等
+重试必须验证清单 `operation_id`、业务字段、actor 与 created 事件后完成原
+operation。
 
 ## 11. 混合候选检索
 
@@ -603,6 +611,11 @@ no-replace 适配器必须显式返回三种发布状态，不能让调用方从
 
 生产环境的身份、角色和界面权限必须来自可信认证层，不能接受浏览器自由填写的操作者。开发模式可以使用显式测试身份，但必须标记为开发来源。
 
+`Principal` 自身是信任边界：actor 必须是合法标识符，roles 必须是 exact
+`frozenset` 且每项属于允许角色，source 必须是 exact trusted string。
+只有 `system` source 可以使用空 roles，以保留 `system-audit` 与
+`system-api` 的无业务权限审计身份。
+
 ## 18. 双角色界面
 
 ### 18.1 业务匹配界面 `frontend/model-matching.html`
@@ -712,6 +725,11 @@ GET  /audit/operations/<operation_id>
 
 所有写接口要求可信身份、权限、请求 ID 和幂等键。
 
+`request_id` 或幂等键在合法 `operation_id` 下校验失败时，公共审计边界返回
+稳定的 `invalid_audit_request`，并通过独立 `audit.mutation_failure`
+操作记录固定、受界限的失败信息。无效原值不得进入投影或事件；独立审计无法
+耐久化时必须 fail closed 为 `audit_persistence_error`。
+
 ### 20.2 CLI
 
 - `import-model`
@@ -748,6 +766,9 @@ CLI 和 API 调用同一服务函数和校验规则。
 - `permission_denied`
 - `self_approval_forbidden`
 - `idempotency_conflict`
+- `invalid_audit_request`
+- `audit_persistence_error`
+- `publication_recovery_required`
 - `artifact_integrity_failed`
 - `golden_data_optimization_forbidden`
 
@@ -767,6 +788,10 @@ CLI 和 API 调用同一服务函数和校验规则。
 - 审计哈希链和状态重放。
 - 权限与职责分离。
 - 幂等性和原子失败。
+- Principal 直接构造的 actor、exact role-set 与可信来源不变量。
+- 模型资产发布后的审计 append/completion 中断、确认丢失和并发恢复。
+- 模型资产清单的 canonical `operation_id`、业务字段、actor 与 created
+  事件指纹绑定。
 
 ### 22.2 配准测试
 
