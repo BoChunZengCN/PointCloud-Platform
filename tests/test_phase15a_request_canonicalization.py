@@ -5,6 +5,7 @@ import pytest
 from pc_system.request_canonicalization import (
     FieldSpec,
     FreezeLimits,
+    FrozenRequest,
     FrozenRequestValueError,
     RequestSchema,
     freeze_request,
@@ -95,6 +96,68 @@ class ExplodingText:
 class ExplodingList(list):
     def __iter__(self):
         raise RuntimeError("list iteration exploded")
+
+
+class ForgedEncodingText(str):
+    def encode(self, *args, **kwargs):
+        return b"forged"
+
+    def __str__(self):
+        return self
+
+
+class ForgedEncodingValue:
+    def __init__(self, value):
+        self.value = value
+        self.calls = 0
+
+    def __str__(self):
+        self.calls += 1
+        return ForgedEncodingText(self.value)
+
+
+def test_scalar_text_becomes_exact_string_before_audit_encoding():
+    first_value = ForgedEncodingValue("Pump A")
+    second_value = ForgedEncodingValue("Pump B")
+
+    first = freeze_request(
+        SCHEMA, request_values(display_name=first_value)
+    )
+    second = freeze_request(
+        SCHEMA, request_values(display_name=second_value)
+    )
+    first_text = first.require_text("display_name")
+    second_text = second.require_text("display_name")
+
+    assert first_value.calls == 1
+    assert second_value.calls == 1
+    assert type(first_text) is str
+    assert type(second_text) is str
+    assert first_text == "Pump A"
+    assert second_text == "Pump B"
+    assert first.to_audit_payload() != second.to_audit_payload()
+
+
+def test_term_text_becomes_exact_string_before_audit_encoding():
+    first_value = ForgedEncodingValue("Pump")
+    second_value = ForgedEncodingValue("Valve")
+
+    first = freeze_request(
+        SCHEMA, request_values(keywords=[first_value])
+    )
+    second = freeze_request(
+        SCHEMA, request_values(keywords=[second_value])
+    )
+    first_terms = first.require_term_texts("keywords")
+    second_terms = second.require_term_texts("keywords")
+
+    assert first_value.calls == 1
+    assert second_value.calls == 1
+    assert type(first_terms[0]) is str
+    assert type(second_terms[0]) is str
+    assert first_terms == ("Pump",)
+    assert second_terms == ("Valve",)
+    assert first.to_audit_payload() != second.to_audit_payload()
 
 
 def test_identifier_requires_exact_string_after_freeze():
@@ -204,6 +267,29 @@ def test_schema_metadata_requires_nonempty_ascii(invalid):
         FieldSpec(invalid, "text")
 
 
+@pytest.mark.parametrize(
+    ("schema_id", "schema_version", "request_errors", "fields"),
+    [
+        ("\ud800", "1.0", (), ()),
+        ("schema", "", (), ()),
+        ("schema", "1.0", [], ()),
+        ("schema", "1.0", ("\ud800",), ()),
+        ("schema", "1.0", (), []),
+        ("schema", "1.0", (), ("not-a-frozen-field",)),
+    ],
+)
+def test_frozen_request_constructor_rejects_unsafe_state(
+    schema_id, schema_version, request_errors, fields
+):
+    with pytest.raises(ValueError):
+        FrozenRequest(
+            schema_id,
+            schema_version,
+            request_errors,
+            fields,
+        )
+
+
 class ExplodingMetadata(type):
     def __getattribute__(cls, name):
         if name in {"__module__", "__qualname__"}:
@@ -218,6 +304,46 @@ class MetadataExplosion(Exception, metaclass=ExplodingMetadata):
 class MetadataTarget(metaclass=ExplodingMetadata):
     def __str__(self):
         return "Pump A"
+
+
+_METADATA_RETURN_VALUE = None
+
+
+class ReturningMetadata(type):
+    def __getattribute__(cls, name):
+        if name == "__module__":
+            return _METADATA_RETURN_VALUE
+        return super().__getattribute__(name)
+
+
+class MetadataReturnsRequestValue(metaclass=ReturningMetadata):
+    def __init__(self):
+        self.calls = 0
+
+    def __str__(self):
+        self.calls += 1
+        return "Pump A"
+
+
+def test_metadata_never_converts_non_exact_string_value():
+    global _METADATA_RETURN_VALUE
+    value = MetadataReturnsRequestValue()
+    _METADATA_RETURN_VALUE = value
+    try:
+        frozen = freeze_request(
+            SCHEMA, request_values(display_name=value)
+        )
+    finally:
+        _METADATA_RETURN_VALUE = None
+
+    payload = frozen.to_audit_payload()
+    display_name = next(
+        field for field in payload["fields"] if field["name"] == "display_name"
+    )
+
+    assert value.calls == 1
+    assert display_name["raw_type"]["module"]["status"] == "error"
+    assert frozen.require_text("display_name") == "Pump A"
 
 
 def test_type_metadata_failure_is_total_and_non_recursive():

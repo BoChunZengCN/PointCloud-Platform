@@ -6,6 +6,9 @@ from typing import Literal, Mapping
 
 FieldKind = Literal["identifier", "text", "term_list"]
 _FIELD_KINDS = frozenset({"identifier", "text", "term_list"})
+_REQUEST_ERRORS = frozenset(
+    {"invalid_mapping", "missing_field", "unknown_field"}
+)
 
 
 def _is_nonempty_ascii(value: object) -> bool:
@@ -168,6 +171,29 @@ class FrozenRequest:
     _request_errors: tuple[str, ...]
     _fields: tuple[_FrozenField, ...]
 
+    def __post_init__(self) -> None:
+        if not _is_nonempty_ascii(self._schema_id):
+            raise ValueError(
+                "Frozen request schema ID must be non-empty ASCII."
+            )
+        if not _is_nonempty_ascii(self._schema_version):
+            raise ValueError(
+                "Frozen request schema version must be non-empty ASCII."
+            )
+        if type(self._request_errors) is not tuple or any(
+            type(reason) is not str or reason not in _REQUEST_ERRORS
+            for reason in self._request_errors
+        ):
+            raise ValueError(
+                "Frozen request errors must be a tuple of safe reasons."
+            )
+        if type(self._fields) is not tuple or any(
+            type(field) is not _FrozenField for field in self._fields
+        ):
+            raise ValueError(
+                "Frozen request fields must be a tuple of frozen fields."
+            )
+
     def to_audit_payload(self) -> dict:
         return {
             "canonicalizer_schema": "1.0",
@@ -235,14 +261,20 @@ class FrozenRequest:
 
 
 def _text_hex(value: str) -> str:
-    return value.encode("utf-8", "surrogatepass").hex()
+    if type(value) is not str:
+        raise TypeError("text must be an exact string")
+    return bytes.hex(str.encode(value, "utf-8", "surrogatepass"))
 
 
 def _leaf_metadata(owner: object, name: str) -> _MetadataRecord:
     try:
         raw = getattr(owner, name)
-        text = str(raw)
-        text_hex = _text_hex(text)
+    except Exception:
+        return _MetadataRecord(status="error")
+    if type(raw) is not str:
+        return _MetadataRecord(status="error")
+    try:
+        text_hex = _text_hex(raw)
     except Exception:
         return _MetadataRecord(status="error")
     return _MetadataRecord(status="ok", text_hex=text_hex)
@@ -259,8 +291,15 @@ def _exception_type_identity(value: object) -> _TypeIdentityRecord:
 def _metadata(owner: object, name: str) -> _MetadataRecord:
     try:
         raw = getattr(owner, name)
-        text = str(raw)
-        text_hex = _text_hex(text)
+    except Exception as exc:
+        return _MetadataRecord(
+            status="error",
+            error_type=_exception_type_identity(exc),
+        )
+    if type(raw) is not str:
+        return _MetadataRecord(status="error")
+    try:
+        text_hex = _text_hex(raw)
     except Exception as exc:
         return _MetadataRecord(
             status="error",
@@ -280,9 +319,11 @@ def _type_identity(value: object) -> _TypeIdentityRecord:
 def _capture_encoded_text(
     text: str, budget: _CaptureBudget
 ) -> tuple[str, str] | None:
+    if type(text) is not str:
+        return None
     try:
-        encoded = text.encode("utf-8", "surrogatepass")
-        text_hex = encoded.hex()
+        encoded = str.encode(text, "utf-8", "surrogatepass")
+        text_hex = bytes.hex(encoded)
     except Exception:
         return None
     if not budget.consume_text(encoded):
@@ -290,12 +331,23 @@ def _capture_encoded_text(
     return text, text_hex
 
 
+def _exact_builtin_text(captured: str) -> str | None:
+    try:
+        exact_text = str.__str__(captured)
+    except Exception:
+        return None
+    return exact_text if type(exact_text) is str else None
+
+
 def _capture_scalar_text(
     value: object, budget: _CaptureBudget
 ) -> _CaptureRecord:
     try:
-        text = str(value)
+        captured = str(value)
     except Exception:
+        return _CaptureRecord(status="conversion_error")
+    text = _exact_builtin_text(captured)
+    if text is None:
         return _CaptureRecord(status="conversion_error")
     captured = _capture_encoded_text(text, budget)
     if captured is None:
@@ -342,8 +394,11 @@ def _capture_terms(
         if not budget.consume_node(depth=2):
             return _CaptureRecord(status="limit_exceeded")
         try:
-            text = str(item)
+            captured = str(item)
         except Exception:
+            return _CaptureRecord(status="conversion_error")
+        text = _exact_builtin_text(captured)
+        if text is None:
             return _CaptureRecord(status="conversion_error")
         captured = _capture_encoded_text(text, budget)
         if captured is None:
