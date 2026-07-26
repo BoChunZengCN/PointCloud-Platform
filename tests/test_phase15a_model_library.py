@@ -46,7 +46,12 @@ class _BytesPathLike:
 
 
 class _ExplodingList(list):
+    def __init__(self, values):
+        super().__init__(values)
+        self.iterations = 0
+
     def __iter__(self):
+        self.iterations += 1
         raise RuntimeError("collection iteration exploded")
 
 
@@ -68,6 +73,26 @@ class _AliasedList(list):
 
     def __str__(self):
         return self.display_name
+
+
+class _StatefulDisplayName:
+    def __init__(self, first, second):
+        self.values = (first, second)
+        self.calls = 0
+
+    def __str__(self):
+        value = self.values[min(self.calls, 1)]
+        self.calls += 1
+        return value
+
+
+class _ExplodingClassDisplayName:
+    @property
+    def __class__(self):
+        raise RuntimeError("class access exploded")
+
+    def __str__(self):
+        return "Pump A"
 
 
 def create_pump(project, **overrides):
@@ -149,6 +174,41 @@ def _assert_replay_failure_audit(
     assert events[1]["actor_id"] == principal.actor_id
     assert events[1]["roles"] == sorted(principal.roles)
     assert events[1]["principal_source"] == principal.source
+
+
+def test_model_create_consumes_one_frozen_stateful_text(tmp_path):
+    display_name = _StatefulDisplayName("Pump A", "Pump B")
+
+    created = create_pump(tmp_path, display_name=display_name)
+
+    assert created["display_name"] == "Pump A"
+    assert display_name.calls == 1
+
+
+def test_same_snapshot_cannot_hide_different_business_value(tmp_path):
+    first = _StatefulDisplayName("shared", "Pump A")
+    second = _StatefulDisplayName("shared", "Pump B")
+    create_pump(tmp_path, display_name=first)
+
+    replayed = create_pump(
+        tmp_path,
+        display_name=second,
+        operation_id="op-model-replay",
+        request_id="request-model-replay",
+    )
+
+    assert replayed["display_name"] == "shared"
+    assert first.calls == 1
+    assert second.calls == 1
+
+
+def test_exploding_class_property_does_not_escape_before_audit(tmp_path):
+    created = create_pump(
+        tmp_path, display_name=_ExplodingClassDisplayName()
+    )
+
+    assert created["display_name"] == "Pump A"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "completed"
 
 
 def test_create_load_and_list_model_asset_deterministically(tmp_path):
@@ -298,14 +358,17 @@ def test_snapshot_handles_bytes_pathlike_without_raw_json_error(tmp_path):
 def test_snapshot_handles_unusual_collection_without_pre_audit_error(
     tmp_path,
 ):
+    keywords = _ExplodingList(["centrifugal"])
+
     with pytest.raises(ModelMatchingError) as exc_info:
         create_pump(
             tmp_path,
-            keywords=_ExplodingList(["centrifugal"]),
+            keywords=keywords,
         )
 
     assert exc_info.value.code == "invalid_model_asset"
     assert _failure_code(tmp_path, "op-model-001") == "invalid_model_asset"
+    assert keywords.iterations == 0
 
 
 def test_snapshot_handles_non_utf8_text_inside_audited_failure(tmp_path):
@@ -647,6 +710,8 @@ def test_list_normalizes_directory_io_failure(tmp_path, monkeypatch):
         ("created_by", "../mallory"),
         ("created_at", "not-a-timestamp"),
         ("created_at", "2026-07-25T12:00:00+08:00"),
+        ("keywords", ["pump", 1]),
+        ("tags", "pump"),
     ],
 )
 def test_manifest_requires_nonempty_identity_and_utc_timestamp(

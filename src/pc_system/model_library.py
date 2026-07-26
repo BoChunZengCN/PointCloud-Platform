@@ -16,6 +16,12 @@ from pc_system.model_matching_audit import (
 )
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
+from pc_system.request_canonicalization import (
+    FieldSpec,
+    FrozenRequestValueError,
+    RequestSchema,
+    freeze_request,
+)
 
 
 _MANIFEST_FIELDS = frozenset(
@@ -32,6 +38,20 @@ _MANIFEST_FIELDS = frozenset(
         "created_by",
         "created_at",
     }
+)
+
+MODEL_ASSET_CREATE_SCHEMA = RequestSchema(
+    schema_id="model_asset.create",
+    schema_version="1.0",
+    fields=(
+        FieldSpec("model_id", "identifier"),
+        FieldSpec("display_name", "text"),
+        FieldSpec("category_id", "identifier"),
+        FieldSpec("manufacturer", "text"),
+        FieldSpec("model_number", "text"),
+        FieldSpec("keywords", "term_list"),
+        FieldSpec("tags", "term_list"),
+    ),
 )
 
 
@@ -54,15 +74,9 @@ def model_version_dir(
     )
 
 
-def _terms(values: list[str], label: str) -> list[str]:
-    if not isinstance(values, list):
-        raise ValueError(f"{label} must be a list.")
+def _terms(values: tuple[str, ...], label: str) -> list[str]:
     normalized = sorted(
-        {
-            str(value).strip().lower()
-            for value in values
-            if str(value).strip()
-        }
+        {value.strip().lower() for value in values if value.strip()}
     )
     if any(len(value) > 128 for value in normalized):
         raise ValueError(
@@ -71,195 +85,19 @@ def _terms(values: list[str], label: str) -> list[str]:
     return normalized
 
 
+def _manifest_terms(values: object, label: str) -> list[str]:
+    if type(values) is not list or any(
+        type(value) is not str for value in values
+    ):
+        raise ValueError(f"{label} must be a list of strings.")
+    return _terms(tuple(values), label)
+
+
 def _canonical_hash(payload: dict) -> str:
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _text_hex(value: str) -> str:
-    return value.encode("utf-8", "surrogatepass").hex()
-
-
-def _metadata_text(owner: object, attribute: str) -> dict:
-    try:
-        value = getattr(owner, attribute)
-    except Exception:
-        return {"state": "attribute_error"}
-    try:
-        text = str(value)
-    except Exception:
-        return {"state": "string_error"}
-    return {
-        "state": "value",
-        "surrogatepass_utf8_hex": _text_hex(text),
-    }
-
-
-def _type_identity(value: object) -> dict:
-    value_type = type(value)
-    return {
-        "module": _metadata_text(value_type, "__module__"),
-        "qualname": _metadata_text(value_type, "__qualname__"),
-    }
-
-
-def _business_string(value: object) -> dict:
-    try:
-        text = str(value)
-    except Exception as exc:
-        return {
-            "state": "error",
-            "exception_type": _type_identity(exc),
-        }
-    return {
-        "state": "value",
-        "surrogatepass_utf8_hex": _text_hex(text),
-    }
-
-
-def _path_representation(value: object) -> dict:
-    try:
-        path_value = os.fspath(value)
-    except Exception as exc:
-        return {
-            "state": "error",
-            "exception_type": _type_identity(exc),
-        }
-    if type(path_value) is str:
-        return {
-            "state": "text",
-            "surrogatepass_utf8_hex": _text_hex(path_value),
-        }
-    if type(path_value) is bytes:
-        return {"state": "bytes", "hex": path_value.hex()}
-    return {
-        "state": "invalid",
-        "value_type": _type_identity(path_value),
-    }
-
-
-def _snapshot_sort_key(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _snapshot_representation(
-    value: object, active_containers: set[int]
-) -> object:
-    if value is None:
-        return {"kind": "none"}
-    if type(value) is bool:
-        return {"kind": "bool", "value": value}
-    if type(value) is int:
-        return {"kind": "int", "value": value}
-    if type(value) is str:
-        return {
-            "kind": "text",
-            "surrogatepass_utf8_hex": _text_hex(value),
-        }
-    if type(value) is float:
-        return {
-            "kind": "float",
-            "representation_hex": _text_hex(repr(value)),
-        }
-    if type(value) is bytes:
-        return {"kind": "bytes", "hex": value.hex()}
-    if isinstance(value, os.PathLike):
-        return {
-            "kind": "path",
-            "path": _path_representation(value),
-            "value_type": _type_identity(value),
-        }
-
-    container_types = (list, tuple, set, frozenset, dict)
-    if isinstance(value, container_types):
-        identity = id(value)
-        if identity in active_containers:
-            return {
-                "kind": "cycle",
-                "value_type": _type_identity(value),
-            }
-        active_containers.add(identity)
-        try:
-            if isinstance(value, dict):
-                items = [
-                    [
-                        _snapshot_value(key, active_containers),
-                        _snapshot_value(item, active_containers),
-                    ]
-                    for key, item in value.items()
-                ]
-                items.sort(key=_snapshot_sort_key)
-                return {
-                    "kind": "mapping",
-                    "items": items,
-                    "value_type": _type_identity(value),
-                }
-            items = [
-                _snapshot_value(item, active_containers)
-                for item in value
-            ]
-            if isinstance(value, (set, frozenset)):
-                items.sort(key=_snapshot_sort_key)
-            return {
-                "kind": "container",
-                "items": items,
-                "value_type": _type_identity(value),
-            }
-        except Exception as exc:
-            return {
-                "kind": "container_error",
-                "exception_type": _type_identity(exc),
-                "value_type": _type_identity(value),
-            }
-        finally:
-            active_containers.remove(identity)
-    return {
-        "kind": "object",
-        "value_type": _type_identity(value),
-    }
-
-
-def _snapshot_value(
-    value: object, active_containers: set[int] | None = None
-) -> object:
-    active_containers = (
-        active_containers if active_containers is not None else set()
-    )
-    return {
-        "business_string": _business_string(value),
-        "representation": _snapshot_representation(
-            value, active_containers
-        ),
-    }
-
-
-def _audit_request_snapshot(
-    *,
-    model_id: object,
-    display_name: object,
-    category_id: object,
-    manufacturer: object,
-    model_number: object,
-    keywords: object,
-    tags: object,
-) -> dict:
-    return {
-        "model_id": _snapshot_value(model_id),
-        "display_name": _snapshot_value(display_name),
-        "category_id": _snapshot_value(category_id),
-        "manufacturer": _snapshot_value(manufacturer),
-        "model_number": _snapshot_value(model_number),
-        "keywords": _snapshot_value(keywords),
-        "tags": _snapshot_value(tags),
-    }
-
 
 def _fsync_directory(path: Path) -> None:
     if os.name == "nt":
@@ -453,6 +291,18 @@ def create_model_asset(
 ) -> dict:
     project_root = Path(project_root)
     operation_id = validate_identifier(operation_id, "operation_id")
+    frozen_request = freeze_request(
+        MODEL_ASSET_CREATE_SCHEMA,
+        {
+            "model_id": model_id,
+            "display_name": display_name,
+            "category_id": category_id,
+            "manufacturer": manufacturer,
+            "model_number": model_number,
+            "keywords": keywords,
+            "tags": tags,
+        },
+    )
     operation, replayed = start_operation(
         project_root,
         operation_id=operation_id,
@@ -460,15 +310,7 @@ def create_model_asset(
         principal=principal,
         request_id=request_id,
         idempotency_key=idempotency_key,
-        request_payload=_audit_request_snapshot(
-            model_id=model_id,
-            display_name=display_name,
-            category_id=category_id,
-            manufacturer=manufacturer,
-            model_number=model_number,
-            keywords=keywords,
-            tags=tags,
-        ),
+        request_payload=frozen_request.to_audit_payload(),
     )
     if replayed:
         try:
@@ -493,20 +335,33 @@ def create_model_asset(
         require_any_role(principal, {"expert"})
         try:
             normalized_model_id = validate_identifier(
-                model_id, "model_id"
+                frozen_request.require_identifier_text("model_id"),
+                "model_id",
             )
             normalized_category_id = validate_identifier(
-                category_id, "category_id"
+                frozen_request.require_identifier_text("category_id"),
+                "category_id",
             )
-            normalized_display_name = str(display_name).strip()
+            normalized_display_name = frozen_request.require_text(
+                "display_name"
+            ).strip()
             if not normalized_display_name:
                 raise ValueError("display_name must not be empty.")
             normalized_display_name.encode("utf-8")
-            normalized_keywords = _terms(keywords, "keywords")
-            normalized_tags = _terms(tags, "tags")
-            normalized_manufacturer = str(manufacturer).strip()
-            normalized_model_number = str(model_number).strip()
-        except Exception as exc:
+            normalized_manufacturer = frozen_request.require_text(
+                "manufacturer"
+            ).strip()
+            normalized_model_number = frozen_request.require_text(
+                "model_number"
+            ).strip()
+            normalized_keywords = _terms(
+                frozen_request.require_term_texts("keywords"),
+                "keywords",
+            )
+            normalized_tags = _terms(
+                frozen_request.require_term_texts("tags"), "tags"
+            )
+        except (FrozenRequestValueError, TypeError, ValueError) as exc:
             raise ModelMatchingError(
                 "invalid_model_asset", str(exc)
             ) from exc
@@ -597,9 +452,11 @@ def _validate_manifest(manifest: object, expected_model_id: str) -> dict:
             or created_at.utcoffset() != timedelta(0)
         ):
             raise ValueError("Model creation timestamp is not UTC.")
-        if manifest["keywords"] != _terms(
+        if manifest["keywords"] != _manifest_terms(
             manifest["keywords"], "keywords"
-        ) or manifest["tags"] != _terms(manifest["tags"], "tags"):
+        ) or manifest["tags"] != _manifest_terms(
+            manifest["tags"], "tags"
+        ):
             raise ValueError("Model terms are not canonical.")
     except (TypeError, ValueError) as exc:
         raise ModelMatchingError(

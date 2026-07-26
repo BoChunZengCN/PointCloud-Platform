@@ -456,11 +456,13 @@ git commit -m "fix: converge audit publication integrity"
 ### Task 3: Immutable Model Asset Catalog
 
 **Files:**
+- Create: `src/pc_system/request_canonicalization.py`
 - Create: `src/pc_system/model_library.py`
+- Create: `tests/test_phase15a_request_canonicalization.py`
 - Create: `tests/test_phase15a_model_library.py`
 
 **Interfaces:**
-- Consumes: Task 1 identity/error contract and Task 2 audit operations.
+- Consumes: Task 1 identity/error contract, Task 2 audit operations, and the shared request canonicalizer design.
 - Produces: `create_model_asset`, `load_model_asset`, `list_model_assets`, `model_asset_path`, `model_version_dir`.
 
 - [ ] **Step 1: Write failing model-asset tests**
@@ -554,12 +556,13 @@ def model_version_dir(project_root: Path, model_id: str, version_id: str) -> Pat
     return project_root / "models" / model_id / "versions" / version_id
 
 
-def _terms(values: list[str], label: str) -> list[str]:
-    normalized = sorted({str(value).strip().lower() for value in values if str(value).strip()})
-    if any(len(value) > 128 for value in normalized):
-        raise ValueError(f"{label} entries must not exceed 128 characters.")
-    return normalized
 ```
+
+Task 3 consumes the shared request canonicalizer defined by
+docs/superpowers/specs/2026-07-26-shared-request-canonicalizer-design.md.
+The audit fingerprint and all business validation values must come from one
+FrozenRequest. The original request values must not be converted or iterated
+after freeze_request returns.
 
 - [ ] **Step 4: Implement audited creation and deterministic reads**
 
@@ -585,7 +588,7 @@ Expected: all selected tests PASS.
 - [ ] **Step 6: Commit the model catalog**
 
 ```powershell
-git add src/pc_system/model_library.py tests/test_phase15a_model_library.py
+git add src/pc_system/request_canonicalization.py src/pc_system/model_library.py tests/test_phase15a_request_canonicalization.py tests/test_phase15a_model_library.py
 git commit -m "feat: add immutable model asset catalog"
 ```
 
