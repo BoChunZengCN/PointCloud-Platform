@@ -348,6 +348,7 @@ def _read_operation_projection(
     operation = _read_operation_document(project_root, operation_id)
     events = read_operation_events(project_root, operation_id)
     _require_valid_operation_chain(events)
+    _require_operation_start_binding(operation, events)
     projected = _project_operation(operation, events)
     return operation, projected
 
@@ -462,6 +463,29 @@ def _require_valid_operation_chain(events: list[dict]) -> None:
         raise ModelMatchingError(
             "audit_integrity_error",
             "Operation audit chain integrity verification failed.",
+        )
+
+
+def _require_operation_start_binding(
+    operation: dict, events: list[dict]
+) -> None:
+    if not events:
+        return
+    first = events[0]
+    valid = all(
+        operation.get(field) == first.get(field)
+        for field in {"actor_id", "roles", "principal_source"}
+    )
+    if first.get("event_type") == "operation.started":
+        details = first.get("details") or {}
+        valid = valid and all(
+            operation.get(field) == details.get(field)
+            for field in {"request_id", "request_fingerprint"}
+        )
+    if not valid:
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Operation projection does not match its canonical start event.",
         )
 
 
@@ -689,6 +713,7 @@ def _append_operation_event_locked(
     _require_valid_operation_chain(events)
     _require_event_transition_allowed(events, event_type)
     operation = _read_operation_document(project_root, operation_id)
+    _require_operation_start_binding(operation, events)
     actor_id = principal.actor_id if principal else operation["actor_id"]
     roles = sorted(principal.roles) if principal else operation["roles"]
     principal_source = (
@@ -1338,8 +1363,12 @@ def start_operation(
 ) -> tuple[dict, bool]:
     operation_id = validate_identifier(operation_id, "operation_id")
     try:
-        validate_identifier(request_id, "request_id")
-        validate_identifier(idempotency_key, "idempotency_key")
+        if type(request_id) is not str or type(idempotency_key) is not str:
+            raise TypeError("Audit request identifiers must be exact strings.")
+        request_id = validate_identifier(request_id, "request_id")
+        idempotency_key = validate_identifier(
+            idempotency_key, "idempotency_key"
+        )
     except (TypeError, ValueError) as exc:
         error = ModelMatchingError(
             "invalid_audit_request",

@@ -24,6 +24,11 @@ from pc_system.model_matching_identity import Principal
 PRINCIPAL = Principal("alice", frozenset({"expert"}), "configured_token")
 
 
+class _UntrustedText(str):
+    def encode(self, *args, **kwargs):
+        raise RuntimeError("raw-secret-boom")
+
+
 def mutation_failure_audits(project_root, target_operation_id):
     operations_root = (
         project_root / "reports" / "model_matching_operations"
@@ -105,6 +110,14 @@ def test_same_operation_with_changed_payload_is_rejected(tmp_path):
     [
         ("request_id", "../raw-request-secret"),
         ("idempotency_key", "../raw-idempotency-secret"),
+        ("request_id", _UntrustedText("request-derived")),
+        ("idempotency_key", _UntrustedText("idem-derived")),
+    ],
+    ids=[
+        "unsafe-request-path",
+        "unsafe-idempotency-path",
+        "request-str-subclass",
+        "idempotency-str-subclass",
     ],
 )
 def test_invalid_start_request_identifiers_are_independently_audited(
@@ -2228,6 +2241,35 @@ def test_load_rejects_empty_projection_object(tmp_path):
 
     assert exc_info.value.code == "audit_integrity_error"
     assert projection_path.read_text(encoding="utf-8") == "{}"
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    [
+        ("actor_id", "mallory"),
+        ("roles", ["operator"]),
+        ("principal_source", "development_header"),
+        ("request_id", "request-forged"),
+        ("request_fingerprint", "0" * 64),
+    ],
+)
+def test_load_rejects_projection_start_envelope_tamper(
+    tmp_path, field, forged_value
+):
+    _start_binding_test_operation(tmp_path, "op-start-envelope")
+    projection_path = _operation_artifact_path(
+        tmp_path, "op-start-envelope", "operation.json"
+    )
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    projection[field] = forged_value
+    projection_path.write_text(json.dumps(projection), encoding="utf-8")
+    tampered_bytes = projection_path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        load_operation(tmp_path, "op-start-envelope")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert projection_path.read_bytes() == tampered_bytes
 
 
 @pytest.mark.parametrize(

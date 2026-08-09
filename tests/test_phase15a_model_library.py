@@ -957,6 +957,50 @@ def test_failure_audit_interruption_overrides_business_error_and_retry_finishes(
     assert not model_asset_path(tmp_path, "pump-a").exists()
 
 
+def test_failure_terminalization_contention_preserves_operation_busy(
+    tmp_path, monkeypatch
+):
+    def contend(*args, **kwargs):
+        raise ModelMatchingError(
+            "operation_busy", "The operation is being updated."
+        )
+
+    monkeypatch.setattr(library_module, "fail_operation", contend)
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        create_pump(tmp_path, display_name="   ")
+
+    assert exc_info.value.code == "operation_busy"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+
+
+def test_matching_failure_terminalization_race_returns_business_error(
+    tmp_path, monkeypatch
+):
+    original_fail = library_module.fail_operation
+
+    def finish_then_report_immutable(*args, **kwargs):
+        original_fail(*args, **kwargs)
+        raise ModelMatchingError(
+            "operation_immutable", "The operation is already terminal."
+        )
+
+    monkeypatch.setattr(
+        library_module, "fail_operation", finish_then_report_immutable
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        create_pump(tmp_path, display_name="   ")
+
+    assert exc_info.value.code == "invalid_model_asset"
+    operation = load_operation(tmp_path, "op-model-001")
+    assert operation["status"] == "failed"
+    assert operation["error"] == {
+        "code": "invalid_model_asset",
+        "message": "display_name must not be empty.",
+    }
+
+
 @pytest.mark.parametrize(
     ("failure_point", "status_after_first"),
     [
@@ -1039,6 +1083,40 @@ def test_unconfirmed_asset_publication_preserves_running_operation_for_retry(
     assert event_types.count("model_asset.created") == 1
     assert event_types.count("operation.completed") == 1
     assert "operation.failed" not in event_types
+
+
+def test_completion_lock_contention_preserves_operation_busy(
+    tmp_path, monkeypatch
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError):
+        create_pump(tmp_path)
+
+    def contend(*args, **kwargs):
+        raise ModelMatchingError(
+            "operation_busy", "The operation is being updated."
+        )
+
+    monkeypatch.setattr(library_module, "complete_operation", contend)
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-recovery",
+            request_id="request-model-recovery",
+        )
+
+    assert retry_error.value.code == "operation_busy"
+    operation = load_operation(tmp_path, "op-model-001")
+    assert operation["status"] == "running"
+    event_types = [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-model-001")
+    ]
+    assert event_types.count("model_asset.created") == 1
+    assert "operation.completed" not in event_types
 
 
 def test_manifest_requires_valid_canonical_operation_id(tmp_path):
