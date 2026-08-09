@@ -1,6 +1,7 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Event, Lock
 
 import pytest
@@ -178,6 +179,73 @@ def test_tampered_event_breaks_verification(tmp_path):
     events = read_operation_events(tmp_path, "op-001")
     events[0]["details"]["request_id"] = "changed"
     assert verify_operation_chain(events) is False
+
+
+def test_verified_operation_event_snapshot_rejects_tampered_chain(tmp_path):
+    start_operation(
+        tmp_path,
+        operation_id="op-001",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    complete_operation(tmp_path, "op-001", {"model_id": "pump-a"})
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-001"
+        / "events.jsonl"
+    )
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    events[0]["details"]["request_id"] = "tampered"
+    events_path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_events(tmp_path, "op-001")
+
+    assert exc_info.value.code == "audit_integrity_error"
+
+
+def test_verified_operation_event_snapshot_has_bounded_busy_result(
+    tmp_path, monkeypatch
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-001",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-001",
+        idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    clock = iter([0.0, 2.0])
+
+    @contextmanager
+    def always_busy(*args, **kwargs):
+        raise ModelMatchingError(
+            "operation_busy", "Operation is currently being updated."
+        )
+        yield
+
+    monkeypatch.setattr(audit_module, "_operation_write_lock", always_busy)
+    monkeypatch.setattr(
+        audit_module.time, "monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_events(tmp_path, "op-001")
+
+    assert exc_info.value.code == "operation_busy"
 
 
 def test_denied_request_records_system_audit_without_raw_token(tmp_path):

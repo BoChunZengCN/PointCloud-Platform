@@ -176,6 +176,11 @@ Phase 15 不包含：
 - `operation_id`
 - `created_at`
 
+`created_at` 必须精确等于 canonical audit ledger 中唯一且首个
+`operation.started` 事件的 hash-chained `timestamp`，不能在 manifest 构建时
+另取时钟，也不能信任可单独修改的 `operation.json.started_at` projection。
+恢复必须把该值与锁内验链快照的事件时间精确比较。
+
 ### 7.2 `model_version`
 
 一个不可变模型版本：
@@ -597,6 +602,12 @@ P15-M5 引入 `scanned_reference`：
 
 事件只能追加。哈希链用于发现同一操作日志被修改或截断。审计状态投影可以重建，不作为唯一真值。除哈希完整性外，账本还必须验证生命周期语义：首个生命周期事件只能是一次 `operation.started` 或 `operation.start_failed`，任何终止事件之后都不得再追加 `operation.started`，也不得出现重复或相互矛盾的终止转换；终止后的重放/冲突尝试事件只记录尝试，不改变投影状态。
 
+业务层读取 terminal operation 的事件证据时，必须调用审计层只读验证接口。
+该接口在 canonical operation lock 内完成路径绑定、事件结构、哈希链和生命周期
+验证并返回同一锁内快照。非阻塞锁忙采用有界重试；截止后返回稳定
+`operation_busy`，不得退回未验链的裸事件读取。这样 `start_operation` 与业务
+证据检查之间的 earlier-event 篡改也会 fail closed。
+
 每个操作使用稳定的外部协调路径 `reports/model_matching_locks/<operation_id>.lock`。锁文件是永久协调工件，不能删除；操作目录的重命名或清理不得改变锁身份。实现必须使用非阻塞操作系统内核字节锁：Windows 通过 `msvcrt`，POSIX 通过 `fcntl`。只有内核锁所有权证明存活；owner token、PID、用途和取得时间仅用于诊断，且只能在取得内核锁后覆盖。进程退出或崩溃由内核自动释放所有权，残留或不完整元数据不会阻塞替代 owner，也不能用超时单独判定 owner 已死亡。
 
 初始化者必须在发布幂等索引前取得该操作的内核锁，并持续持有到 `operation.started` 已写入、刷新并 `fsync` 完成。发现已有索引但尚无事件的重放者，必须先验证索引指纹和被索引操作一致，再尝试取得同一内核锁；锁忙只返回稳定 `operation_busy`，绝不能根据经过时间终止仍存活的初始化者。只有成功取得锁才证明初始化者已离开，恢复流程才能在锁内完成确定性协调。
@@ -613,8 +624,9 @@ no-replace 适配器必须显式返回三种发布状态，不能让调用方从
 
 `Principal` 自身是信任边界：actor 必须是合法标识符，roles 必须是 exact
 `frozenset` 且每项属于允许角色，source 必须是 exact trusted string。
-只有 `system` source 可以使用空 roles，以保留 `system-audit` 与
-`system-api` 的无业务权限审计身份。
+`system` source 必须使用 exact empty `frozenset` roles；其他可信 source
+必须使用非空 roles。这样既保留 `system-audit` 与 `system-api` 的无业务权限
+审计身份，也禁止 system principal 携带 `expert` 或任何业务权限。
 
 ## 18. 双角色界面
 
@@ -789,9 +801,14 @@ CLI 和 API 调用同一服务函数和校验规则。
 - 权限与职责分离。
 - 幂等性和原子失败。
 - Principal 直接构造的 actor、exact role-set 与可信来源不变量。
+- system principal exact empty roles 与非-system 非空 roles 的双向不变量。
 - 模型资产发布后的审计 append/completion 中断、确认丢失和并发恢复。
 - 模型资产清单的 canonical `operation_id`、业务字段、actor 与 created
   事件指纹绑定。
+- completed replay 的锁内验链事件快照、忙锁有界重试和 earlier-event
+  篡改窗口。
+- manifest `created_at` 与唯一首个 hash-chained `operation.started`
+  事件 `timestamp` 的精确绑定，以及 projection/manifest 组合篡改拒绝。
 
 ### 22.2 配准测试
 

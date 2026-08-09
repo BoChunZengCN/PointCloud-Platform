@@ -465,6 +465,32 @@ def _require_valid_operation_chain(events: list[dict]) -> None:
         )
 
 
+def read_verified_operation_events(
+    project_root: Path, operation_id: str
+) -> list[dict]:
+    operation_id = validate_identifier(operation_id, "operation_id")
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            with _operation_write_lock(
+                project_root,
+                operation_id,
+                purpose="verified_read",
+            ):
+                events = read_operation_events(
+                    project_root, operation_id
+                )
+                _require_valid_operation_chain(events)
+                return events
+        except ModelMatchingError as exc:
+            if (
+                exc.code != "operation_busy"
+                or time.monotonic() >= deadline
+            ):
+                raise
+        time.sleep(0.005)
+
+
 def _lifecycle_is_valid(events: list[dict]) -> bool:
     if not events:
         return True

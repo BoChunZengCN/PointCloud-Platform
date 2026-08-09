@@ -286,6 +286,8 @@ start_operation(frozen.to_audit_payload())
         +--> replay: authorize -> validate from this FrozenRequest
         |             -> replay terminal result, finish an invalid running
         |                request, or recover a matching published asset
+        |             -> terminal evidence uses a lock-held verified ledger
+        |                snapshot, never an unverified event read
         |             failures use the independent replay-failure audit
         |
         v
@@ -342,14 +344,21 @@ merged into `main`. If a developer retains local WIP idempotency indexes, the
 new request fingerprint fails closed with `idempotency_conflict`; it never
 silently replays an operation under the old representation.
 
-The model asset manifest adds the canonical `operation_id`. Once the immutable
-asset is published, audit append or completion interruption leaves the
-canonical operation running (or completed when completion was already
-durable); it is never changed to failed. A same-idempotency expert replay
-verifies every stable frozen business field, canonical actor and operation,
-and the exact `model_asset.created` fingerprint before completing and
-returning the existing asset. Matching events are reused; conflicts fail
-closed and the asset is never overwritten.
+The model asset manifest adds the canonical `operation_id`, and its
+`created_at` is exactly the hash-chained `timestamp` of the unique first
+`operation.started` event. The mutable `operation.json.started_at` projection
+is never creation-time evidence. Once the immutable asset is published, audit
+append or completion interruption leaves the canonical operation running (or
+completed when completion was already durable); it is never changed to
+failed. A same-idempotency expert replay verifies every stable frozen business
+field, canonical actor and operation, canonical creation time, and the exact
+`model_asset.created` fingerprint before completing and returning the
+existing asset. Terminal replay obtains events only through an audit-layer
+read interface that holds the canonical operation lock while validating path
+binding, schema, hash chain, and lifecycle. Nonblocking `operation_busy` is
+retried to a fixed deadline and then returned stably; no fallback performs an
+unverified event read. Matching events are reused; conflicts fail closed and
+the asset is never overwritten.
 
 Asset no-replace publication also distinguishes the actual `os.link` outcome.
 Failure before the link remains `model_asset_persistence_error` and may
@@ -392,6 +401,14 @@ path existence is never used to guess publication ownership.
 - Append/completion interruption, manifest/event tampering, acknowledgement
   loss, and concurrent published recovery preserve the immutable asset and
   converge the canonical operation.
+- Completed replay rejects earlier-event tampering performed after
+  `start_operation`, while two concurrent matching completed replays still
+  succeed through bounded verified-read lock retry.
+- Fresh and recovered manifests bind `created_at` exactly to the unique first
+  hash-chained `operation.started` event timestamp; coordinated projection
+  and manifest timestamp tampering fails closed.
+- System principals require exact empty roles; non-system principals require
+  non-empty trusted roles.
 
 ### 14.3 Regression gates
 

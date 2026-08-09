@@ -33,6 +33,10 @@ class Principal:
             or self.source not in TRUSTED_PRINCIPAL_SOURCES
         ):
             raise ValueError("Principal source is not trusted.")
+        if self.source == "system" and self.roles:
+            raise ValueError(
+                "System principals must not carry authority roles."
+            )
         if self.source != "system" and not self.roles:
             raise ValueError(
                 "Non-system principals must have at least one role."

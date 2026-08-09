@@ -248,6 +248,20 @@ def test_create_load_and_list_model_asset_deterministically(tmp_path):
     assert len(events[1]["details"]["manifest_fingerprint"]) == 64
 
 
+def test_manifest_creation_time_matches_hashed_started_event(tmp_path):
+    created = create_pump(tmp_path)
+    events = read_operation_events(tmp_path, "op-model-001")
+    started = [
+        event
+        for event in events
+        if event["event_type"] == "operation.started"
+    ]
+
+    assert len(started) == 1
+    assert events[0] == started[0]
+    assert created["created_at"] == started[0]["timestamp"]
+
+
 def test_paths_validate_identifiers(tmp_path):
     assert model_asset_path(tmp_path, "pump-a") == (
         tmp_path / "models" / "pump-a" / "model_asset.json"
@@ -463,6 +477,53 @@ def test_same_completed_idempotent_request_returns_published_asset(tmp_path):
     events = read_operation_events(tmp_path, "op-model-001")
     assert events[-1]["event_type"] == "operation.replayed"
     assert events[-1]["details"]["requested_operation_id"] == "op-model-replay"
+
+
+def test_completed_replay_rechecks_chain_after_start_operation(
+    tmp_path, monkeypatch
+):
+    create_pump(tmp_path)
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-model-001"
+        / "events.jsonl"
+    )
+    original_require = library_module.require_any_role
+    tampered = False
+
+    def tamper_after_start(principal, allowed):
+        nonlocal tampered
+        original_require(principal, allowed)
+        if tampered:
+            return
+        tampered = True
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+        ]
+        events[0]["details"]["request_id"] = "tampered"
+        events_path.write_text(
+            "\n".join(
+                json.dumps(event, sort_keys=True) for event in events
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        library_module, "require_any_role", tamper_after_start
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-replay",
+            request_id="request-model-replay",
+        )
+
+    assert exc_info.value.code == "audit_integrity_error"
 
 
 def test_idempotent_replay_still_requires_expert_role(tmp_path):
@@ -1028,6 +1089,74 @@ def test_running_recovery_rejects_published_manifest_mismatch(
     assert retry_error.value.code == "audit_integrity_error"
     assert load_operation(tmp_path, "op-model-001")["status"] == "running"
     assert path.read_bytes() == tampered_bytes
+
+
+def test_running_recovery_rejects_noncanonical_created_at(
+    tmp_path, monkeypatch
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path)
+    assert first_error.value.code == "audit_persistence_error"
+
+    path = model_asset_path(tmp_path, "pump-a")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["created_at"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    tampered_bytes = path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-recovery",
+            request_id="request-model-recovery",
+        )
+
+    assert retry_error.value.code == "audit_integrity_error"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+    assert path.read_bytes() == tampered_bytes
+
+
+def test_running_recovery_rejects_matching_projection_and_manifest_time_tamper(
+    tmp_path, monkeypatch
+):
+    _interrupt_model_finalization_once(
+        monkeypatch, "append_before_write"
+    )
+    with pytest.raises(ModelMatchingError) as first_error:
+        create_pump(tmp_path)
+    assert first_error.value.code == "audit_persistence_error"
+
+    forged_time = "2000-01-01T00:00:00+00:00"
+    operation_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-model-001"
+        / "operation.json"
+    )
+    operation = json.loads(operation_path.read_text(encoding="utf-8"))
+    operation["started_at"] = forged_time
+    operation_path.write_text(json.dumps(operation), encoding="utf-8")
+
+    asset_path = model_asset_path(tmp_path, "pump-a")
+    manifest = json.loads(asset_path.read_text(encoding="utf-8"))
+    manifest["created_at"] = forged_time
+    asset_path.write_text(json.dumps(manifest), encoding="utf-8")
+    tampered_bytes = asset_path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as retry_error:
+        create_pump(
+            tmp_path,
+            operation_id="op-model-recovery",
+            request_id="request-model-recovery",
+        )
+
+    assert retry_error.value.code == "audit_integrity_error"
+    assert load_operation(tmp_path, "op-model-001")["status"] == "running"
+    assert asset_path.read_bytes() == tampered_bytes
 
 
 def test_running_recovery_rejects_conflicting_created_event(

@@ -93,3 +93,15 @@ def test_system_principal_may_have_empty_roles():
     principal = Principal("system-audit", frozenset(), "system")
 
     assert principal.roles == frozenset()
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [
+        frozenset({"expert"}),
+        frozenset({"operator", "auditor"}),
+    ],
+)
+def test_system_principal_rejects_all_authority_roles(roles):
+    with pytest.raises(ValueError):
+        Principal("system-api", roles, "system")

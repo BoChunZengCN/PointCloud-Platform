@@ -13,9 +13,8 @@ from pc_system.model_matching_audit import (
     ensure_operation_event,
     fail_operation,
     load_operation,
-    read_operation_events,
+    read_verified_operation_events,
     start_operation,
-    utc_now,
 )
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
@@ -254,8 +253,32 @@ def _operation_result(project_root: Path, model_id: str) -> dict:
     }
 
 
+def _canonical_created_at(
+    project_root: Path, operation_id: str
+) -> str:
+    events = read_verified_operation_events(project_root, operation_id)
+    started = [
+        event
+        for event in events
+        if event["event_type"] == "operation.started"
+    ]
+    if (
+        len(started) != 1
+        or not events
+        or events[0]["event_type"] != "operation.started"
+    ):
+        raise ModelMatchingError(
+            "audit_integrity_error",
+            "Canonical model operation has no unique first start event.",
+        )
+    return started[0]["timestamp"]
+
+
 def _require_matching_manifest(
-    manifest: dict, operation: dict, normalized: dict[str, object]
+    manifest: dict,
+    operation: dict,
+    normalized: dict[str, object],
+    canonical_created_at: str,
 ) -> None:
     expected = {
         "schema_version": "1.0",
@@ -263,6 +286,7 @@ def _require_matching_manifest(
         "lifecycle_status": "active",
         "created_by": operation["actor_id"],
         "operation_id": operation["operation_id"],
+        "created_at": canonical_created_at,
     }
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ModelMatchingError(
@@ -284,7 +308,9 @@ def _require_created_event(
     expected = _created_event_details(manifest)
     existing = [
         event
-        for event in read_operation_events(project_root, operation_id)
+        for event in read_verified_operation_events(
+            project_root, operation_id
+        )
         if event["event_type"] == "model_asset.created"
     ]
     if len(existing) != 1 or existing[0]["details"] != expected:
@@ -374,7 +400,12 @@ def _replay_model_asset(
             "Completed model operation result does not match its asset.",
         )
     manifest = load_model_asset(project_root, model_id)
-    _require_matching_manifest(manifest, operation, normalized)
+    canonical_created_at = _canonical_created_at(
+        project_root, operation["operation_id"]
+    )
+    _require_matching_manifest(
+        manifest, operation, normalized, canonical_created_at
+    )
     if operation["status"] == "running":
         _ensure_created_event(
             project_root, operation["operation_id"], manifest
@@ -521,13 +552,16 @@ def create_model_asset(
                 "Frozen model request has no model identity.",
             )
 
+        canonical_created_at = _canonical_created_at(
+            project_root, audited_operation_id
+        )
         manifest = {
             "schema_version": "1.0",
             **normalized,
             "lifecycle_status": "active",
             "created_by": principal.actor_id,
             "operation_id": audited_operation_id,
-            "created_at": utc_now(),
+            "created_at": canonical_created_at,
         }
         path = model_asset_path(project_root, normalized_model_id)
         _publish_model_asset(path, manifest)
