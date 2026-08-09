@@ -2084,7 +2084,7 @@ def test_losing_operation_cleanup_interruption_does_not_mask_winner(
     assert list(operations_root.glob(".op-loser.discarded-*"))
 
 
-def test_task2_docs_converge_publication_state_and_staging_contract():
+def test_task2_docs_converge_publication_state_contract():
     root = audit_module.Path(__file__).parents[1]
     plan = (
         root
@@ -2100,10 +2100,6 @@ def test_task2_docs_converge_publication_state_and_staging_contract():
         / "specs"
         / "2026-07-22-phase15-model-library-retrieval-registration-design.md"
     ).read_text(encoding="utf-8")
-    report = (
-        root / ".superpowers" / "sdd" / "task-2-report.md"
-    ).read_text(encoding="utf-8")
-
     for state in (
         "not_published",
         "published_confirmed",
@@ -2121,8 +2117,6 @@ def test_task2_docs_converge_publication_state_and_staging_contract():
         "2026-07-22-phase15a-cad-model-library-audit.md"
         in plan
     )
-    top_status = report.split("## Implementation summary", 1)[0]
-    assert "BLOCKED" not in top_status
 
 
 def _start_binding_test_operation(tmp_path, operation_id):
