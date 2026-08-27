@@ -85,6 +85,7 @@ def model_resource_lock(
 - 在计算规范 JSON 哈希和有界锁文件名之前，验证 `resource_kind` 及每个标识符；发布测试身份的精确字节为 `{"identifiers":["pump-a"],"resource_kind":"release"}`；
 - 拒绝符号链接或重解析点形式的锁根目录与锁文件；
 - 打开一个永久普通文件，不截断原文件；
+- 按规格中的可信项目存储命名空间协调平台进程，不声称抵御具有同等目录写权限的恶意本地进程；
 - Windows 使用非阻塞 `msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)`，POSIX 使用 `fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)`；
 - 使用 `time.monotonic()` 重试到显式截止时间；
 - 超时返回 `ModelMatchingError("operation_busy", "Model resource is busy.")`；
