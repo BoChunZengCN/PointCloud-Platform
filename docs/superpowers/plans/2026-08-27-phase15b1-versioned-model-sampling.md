@@ -104,123 +104,157 @@ git commit -m "feat: add model resource locks"
 
 ---
 
-### 任务 2：不可变模型发布历史与回滚
+### 任务 2A：发布状态分类器与关系图链头
 
 **文件：**
-- 新建：`src/pc_system/model_release.py`
-- 新建：`tests/test_phase15b1_model_release.py`
+- 新建：`src/pc_system/model_release_state.py`
+- 新建：`tests/test_phase15b1_release_state.py`
 
 **接口：**
-- 依赖：`load_model_asset`、`load_model_version`、`fingerprint_file`、`model_resource_lock`、Phase 15 审计生命周期函数和 `Principal`。
+- 产出：`ReleaseState`，仅包含 `NO_CANDIDATE`、`OWNED_CANDIDATE`、`RELEASE_VISIBLE_OLD_PROJECTION`、`RELEASE_PROJECTED`、`RELEASE_ANCESTOR`、`COMPLETED`。
+- 产出：`ReleaseChain(ordered_release_ids: tuple[str, ...], head_release_id: str | None)`。
+- 产出：`build_release_chain(releases: list[dict]) -> ReleaseChain`，只根据 `previous_release_id` 计算唯一根、唯一后继和唯一头。
+- 产出：`classify_release_state(*, expected_owner: dict, actual_owner: dict | None, expected_release: dict, actual_release: dict | None, projected_release_id: str | None, operation_status: str, business_event_matches: bool, completed_result_matches: bool, chain: ReleaseChain) -> ReleaseState`。
+
+- [ ] **步骤 1：编写关系图和互斥状态失败测试**
+
+```python
+def test_release_chain_ignores_started_time_when_computing_head():
+    releases = [
+        release("release-001", previous=None, created_at="2026-08-27T10:00:02+00:00"),
+        release("release-002", previous="release-001", created_at="2026-08-27T10:00:01+00:00"),
+    ]
+    chain = build_release_chain(releases)
+    assert chain.ordered_release_ids == ("release-001", "release-002")
+    assert chain.head_release_id == "release-002"
+
+
+def test_release_chain_rejects_branch():
+    releases = [
+        release("release-001", previous=None),
+        release("release-002", previous="release-001"),
+        release("release-003", previous="release-001"),
+    ]
+    with pytest.raises(ModelMatchingError) as exc_info:
+        build_release_chain(releases)
+    assert exc_info.value.code == "model_release_integrity_error"
+
+
+def test_visible_owner_with_no_release_is_owned_candidate():
+    assert classify_release_state(
+        expected_owner=OWNER, actual_owner=OWNER,
+        expected_release=RELEASE, actual_release=None,
+        projected_release_id=None, operation_status="running",
+        business_event_matches=False, completed_result_matches=False,
+        chain=ReleaseChain((), None),
+    ) is ReleaseState.OWNED_CANDIDATE
+```
+
+补充环、孤立节点、重复编号、两个根、owner 不匹配、发布记录局部匹配但非全等、旧投影、本投影、合法后继和完成结果不匹配测试。每个输入组合必须只落入一个状态；无法归类时返回 `model_release_integrity_error`。
+
+- [ ] **步骤 2：运行状态测试并确认 RED**
+
+```powershell
+uv run --extra test python -m pytest -q tests/test_phase15b1_release_state.py -p no:cacheprovider
+```
+
+预期：由于 `pc_system.model_release_state` 尚不存在，测试在收集阶段失败。
+
+- [ ] **步骤 3：实现纯关系图验证器**
+
+`build_release_chain` 必须通过编号映射和 `previous_release_id` 反向索引验证唯一根、每个节点最多一个后继、无环且根遍历覆盖全部节点。`created_at` 不参与图验证，只允许调用方在返回展示结果时排序。
+
+- [ ] **步骤 4：实现纯状态分类器**
+
+分类器不读取或写入文件。owner 或 release 存在时必须与完整预期字典逐字段相等；`RELEASE_ANCESTOR` 只在关系图证明投影头从本发布可达时成立；`COMPLETED` 同时要求业务事件和完成结果匹配。任何矛盾证据失败关闭。
+
+- [ ] **步骤 5：运行状态测试并确认 GREEN**
+
+```powershell
+uv run --extra test python -m pytest -q tests/test_phase15b1_release_state.py -p no:cacheprovider
+```
+
+- [ ] **步骤 6：提交状态分类基础**
+
+```powershell
+git add -- src/pc_system/model_release_state.py tests/test_phase15b1_release_state.py
+git commit -m "feat: add model release state classifier"
+```
+
+---
+
+### 任务 2B：不可变发布事务、恢复与查询
+
+**文件：**
+- 新建或重写：`src/pc_system/model_release.py`
+- 新建或重写：`tests/test_phase15b1_model_release.py`
+
+**接口：**
+- 依赖：任务 2A 的 `build_release_chain` 与 `classify_release_state`，以及 `load_model_asset`、`load_model_version`、`fingerprint_file`、`model_resource_lock`、Phase 15 审计生命周期函数和 `Principal`。
 - 产出：`release_model_version(project_root, *, model_id, version_id, release_id, action, expected_current_release_id, rollback_of_release_id, reason, principal, operation_id, request_id, idempotency_key) -> dict`。
 - 产出：`load_current_model_release(project_root, model_id) -> dict | None`。
 - 产出：`list_model_releases(project_root, model_id) -> list[dict]`。
 - 产出：`list_version_release_status(project_root, model_id) -> list[dict]`。
 
-- [ ] **步骤 1：编写激活与回滚行为的失败测试**
+- [ ] **步骤 1：编写不可变发布、恢复和篡改失败测试**
 
 ```python
-def test_activate_then_rollback_appends_history_without_mutating_versions(tmp_path):
-    import_versions(tmp_path, "v1", "v2")
-    version_bytes = snapshot_version_bytes(tmp_path, "pump-a")
+def test_retry_recovers_owner_visible_after_directory_sync_failure(tmp_path, monkeypatch):
+    inject_owner_directory_sync_failure_once(monkeypatch)
+    with pytest.raises(ModelMatchingError) as exc_info:
+        activate_v1(tmp_path)
+    assert exc_info.value.code == "publication_recovery_required"
+    assert load_operation(tmp_path, "op-release-001")["status"] == "running"
+    assert activate_v1(tmp_path)["release_id"] == "release-001"
 
-    first = release_model_version(
-        tmp_path, model_id="pump-a", version_id="v2",
-        release_id="release-001", action="activate",
-        expected_current_release_id=None, rollback_of_release_id=None,
-        reason="Initial production release", principal=EXPERT,
-        operation_id="op-release-001", request_id="req-release-001",
-        idempotency_key="idem-release-001",
-    )
-    rolled_back = release_model_version(
-        tmp_path, model_id="pump-a", version_id="v1",
-        release_id="release-002", action="rollback",
-        expected_current_release_id="release-001",
-        rollback_of_release_id="release-001",
-        reason="Regression in v2", principal=EXPERT,
-        operation_id="op-release-002", request_id="req-release-002",
-        idempotency_key="idem-release-002",
-    )
 
-    assert first["version_id"] == "v2"
-    assert rolled_back["previous_release_id"] == "release-001"
-    assert rolled_back["version_id"] == "v1"
-    assert [item["release_id"] for item in list_model_releases(tmp_path, "pump-a")] == [
-        "release-001", "release-002"
-    ]
-    assert load_current_model_release(tmp_path, "pump-a") == rolled_back
-    assert snapshot_version_bytes(tmp_path, "pump-a") == version_bytes
+def test_successor_with_earlier_started_time_remains_graph_head(tmp_path):
+    first = activate_with_started_time(tmp_path, "release-001", "10:00:02")
+    second = activate_with_started_time(
+        tmp_path, "release-002", "10:00:01",
+        expected_current_release_id=first["release_id"],
+    )
+    assert load_current_model_release(tmp_path, "pump-a") == second
 ```
 
-分别覆盖陈旧 `expected_current_release_id`、回滚到当前发布、跨模型发布引用、重复 `release_id`、无效原因、非专家主体、投影篡改、发布记录篡改、幂等重放，以及两个请求从同一预期头并发更新。
+保留并扩展既有测试：发布 v1、升级 v2、追加回滚 v1；版本目录字节不变；陈旧头、并发推进、回滚到当前、跨模型回滚、重复发布编号、无效原因、非专家、幂等重放；owner/release/projection/audit 四个中断时点；较新后继投影恢复；完整 canonical 字段篡改；失败审计持久化错误不得静默。
 
-这些测试用于捕获原地修改历史、后写覆盖并发、未验证投影，以及回滚时静默改变版本字节等缺陷。
-
-- [ ] **步骤 2：运行发布测试并确认 RED**
+- [ ] **步骤 2：运行发布事务测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_model_release.py -p no:cacheprovider
 ```
 
-预期：由于 `pc_system.model_release` 尚不存在，测试收集失败。
+预期：owner 同步故障、启动时间逆序和完整状态分类测试失败，证明旧实现仍依赖局部分支与时间排序。
 
-- [ ] **步骤 3：实现严格结构、安全读取和请求冻结**
+- [ ] **步骤 3：实现完整预期证据构造与原子 no-replace 发布**
 
-定义精确常量与公共函数签名：
+从冻结请求、canonical `operation.started`、主体、当前版本清单及 SHA-256 重建完整 owner/release 字典。所有者信封和发布记录先写入并同步同目录临时文件，再通过硬链接 no-replace 发布最终路径并同步目录。最终 owner/release 一旦可见，任何异常都保持原操作 `running`。
 
-```python
-RELEASE_ACTIONS = frozenset({"activate", "rollback"})
+- [ ] **步骤 4：实现单一磁盘状态采集与分类循环**
 
-def release_model_version(
-    project_root: Path,
-    *,
-    model_id: str,
-    version_id: str,
-    release_id: str,
-    action: str,
-    expected_current_release_id: str | None,
-    rollback_of_release_id: str | None,
-    reason: str,
-    principal: Principal,
-    operation_id: str,
-    request_id: str,
-    idempotency_key: str,
-) -> dict:
-    """Publish one immutable activation or rollback record."""
-```
+在模型资源锁内，每次动作前重新读取 owner、release、projection、审计和全部发布图，调用任务 2A 分类器。每个状态只允许一个动作：发布 owner、发布 release、推进旧投影、补齐业务事件、完成审计或返回已完成记录；动作后重新分类。不同请求观察到运行中的可见 owner/release 时返回 `publication_recovery_required`，不得创建候选或推进投影。
 
-使用规格规定的精确字段集合。在查询业务数据之前冻结并验证全部请求字段，构造规范审计载荷，要求 `expert` 角色，并使用稳定的 Phase 15 错误码。
+- [ ] **步骤 5：实现审计绑定查询与图链头投影校验**
 
-- [ ] **步骤 4：实现锁内不覆盖发布与重放恢复**
+公开读取逐条验证完整结构、版本清单指纹、canonical start、唯一业务事件、发布指纹及完成结果；用 `build_release_chain` 计算唯一头并与 `current_release.json` 比较。接口返回可以按 `created_at`、`release_id` 稳定展示排序，但 `is_current`、回滚合法性和后继判断只能使用关系图。
 
-在 `model_resource_lock(project_root, "release", model_id)` 内执行：
-
-- 依据发布记录验证当前投影；
-- 精确比较 `expected_current_release_id`；
-- 通过 `load_model_version` 验证目标版本；
-- 只创建一次 `releases/<release_id>` 并持久化操作所有者信封；
-- 将 `release.json` 作为不可变可见性标记发布；
-- 原子写入 `current_release.json` 投影；
-- 追加 `model_release.published` 或 `model_release.rolled_back`；
-- 完成规范操作；
-- 相同请求重放时验证发布记录，按需重建投影，确保业务事件只有一条，并完成原操作；
-- 绝不递归删除、重命名或接管不匹配的候选记录。
-
-- [ ] **步骤 5：运行发布与 Phase 15A 完整性测试并确认 GREEN**
+- [ ] **步骤 6：运行发布与 Phase 15A 聚焦回归并确认 GREEN**
 
 ```powershell
 uv run --extra test python -m pytest -q `
+  tests/test_phase15b1_release_state.py `
   tests/test_phase15b1_model_release.py `
   tests/test_phase15a_model_import.py `
   tests/test_phase15a_audit.py `
   -p no:cacheprovider
 ```
 
-- [ ] **步骤 6：提交发布历史功能**
+- [ ] **步骤 7：提交发布历史功能**
 
 ```powershell
 git add -- src/pc_system/model_release.py tests/test_phase15b1_model_release.py
-git commit -m "feat: add model release history"
+git commit -m "feat: add recoverable model release history"
 ```
 
 ---
