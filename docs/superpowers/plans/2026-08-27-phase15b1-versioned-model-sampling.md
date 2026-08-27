@@ -1,16 +1,16 @@
-# Phase 15B-1 Versioned Model Sampling Implementation Plan
+# Phase 15B-1 版本化模型采样实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **供执行人员使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，按任务逐项实施本计划。步骤使用复选框（`- [ ]`）跟踪状态。
 
-**Goal:** 为不可变 CAD 模型增加追加式发布/回滚历史，并生成可复现、不可覆盖的米制表面采样表达。
+**目标：** 为不可变 CAD 模型增加追加式发布/回滚历史，并生成可复现、不可覆盖的米制表面采样表达。
 
-**Architecture:** 新建独立的模型资源锁、发布状态和采样模块。版本目录保持字节级不变；发布记录与采样表达使用原位候选、最终清单可见性标记和 Phase 15 审计恢复。API 只开放发布/回滚，采样先通过领域服务与 CLI 交付。
+**架构：** 新建独立的模型资源锁、发布状态和采样模块。版本目录保持字节级不变；发布记录与采样表达使用原位候选、最终清单可见性标记和 Phase 15 审计恢复。API 只开放发布/回滚，采样先通过领域服务与 CLI 交付。
 
-**Tech Stack:** Python 3.12、pytest、FastAPI、SHA-256 canonical JSON、Windows `msvcrt` / POSIX `fcntl` 内核字节锁、现有 Phase 15 审计账本。
+**技术栈：** Python 3.12、pytest、FastAPI、SHA-256 规范 JSON、Windows `msvcrt` / POSIX `fcntl` 内核字节锁、现有 Phase 15 审计账本。
 
-**Spec:** `docs/superpowers/specs/2026-08-27-phase15b1-versioned-model-sampling-design.md`
+**规格依据：** `docs/superpowers/specs/2026-08-27-phase15b1-versioned-model-sampling-design.md`
 
-## Global Constraints
+## 全局约束
 
 - `models/<model_id>/versions/<version_id>` 在本阶段任何操作前后必须字节级不变。
 - 发布记录、完整采样表达和资源锁文件不可删除或覆盖。
@@ -23,18 +23,18 @@
 
 ---
 
-### Task 1: Permanent Cross-Platform Model Resource Locks
+### 任务 1：跨平台永久模型资源锁
 
-**Files:**
-- Create: `src/pc_system/model_resource_lock.py`
-- Create: `tests/test_phase15b1_resource_lock.py`
+**文件：**
+- 新建：`src/pc_system/model_resource_lock.py`
+- 新建：`tests/test_phase15b1_resource_lock.py`
 
-**Interfaces:**
-- Consumes: `validate_identifier(value, label)` from `pc_system.identifiers`.
-- Produces: `model_resource_lock(project_root: Path, resource_kind: str, *identifiers: str, timeout_seconds: float = 2.0) -> ContextManager[Path]`.
-- Produces: permanent lock files under `reports/model_matching_resource_locks`.
+**接口：**
+- 依赖：`pc_system.identifiers` 中的 `validate_identifier(value, label)`。
+- 产出：`model_resource_lock(project_root: Path, resource_kind: str, *identifiers: str, timeout_seconds: float = 2.0) -> ContextManager[Path]`。
+- 产出：`reports/model_matching_resource_locks` 下的永久锁文件。
 
-- [ ] **Step 1: Write failing path and contention tests**
+- [ ] **步骤 1：编写路径与竞争行为的失败测试**
 
 ```python
 def test_model_resource_lock_uses_stable_plain_file(tmp_path):
@@ -53,21 +53,21 @@ def test_second_process_times_out_without_replacing_owner(tmp_path):
     assert result == {"code": "operation_busy"}
 ```
 
-The mutation caught is replacing the permanent lock path, blocking indefinitely, or treating diagnostic metadata as ownership.
+这些测试用于捕获永久锁路径被替换、无限阻塞，或把诊断元数据错误当作所有权证明等缺陷。
 
-- [ ] **Step 2: Run the new tests and verify RED**
+- [ ] **步骤 2：运行新测试并确认进入 RED 状态**
 
-Run:
+运行：
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_resource_lock.py -p no:cacheprovider
 ```
 
-Expected: collection fails because `pc_system.model_resource_lock` does not exist.
+预期：由于 `pc_system.model_resource_lock` 尚不存在，测试在收集阶段失败。
 
-- [ ] **Step 3: Implement a non-blocking kernel byte-lock context manager**
+- [ ] **步骤 3：实现非阻塞内核字节锁上下文管理器**
 
-Implement this public shape:
+实现以下公共接口：
 
 ```python
 @contextmanager
@@ -80,21 +80,21 @@ def model_resource_lock(
     """Acquire a permanent per-resource OS byte lock or raise operation_busy."""
 ```
 
-Requirements:
+要求：
 
-- validate `resource_kind` and every identifier before hashing canonical JSON into the bounded lock filename; for the release test identity the exact bytes are `{"identifiers":["pump-a"],"resource_kind":"release"}`;
-- reject link/reparse-point lock roots and lock files;
-- open one permanent plain file without truncating it;
-- acquire non-blocking `msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)` on Windows or `fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)` on POSIX;
-- retry with `time.monotonic()` until the explicit deadline;
-- raise `ModelMatchingError("operation_busy", "Model resource is busy.")` on timeout;
-- release only the kernel lock and descriptor; never unlink the lock file.
+- 在计算规范 JSON 哈希和有界锁文件名之前，验证 `resource_kind` 及每个标识符；发布测试身份的精确字节为 `{"identifiers":["pump-a"],"resource_kind":"release"}`；
+- 拒绝符号链接或重解析点形式的锁根目录与锁文件；
+- 打开一个永久普通文件，不截断原文件；
+- Windows 使用非阻塞 `msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)`，POSIX 使用 `fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)`；
+- 使用 `time.monotonic()` 重试到显式截止时间；
+- 超时返回 `ModelMatchingError("operation_busy", "Model resource is busy.")`；
+- 只释放内核锁和文件描述符，绝不删除锁文件。
 
-- [ ] **Step 4: Run lock tests GREEN**
+- [ ] **步骤 4：运行资源锁测试并确认 GREEN**
 
-Run the Step 2 command. Expected: all tests pass.
+运行步骤 2 的命令。预期：全部测试通过。
 
-- [ ] **Step 5: Commit the resource-lock foundation**
+- [ ] **步骤 5：提交资源锁基础**
 
 ```powershell
 git add -- src/pc_system/model_resource_lock.py tests/test_phase15b1_resource_lock.py
@@ -103,20 +103,20 @@ git commit -m "feat: add model resource locks"
 
 ---
 
-### Task 2: Immutable Model Release History and Rollback
+### 任务 2：不可变模型发布历史与回滚
 
-**Files:**
-- Create: `src/pc_system/model_release.py`
-- Create: `tests/test_phase15b1_model_release.py`
+**文件：**
+- 新建：`src/pc_system/model_release.py`
+- 新建：`tests/test_phase15b1_model_release.py`
 
-**Interfaces:**
-- Consumes: `load_model_asset`, `load_model_version`, `fingerprint_file`, `model_resource_lock`, Phase 15 audit lifecycle functions, and `Principal`.
-- Produces: `release_model_version(project_root, *, model_id, version_id, release_id, action, expected_current_release_id, rollback_of_release_id, reason, principal, operation_id, request_id, idempotency_key) -> dict`.
-- Produces: `load_current_model_release(project_root, model_id) -> dict | None`.
-- Produces: `list_model_releases(project_root, model_id) -> list[dict]`.
-- Produces: `list_version_release_status(project_root, model_id) -> list[dict]`.
+**接口：**
+- 依赖：`load_model_asset`、`load_model_version`、`fingerprint_file`、`model_resource_lock`、Phase 15 审计生命周期函数和 `Principal`。
+- 产出：`release_model_version(project_root, *, model_id, version_id, release_id, action, expected_current_release_id, rollback_of_release_id, reason, principal, operation_id, request_id, idempotency_key) -> dict`。
+- 产出：`load_current_model_release(project_root, model_id) -> dict | None`。
+- 产出：`list_model_releases(project_root, model_id) -> list[dict]`。
+- 产出：`list_version_release_status(project_root, model_id) -> list[dict]`。
 
-- [ ] **Step 1: Write failing activation and rollback behavior tests**
+- [ ] **步骤 1：编写激活与回滚行为的失败测试**
 
 ```python
 def test_activate_then_rollback_appends_history_without_mutating_versions(tmp_path):
@@ -151,21 +151,21 @@ def test_activate_then_rollback_appends_history_without_mutating_versions(tmp_pa
     assert snapshot_version_bytes(tmp_path, "pump-a") == version_bytes
 ```
 
-Add separate tests for stale `expected_current_release_id`, rollback to the current release, cross-model release references, duplicate `release_id`, invalid reason, non-expert principal, projection tampering, release tampering, idempotent replay, and two concurrent updates from the same expected head.
+分别覆盖陈旧 `expected_current_release_id`、回滚到当前发布、跨模型发布引用、重复 `release_id`、无效原因、非专家主体、投影篡改、发布记录篡改、幂等重放，以及两个请求从同一预期头并发更新。
 
-The mutations caught are in-place history edits, last-writer-wins races, unverified projections, and rollback that silently changes version bytes.
+这些测试用于捕获原地修改历史、后写覆盖并发、未验证投影，以及回滚时静默改变版本字节等缺陷。
 
-- [ ] **Step 2: Run release tests and verify RED**
+- [ ] **步骤 2：运行发布测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_model_release.py -p no:cacheprovider
 ```
 
-Expected: collection fails because `pc_system.model_release` does not exist.
+预期：由于 `pc_system.model_release` 尚不存在，测试收集失败。
 
-- [ ] **Step 3: Implement strict schemas, safe readers, and request freezing**
+- [ ] **步骤 3：实现严格结构、安全读取和请求冻结**
 
-Define exact constants and public signature:
+定义精确常量与公共函数签名：
 
 ```python
 RELEASE_ACTIONS = frozenset({"activate", "rollback"})
@@ -188,24 +188,24 @@ def release_model_version(
     """Publish one immutable activation or rollback record."""
 ```
 
-Use exact field sets from the spec. Freeze and validate all request fields before business lookup, construct a canonical audit payload, require role `expert`, and use stable Phase 15 error codes.
+使用规格规定的精确字段集合。在查询业务数据之前冻结并验证全部请求字段，构造规范审计载荷，要求 `expert` 角色，并使用稳定的 Phase 15 错误码。
 
-- [ ] **Step 4: Implement locked no-replace publication and replay recovery**
+- [ ] **步骤 4：实现锁内不覆盖发布与重放恢复**
 
-Inside `model_resource_lock(project_root, "release", model_id)`:
+在 `model_resource_lock(project_root, "release", model_id)` 内执行：
 
-- validate the current projection against its release record;
-- compare `expected_current_release_id` exactly;
-- verify the target version through `load_model_version`;
-- create `releases/<release_id>` once and persist an operation-owner envelope;
-- publish `release.json` as the immutable visibility marker;
-- atomically write `current_release.json` as a projection;
-- append `model_release.published` or `model_release.rolled_back`;
-- complete the canonical operation;
-- on identical replay, validate the release, rebuild the projection if needed, ensure one business event, and complete the original operation;
-- never recursively delete, rename, or take over a mismatched candidate.
+- 依据发布记录验证当前投影；
+- 精确比较 `expected_current_release_id`；
+- 通过 `load_model_version` 验证目标版本；
+- 只创建一次 `releases/<release_id>` 并持久化操作所有者信封；
+- 将 `release.json` 作为不可变可见性标记发布；
+- 原子写入 `current_release.json` 投影；
+- 追加 `model_release.published` 或 `model_release.rolled_back`；
+- 完成规范操作；
+- 相同请求重放时验证发布记录，按需重建投影，确保业务事件只有一条，并完成原操作；
+- 绝不递归删除、重命名或接管不匹配的候选记录。
 
-- [ ] **Step 5: Run release and Phase 15A integrity tests GREEN**
+- [ ] **步骤 5：运行发布与 Phase 15A 完整性测试并确认 GREEN**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -215,7 +215,7 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Commit release history**
+- [ ] **步骤 6：提交发布历史功能**
 
 ```powershell
 git add -- src/pc_system/model_release.py tests/test_phase15b1_model_release.py
@@ -224,22 +224,22 @@ git commit -m "feat: add model release history"
 
 ---
 
-### Task 3: Release CLI and Protected API
+### 任务 3：发布 CLI 与受保护 API
 
-**Files:**
-- Modify: `src/pc_system/commands/phase15.py`
-- Modify: `src/pc_system/cli_parser.py`
-- Modify: `src/pc_system/cli.py`
-- Modify: `src/pc_system/api.py`
-- Create: `tests/test_phase15b1_release_cli_api.py`
+**文件：**
+- 修改：`src/pc_system/commands/phase15.py`
+- 修改：`src/pc_system/cli_parser.py`
+- 修改：`src/pc_system/cli.py`
+- 修改：`src/pc_system/api.py`
+- 新建：`tests/test_phase15b1_release_cli_api.py`
 
-**Interfaces:**
-- Consumes: all Task 2 release functions.
-- Produces: CLI commands `release-model-version` and `list-model-releases`.
-- Produces: `POST /model-library/models/{model_id}/releases`.
-- Extends: `GET /model-library/models/{model_id}` with `current_release` and `release_history`.
+**接口：**
+- 依赖：任务 2 的全部发布函数。
+- 产出：CLI 命令 `release-model-version` 和 `list-model-releases`。
+- 产出：`POST /model-library/models/{model_id}/releases`。
+- 扩展：`GET /model-library/models/{model_id}`，增加 `current_release` 和 `release_history`。
 
-- [ ] **Step 1: Write failing CLI and API contract tests**
+- [ ] **步骤 1：编写 CLI 与 API 契约失败测试**
 
 ```python
 def test_release_cli_creates_audited_rollback(tmp_path, capsys):
@@ -267,25 +267,25 @@ def test_production_release_api_uses_configured_principal(tmp_path):
     assert response.json()["actor_id"] == "trusted-expert"
 ```
 
-Add tests for exact request shape, body-before-auth avoidance, role denial audit, development identity source, stable HTTP mapping, public history reads, and malformed optional identifiers.
+补充精确请求结构、禁止鉴权前读取正文、角色拒绝审计、开发身份来源、稳定 HTTP 映射、公开历史读取和畸形可选标识符测试。
 
-- [ ] **Step 2: Run CLI/API tests and verify RED**
+- [ ] **步骤 2：运行 CLI/API 测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_release_cli_api.py -p no:cacheprovider
 ```
 
-Expected: parser rejects the new command and API returns 404.
+预期：解析器拒绝新命令，API 返回 404。
 
-- [ ] **Step 3: Add exact parsers and thin command adapters**
+- [ ] **步骤 3：增加精确解析器与轻量命令适配器**
 
-`release-model-version` requires all audit identifiers, `--action`, `--version-id`, `--release-id`, `--reason`, and `--actor`. Optional `--expected-current-release-id` and `--rollback-of-release-id` pass `None` exactly when omitted. `list-model-releases` accepts only project and model identifiers and prints canonical JSON.
+`release-model-version` 必须接收全部审计标识符、`--action`、`--version-id`、`--release-id`、`--reason` 和 `--actor`。未提供可选的 `--expected-current-release-id` 与 `--rollback-of-release-id` 时必须精确传递 `None`。`list-model-releases` 只接收项目和模型标识符，并输出规范 JSON。
 
-- [ ] **Step 4: Add API capture and route integration**
+- [ ] **步骤 4：增加 API 载荷捕获与路由集成**
 
-Authorize before reading the request body. Capture exact text fields and nullable release identifiers without implicit string conversion. Extend `_PHASE15_*` error groups for the new stable errors. Keep model reads public and verified.
+读取请求正文前先执行授权。精确捕获文本字段和可空发布标识符，不做隐式字符串转换。扩展 `_PHASE15_*` 错误分组以容纳新增稳定错误，同时保持模型读取公开且经过验证。
 
-- [ ] **Step 5: Run new and existing Phase 15 API/CLI tests GREEN**
+- [ ] **步骤 5：运行新增及既有 Phase 15 API/CLI 测试并确认 GREEN**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -294,7 +294,7 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Commit release interfaces**
+- [ ] **步骤 6：提交发布接口**
 
 ```powershell
 git add -- src/pc_system/commands/phase15.py src/pc_system/cli_parser.py src/pc_system/cli.py src/pc_system/api.py tests/test_phase15b1_release_cli_api.py
@@ -303,20 +303,20 @@ git commit -m "feat: expose model release controls"
 
 ---
 
-### Task 4: Deterministic Mesh Sampling Kernel
+### 任务 4：确定性网格采样内核
 
-**Files:**
-- Modify: `src/pc_system/model_mesh.py`
-- Create: `src/pc_system/model_sampling.py`
-- Create: `tests/test_phase15b1_sampling_kernel.py`
+**文件：**
+- 修改：`src/pc_system/model_mesh.py`
+- 新建：`src/pc_system/model_sampling.py`
+- 新建：`tests/test_phase15b1_sampling_kernel.py`
 
-**Interfaces:**
-- Produces in `model_mesh.py`: `read_mesh_geometry_m(path: Path, declared_unit: str, *, reader: MeshReader) -> tuple[list[list[float]], list[list[int]]]`.
-- Produces in `model_sampling.py`: `build_sampling_config(point_count: int, random_seed: int) -> dict`.
-- Produces: `sampling_config_fingerprint(config: dict) -> str`.
-- Produces: `sample_mesh_surface(vertices_m, faces, config) -> dict`.
+**接口：**
+- 在 `model_mesh.py` 中产出：`read_mesh_geometry_m(path: Path, declared_unit: str, *, reader: MeshReader) -> tuple[list[list[float]], list[list[int]]]`。
+- 在 `model_sampling.py` 中产出：`build_sampling_config(point_count: int, random_seed: int) -> dict`。
+- 产出：`sampling_config_fingerprint(config: dict) -> str`。
+- 产出：`sample_mesh_surface(vertices_m, faces, config) -> dict`。
 
-- [ ] **Step 1: Write failing deterministic geometry tests**
+- [ ] **步骤 1：编写确定性几何失败测试**
 
 ```python
 def test_same_mesh_and_config_produce_literal_points():
@@ -338,38 +338,38 @@ def test_same_mesh_and_config_produce_literal_points():
     }
 ```
 
-The literal points above come from the published SHA-256 lane formula for config fingerprint `eaa98cd4674118a8cdca4215d9a4296ce1ec003ef15fa55a0a922a7550f97961`; the test must not calculate its own expected values. Add tests for fan triangulation, area selection across a 1:3 triangle pair, unit conversion, partial and total degeneration, `-0.0`, maximum boundaries, wrong exact types including booleans, non-finite vertices, and source order stability.
+上述字面量点来自配置指纹 `eaa98cd4674118a8cdca4215d9a4296ce1ec003ef15fa55a0a922a7550f97961` 对应的既定 SHA-256 分通道公式；测试不得自行计算预期值。补充扇形三角化、面积比为 1:3 的双三角形选择、单位转换、部分和全部退化、`-0.0`、最大边界、包含布尔值的错误精确类型、非有限顶点及源顺序稳定性测试。
 
-The mutations caught are use of `random`, vertex sampling instead of surface sampling, incorrect square-root barycentric mapping, unit omission, or unstable triangle ordering.
+这些测试用于捕获错误使用 `random`、以顶点采样代替表面采样、错误平方根重心映射、遗漏单位转换或三角形顺序不稳定等缺陷。
 
-- [ ] **Step 2: Run kernel tests and verify RED**
+- [ ] **步骤 2：运行采样内核测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_sampling_kernel.py -p no:cacheprovider
 ```
 
-Expected: collection fails because sampling APIs do not exist.
+预期：由于采样接口尚不存在，测试收集失败。
 
-- [ ] **Step 3: Expose validated meter geometry without duplicating validation**
+- [ ] **步骤 3：公开已验证的米制几何读取且不重复校验逻辑**
 
-Refactor `inspect_mesh` to call `read_mesh_geometry_m`; preserve every Phase 15A error and summary field. The new reader validates format, unit, vertices, faces and scales each vertex exactly once.
+重构 `inspect_mesh`，使其调用 `read_mesh_geometry_m`，并保留所有 Phase 15A 错误和摘要字段。新读取函数验证格式、单位、顶点和面，并且每个顶点只执行一次比例换算。
 
-- [ ] **Step 4: Implement canonical config and SHA-256 lane generator**
+- [ ] **步骤 4：实现规范配置与 SHA-256 分通道生成器**
 
-Use this exact representation identity:
+使用以下精确表达身份：
 
 ```python
 config_fingerprint = hashlib.sha256(canonical_json_bytes(config)).hexdigest()
 representation_id = f"cad-sampled-{config_fingerprint}"
 ```
 
-For each sample and lane, hash `b"phase15b1" + bytes.fromhex(config_fingerprint) + i.to_bytes(8, "big") + bytes([lane])`. Convert the first 8 digest bytes to `[0,1)` by dividing by `2**64`.
+对每个样本和通道计算 `b"phase15b1" + bytes.fromhex(config_fingerprint) + i.to_bytes(8, "big") + bytes([lane])` 的哈希。把摘要前 8 个字节解释为整数并除以 `2**64`，得到 `[0,1)`。
 
-- [ ] **Step 5: Implement fan triangulation and area-weighted barycentric sampling**
+- [ ] **步骤 5：实现扇形三角化与面积加权重心采样**
 
-Preserve face order, ignore exact zero-area triangles, fail if total area is zero, select by cumulative area, and calculate uniform barycentric coordinates with `sqrt(u)`. Round each meter coordinate to 12 decimals and map either signed zero to `0.0`.
+保持面顺序，忽略面积精确为零的三角形；总面积为零时失败；按累计面积选择三角形，并使用 `sqrt(u)` 计算均匀重心坐标。每个米制坐标保留 12 位小数，并把任意符号零规范为 `0.0`。
 
-- [ ] **Step 6: Run kernel and Phase 15A mesh tests GREEN**
+- [ ] **步骤 6：运行采样内核与 Phase 15A 网格测试并确认 GREEN**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -377,7 +377,7 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-- [ ] **Step 7: Commit the deterministic sampling kernel**
+- [ ] **步骤 7：提交确定性采样内核**
 
 ```powershell
 git add -- src/pc_system/model_mesh.py src/pc_system/model_sampling.py tests/test_phase15b1_sampling_kernel.py
@@ -386,19 +386,19 @@ git commit -m "feat: add deterministic model sampling"
 
 ---
 
-### Task 5: Immutable Sampled Representation Publication
+### 任务 5：不可变采样表达发布
 
-**Files:**
-- Modify: `src/pc_system/model_sampling.py`
-- Create: `tests/test_phase15b1_sampling_publication.py`
+**文件：**
+- 修改：`src/pc_system/model_sampling.py`
+- 新建：`tests/test_phase15b1_sampling_publication.py`
 
-**Interfaces:**
-- Consumes: Task 1 resource lock, Task 4 kernel, `load_model_version`, `fingerprint_file`, Phase 15 audit, `Principal`, and `MeshReader`.
-- Produces: `sample_model_version(project_root, *, model_id, version_id, point_count, random_seed, principal, operation_id, request_id, idempotency_key, mesh_reader) -> dict`.
-- Produces: `load_sampled_representation(project_root, model_id, version_id, representation_id) -> dict`.
-- Produces: `list_sampled_representations(project_root, model_id, version_id) -> list[dict]`.
+**接口：**
+- 依赖：任务 1 的资源锁、任务 4 的采样内核、`load_model_version`、`fingerprint_file`、Phase 15 审计、`Principal` 和 `MeshReader`。
+- 产出：`sample_model_version(project_root, *, model_id, version_id, point_count, random_seed, principal, operation_id, request_id, idempotency_key, mesh_reader) -> dict`。
+- 产出：`load_sampled_representation(project_root, model_id, version_id, representation_id) -> dict`。
+- 产出：`list_sampled_representations(project_root, model_id, version_id) -> list[dict]`。
 
-- [ ] **Step 1: Write failing publication, immutability, and recovery tests**
+- [ ] **步骤 1：编写发布、不可变性与恢复失败测试**
 
 ```python
 def test_sample_model_version_publishes_outside_immutable_version(tmp_path):
@@ -420,25 +420,25 @@ def test_sample_model_version_publishes_outside_immutable_version(tmp_path):
     ) == representation
 ```
 
-Add tests for source manifest tampering, sampled point tampering, representation tampering, same-request replay, same-config different-operation reuse rules, partial owner recovery, foreign owner rejection, failure before manifest publication, failure after manifest publication, and valid audit event sequence.
+补充源清单篡改、采样点篡改、表达清单篡改、相同请求重放、同配置不同操作的复用规则、部分所有者恢复、外部所有者拒绝、清单发布前失败、清单发布后失败和有效审计事件顺序测试。
 
-- [ ] **Step 2: Run publication tests and verify RED**
+- [ ] **步骤 2：运行发布测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q tests/test_phase15b1_sampling_publication.py -p no:cacheprovider
 ```
 
-Expected: `sample_model_version` is missing.
+预期：`sample_model_version` 尚不存在。
 
-- [ ] **Step 3: Implement strict sampled-point and representation readers**
+- [ ] **步骤 3：实现严格的采样点与表达读取器**
 
-Verify exact schema fields, path identities, plain directories/files, finite coordinates, point count, config fingerprint, source fingerprints, artifact URI and SHA-256. A directory without a valid final `representation.json` is not returned by list APIs.
+验证精确结构字段、路径身份、普通目录/文件、有限坐标、点数、配置指纹、源指纹、工件 URI 和 SHA-256。没有有效最终 `representation.json` 的目录不得由列表接口返回。
 
-- [ ] **Step 4: Implement audited in-place candidate publication**
+- [ ] **步骤 4：实现受审计的原位候选发布**
 
-Use the deterministic representation ID and Task 1 sampling resource lock. Freeze `operation_owner.json`; write sampled points; publish `representation.json` last as the visibility marker. Matching retry validates and resumes existing bytes. Mismatched owner or content fails closed. Never recursively delete or quarantine the candidate.
+使用确定性表达编号和任务 1 的采样资源锁。冻结 `operation_owner.json`，写入采样点，最后发布 `representation.json` 作为可见性标记。匹配的重试验证并继续已有字节；所有者或内容不匹配时失败关闭。绝不递归删除或隔离候选目录。
 
-- [ ] **Step 5: Run publication and import-integrity tests GREEN**
+- [ ] **步骤 5：运行发布与导入完整性测试并确认 GREEN**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -448,7 +448,7 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Commit immutable representations**
+- [ ] **步骤 6：提交不可变采样表达**
 
 ```powershell
 git add -- src/pc_system/model_sampling.py tests/test_phase15b1_sampling_publication.py
@@ -457,25 +457,25 @@ git commit -m "feat: publish sampled model representations"
 
 ---
 
-### Task 6: Sampling CLI, Documentation, and End-to-End Gate
+### 任务 6：采样 CLI、中文文档与端到端门禁
 
-**Files:**
-- Modify: `src/pc_system/commands/phase15.py`
-- Modify: `src/pc_system/cli_parser.py`
-- Modify: `src/pc_system/cli.py`
-- Create: `tests/test_phase15b1_sampling_cli.py`
-- Create: `tests/test_phase15b1_e2e.py`
-- Create: `docs/phase15b1-versioned-model-sampling.md`
-- Modify: `README.md`
-- Modify: `docs/current-development-inventory.md`
-- Modify: `docs/system-function-module-inventory.md`
+**文件：**
+- 修改：`src/pc_system/commands/phase15.py`
+- 修改：`src/pc_system/cli_parser.py`
+- 修改：`src/pc_system/cli.py`
+- 新建：`tests/test_phase15b1_sampling_cli.py`
+- 新建：`tests/test_phase15b1_e2e.py`
+- 新建：`docs/phase15b1-versioned-model-sampling.md`
+- 修改：`README.md`
+- 修改：`docs/current-development-inventory.md`
+- 修改：`docs/system-function-module-inventory.md`
 
-**Interfaces:**
-- Consumes: `sample_model_version` and sampled representation queries.
-- Produces: CLI `sample-model-version` and `list-model-representations`.
-- Documents: operator activation, rollback, sampling, history inspection and recovery rules.
+**接口：**
+- 依赖：`sample_model_version` 和采样表达查询函数。
+- 产出：CLI `sample-model-version` 和 `list-model-representations`。
+- 文档：操作员激活、回滚、采样、历史检查和恢复规则。
 
-- [ ] **Step 1: Write failing sampling CLI and end-to-end tests**
+- [ ] **步骤 1：编写采样 CLI 与端到端失败测试**
 
 ```python
 def test_import_release_sample_and_rollback_is_fully_auditable(tmp_path):
@@ -492,9 +492,9 @@ def test_import_release_sample_and_rollback_is_fully_auditable(tmp_path):
         assert verify_operation_chain(read_operation_events(tmp_path, operation_id))
 ```
 
-Add CLI tests for required explicit point count/seed, stable exit code 2 on invalid config, printed representation path, and deterministic second invocation.
+补充 CLI 测试：必须显式提供点数/种子、无效配置稳定返回退出码 2、输出表达路径，以及第二次调用保持确定性。
 
-- [ ] **Step 2: Run CLI/E2E tests and verify RED**
+- [ ] **步骤 2：运行 CLI/E2E 测试并确认 RED**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -502,17 +502,17 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-Expected: parser rejects sampling commands.
+预期：解析器拒绝采样命令。
 
-- [ ] **Step 3: Implement thin sampling CLI adapters**
+- [ ] **步骤 3：实现轻量采样 CLI 适配器**
 
-Add required arguments `--model-id`, `--version-id`, `--point-count`, `--random-seed`, `--actor`, `--operation-id`, `--request-id`, and `--idempotency-key`. Print the final `representation.json` path only after verified completion.
+增加必填参数 `--model-id`、`--version-id`、`--point-count`、`--random-seed`、`--actor`、`--operation-id`、`--request-id` 和 `--idempotency-key`。只有在验证完成后才输出最终 `representation.json` 路径。
 
-- [ ] **Step 4: Write Chinese operator and integrator documentation**
+- [ ] **步骤 4：编写中文操作与集成文档**
 
-Document exact CLI/API examples, immutable version and release layout, current projection semantics, rollback behavior, sampling configuration, stable errors, audit lookup, production-versus-experiment rules, and explicit Phase 15B-2/15C boundaries.
+记录精确 CLI/API 示例、不可变版本和发布布局、当前投影语义、回滚行为、采样配置、稳定错误、审计查询、生产与实验规则，以及明确的 Phase 15B-2/15C 边界。
 
-- [ ] **Step 5: Run all Phase 15B-1 and focused Phase 15 regressions**
+- [ ] **步骤 5：运行全部 Phase 15B-1 与聚焦 Phase 15 回归测试**
 
 ```powershell
 uv run --extra test python -m pytest -q `
@@ -528,7 +528,7 @@ uv run --extra test python -m pytest -q `
   -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Run the final repository readiness gate once**
+- [ ] **步骤 6：执行一次最终仓库就绪门禁**
 
 ```powershell
 uv run --extra test python -m pytest -q -p no:cacheprovider
@@ -538,9 +538,9 @@ rg -n "T[B]D|T[O]DO|F[I]XME|implement[ ]later|fill[ ]in[ ]details" `
   src/pc_system tests docs/phase15b1-versioned-model-sampling.md README.md
 ```
 
-Expected: all tests pass, compile exits 0, diff check is empty, and placeholder scan has no matches.
+预期：全部测试通过，编译检查退出码为 0，差异检查无输出，占位符扫描无匹配。
 
-- [ ] **Step 7: Commit Phase 15B-1 delivery artifacts**
+- [ ] **步骤 7：提交 Phase 15B-1 交付资料**
 
 ```powershell
 git add -- `
@@ -551,17 +551,17 @@ git add -- `
 git commit -m "docs: complete Phase 15B-1 versioned sampling"
 ```
 
-## Final Review Checklist
+## 最终复审清单
 
-- [ ] Model version directories are byte-identical before and after release, rollback, and sampling.
-- [ ] Current release reads fail closed on missing, malformed, cross-model, or tampered evidence.
-- [ ] Concurrent release requests cannot both advance the same expected head.
-- [ ] Rollback appends a new release record and preserves all history.
-- [ ] Sampling uses only verified immutable source artifacts.
-- [ ] Same source/config produces byte-identical sampled points across repeated runs.
-- [ ] Every complete representation is immutable and fingerprint-verified.
-- [ ] Partial candidates are invisible to readers and recover only under matching ownership.
-- [ ] Production identities and roles are enforced before API body consumption.
-- [ ] CLI, API, domain, audit and documentation contracts agree.
-- [ ] Phase 15B-2 retrieval features and Phase 15C registration remain out of scope.
-- [ ] Focused and full verification evidence is captured before merge.
+- [ ] 模型版本目录在发布、回滚和采样前后保持字节级一致。
+- [ ] 当前发布读取遇到缺失、畸形、跨模型或篡改证据时失败关闭。
+- [ ] 并发发布请求不能同时推进同一个预期头。
+- [ ] 回滚追加新的发布记录并保留全部历史。
+- [ ] 采样只使用经过验证的不可变源工件。
+- [ ] 相同源与配置在重复运行时产生字节级相同的采样点。
+- [ ] 每个完整表达都不可变且经过指纹验证。
+- [ ] 部分候选对读取方不可见，并且只能在所有权匹配时恢复。
+- [ ] 在消费 API 正文之前强制执行生产身份和角色校验。
+- [ ] CLI、API、领域服务、审计和文档契约一致。
+- [ ] Phase 15B-2 检索特征和 Phase 15C 配准保持在范围之外。
+- [ ] 合并前记录聚焦验证和全量验证证据。
