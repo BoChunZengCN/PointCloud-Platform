@@ -7,7 +7,7 @@ from pc_system.model_matching_errors import ModelMatchingError
 
 ALLOWED_ROLES = frozenset({"operator", "expert", "approver", "auditor"})
 TRUSTED_PRINCIPAL_SOURCES = frozenset(
-    {"configured_token", "development_headers", "system"}
+    {"cli", "configured_token", "development_headers", "system"}
 )
 
 

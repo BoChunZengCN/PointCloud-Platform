@@ -295,6 +295,36 @@ def build_parser() -> argparse.ArgumentParser:
     retry_publication.add_argument("--asset-id", required=True)
     retry_publication.add_argument("--release-id", required=True)
     retry_publication.add_argument("--actor", required=True)
+    create_model_asset = subparsers.add_parser(
+        "create-model-asset", help="Create a Phase 15A CAD model asset."
+    )
+    create_model_asset.add_argument("--project-root", required=True, type=Path)
+    create_model_asset.add_argument("--model-id", required=True)
+    create_model_asset.add_argument("--display-name", required=True)
+    create_model_asset.add_argument("--category-id", required=True)
+    create_model_asset.add_argument("--manufacturer", default="")
+    create_model_asset.add_argument("--model-number", default="")
+    create_model_asset.add_argument("--keyword", action="append", default=[])
+    create_model_asset.add_argument("--tag", action="append", default=[])
+    create_model_asset.add_argument("--actor", required=True)
+    create_model_asset.add_argument("--operation-id", required=True)
+    create_model_asset.add_argument("--request-id", required=True)
+    create_model_asset.add_argument("--idempotency-key", required=True)
+
+    import_model = subparsers.add_parser(
+        "import-model", help="Import a Phase 15A CAD model version."
+    )
+    import_model.add_argument("--project-root", required=True, type=Path)
+    import_model.add_argument("--model-id", required=True)
+    import_model.add_argument("--version-id", required=True)
+    import_model.add_argument("--source", required=True, type=Path)
+    import_model.add_argument("--unit", required=True, choices=["mm", "cm", "m"])
+    import_model.add_argument("--license", required=True)
+    import_model.add_argument("--provenance", type=Path)
+    import_model.add_argument("--actor", required=True)
+    import_model.add_argument("--operation-id", required=True)
+    import_model.add_argument("--request-id", required=True)
+    import_model.add_argument("--idempotency-key", required=True)
     return parser
 
 

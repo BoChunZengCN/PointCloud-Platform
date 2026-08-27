@@ -204,6 +204,22 @@ LAS/LAZ or FLS source
 | P14-M5 反馈与训练策略 / Feedback and training policy | 已完成 / Done | 输出纠正前后标签、操作、许可和训练资格，隔离黄金回归数据。 | `segmentation_feedback`, `training_policy.json` |
 | P14-M6 公共接口 / Public surfaces | 已完成 / Done | 提供受保护 API、CLI、Canvas 纠正工作台和恢复文档。 | CLI, API, `correction.html` |
 
+## Phase 15A：CAD 模型库基础 / CAD Model Library Foundation
+
+| 模块 / Module | 状态 / Status | 主要职责 / Responsibility | 主要产物 / Outputs |
+| --- | --- | --- | --- |
+| P15-M1.1 可信身份与权限 / Trusted identity | 已完成 / Done | 生产 token 绑定主体与角色，专家写入、审计员读取验证快照。 | principal contract |
+| P15-M1.2 审计操作 / Audit operations | 已完成 / Done | 原位恢复、幂等索引、哈希链事件、失败终态和完整性验证。 | `operation.json`, `events.jsonl` |
+| P15-M1.3 模型资产目录 / Model asset catalog | 已完成 / Done | 创建不可变模型资产元数据并提供列表和读取。 | `model_asset.json` |
+| P15-M1.4 模型版本导入 / Model version import | 已完成 / Done | 校验 STL、OBJ、PLY，统一单位，发布不可覆盖版本。 | `model_manifest.json`, `source_geometry.json` |
+| P15-M1.5 API 与 CLI / API and CLI | 已完成 / Done | 创建资产、导入版本、读取模型库和验证审计。 | model-library API, CLI |
+| P15-M1.6 文档与回归 / Documentation and regression | 已完成 / Done | 操作集成说明、端到端审计与失败回滚覆盖。 | `phase15-model-library.md` |
+| P15-M2 混合候选检索 / Hybrid retrieval | 已规划 / Planned | 文本、标签、尺寸和几何特征 Top-K 候选检索。 | feature index, candidates |
+| P15-M3 刚性配准 / Rigid registration | 已规划 / Planned | FPFH/RANSAC/FGR、ICP 和残差质量门禁。 | rigid transform, quality gate |
+| P15-M4 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
+| P15-M5 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
+| P15-M6 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
+
 ```powershell
 python -m pc_system.cli init --project-root .\workspace
 python -m pc_system.cli ingest --project-root .\workspace --las-path .\sample.las
@@ -216,6 +232,8 @@ python -m pc_system.cli plan-batch-run --project-root .\workspace
 python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample
 python -m pc_system.cli export-delivery-package --project-root .\workspace --asset-id sample --allow-review-required
 python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --port 8000
+python -m pc_system.cli create-model-asset --project-root .\workspace --model-id pump-a --display-name "Pump A" --category-id pump --actor alice --operation-id op-model-001 --request-id request-model-001 --idempotency-key idem-model-001
+python -m pc_system.cli import-model --project-root .\workspace --model-id pump-a --version-id v1 --source .\imports\models\pump-a.obj --unit mm --license internal --actor alice --operation-id op-import-001 --request-id request-import-001 --idempotency-key idem-import-001
 ```
 
 ## 关键 API / Key APIs
@@ -246,11 +264,11 @@ python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. 将 Phase 9 的 delivery gate 决策写入 delivery manifest，形成交付审计链。
-2. 增加项目级质量/交付门禁，汇总多个资产的最严重状态。
-3. 将 `blocked` 自动联动到 Phase 4 production job step。
-4. 为展示页加入质量网格或热力图叠加层。
-5. 增强真实 LAS/LAZ 采样策略，例如分层采样、分类覆盖采样、空间边界覆盖采样。
+1. Phase 15B：实现确定性网格采样、版本化特征和混合 Top-K 检索。
+2. Phase 15C：实现刚性粗配准、多尺度 ICP 和残差门禁。
+3. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
+4. Phase 15E：接入受验证的实物参考点云模板。
+5. Phase 15F：实现受控参数优化、审批、推广和回滚。
 
 
 
