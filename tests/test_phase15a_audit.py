@@ -261,6 +261,577 @@ def test_verified_operation_event_snapshot_has_bounded_busy_result(
     assert exc_info.value.code == "operation_busy"
 
 
+@pytest.mark.parametrize(
+    "terminal_state", ["running", "completed", "failed"]
+)
+def test_verified_operation_snapshot_matches_verified_lifecycle(
+    tmp_path, terminal_state
+):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-snapshot",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-snapshot",
+        idempotency_key="idem-snapshot",
+        request_payload={"model_id": "pump-a"},
+    )
+    if terminal_state == "completed":
+        complete_operation(
+            tmp_path,
+            "op-snapshot",
+            {"model_id": "pump-a", "metrics": {"faces": 12}},
+        )
+    elif terminal_state == "failed":
+        fail_operation(
+            tmp_path,
+            "op-snapshot",
+            "invalid_model_geometry",
+            "Mesh is empty.",
+        )
+
+    snapshot = read_snapshot(tmp_path, "op-snapshot")
+
+    assert set(snapshot) == {"operation", "events"}
+    operation = snapshot["operation"]
+    events = snapshot["events"]
+    assert operation["status"] == terminal_state
+    assert operation["actor_id"] == events[0]["actor_id"] == "alice"
+    assert operation["roles"] == events[0]["roles"] == ["expert"]
+    assert operation["principal_source"] == events[0]["principal_source"]
+    assert operation["request_id"] == events[0]["details"]["request_id"]
+    assert (
+        operation["request_fingerprint"]
+        == events[0]["details"]["request_fingerprint"]
+    )
+    if terminal_state == "running":
+        assert [event["event_type"] for event in events] == [
+            "operation.started"
+        ]
+        assert operation["completed_at"] is None
+        assert operation["result"] is None
+        assert operation["error"] is None
+    elif terminal_state == "completed":
+        terminal = events[-1]
+        assert terminal["event_type"] == "operation.completed"
+        assert operation["completed_at"] == terminal["timestamp"]
+        assert operation["result"] == terminal["details"]["result"] == {
+            "model_id": "pump-a",
+            "metrics": {"faces": 12},
+        }
+        assert operation["error"] is None
+    else:
+        terminal = events[-1]
+        assert terminal["event_type"] == "operation.failed"
+        assert operation["completed_at"] == terminal["timestamp"]
+        assert operation["result"] is None
+        assert operation["error"] == terminal["details"] == {
+            "code": "invalid_model_geometry",
+            "message": "Mesh is empty.",
+        }
+
+
+@pytest.mark.parametrize(
+    "tamper_case",
+    [
+        "actor_id",
+        "request_id",
+        "completed_at",
+        "result",
+        "error",
+    ],
+)
+def test_verified_operation_snapshot_rejects_projection_tamper(
+    tmp_path, tamper_case
+):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-projection-tamper",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-projection-tamper",
+        idempotency_key="idem-projection-tamper",
+        request_payload={"model_id": "pump-a"},
+    )
+    if tamper_case == "error":
+        fail_operation(
+            tmp_path,
+            "op-projection-tamper",
+            "invalid_model_geometry",
+            "Mesh is empty.",
+        )
+    elif tamper_case in {"completed_at", "result"}:
+        complete_operation(
+            tmp_path,
+            "op-projection-tamper",
+            {"model_id": "pump-a"},
+        )
+    projection_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-projection-tamper"
+        / "operation.json"
+    )
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    forged_values = {
+        "actor_id": "mallory",
+        "request_id": "request-forged",
+        "completed_at": "2030-01-01T00:00:00+00:00",
+        "result": {"model_id": "forged"},
+        "error": {"code": "forged", "message": "Forged."},
+    }
+    projection[tamper_case] = forged_values[tamper_case]
+    projection_path.write_text(json.dumps(projection), encoding="utf-8")
+    tampered_bytes = projection_path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        read_snapshot(tmp_path, "op-projection-tamper")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert projection_path.read_bytes() == tampered_bytes
+
+
+def test_verified_operation_snapshot_rejects_tampered_events(tmp_path):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-event-tamper",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-event-tamper",
+        idempotency_key="idem-event-tamper",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-event-tamper"
+        / "events.jsonl"
+    )
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    event["details"]["request_id"] = "request-forged"
+    events_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    tampered_bytes = events_path.read_bytes()
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        read_snapshot(tmp_path, "op-event-tamper")
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert events_path.read_bytes() == tampered_bytes
+
+
+@pytest.mark.parametrize("ledger_state", ["missing", "empty"])
+def test_verified_operation_snapshot_rejects_missing_start_evidence(
+    tmp_path, ledger_state
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-missing-start",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-missing-start",
+        idempotency_key="idem-missing-start",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-missing-start"
+        / "events.jsonl"
+    )
+    if ledger_state == "missing":
+        events_path.unlink()
+    else:
+        events_path.write_text("", encoding="utf-8")
+
+    assert read_operation_events(tmp_path, "op-missing-start") == []
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_snapshot(
+            tmp_path, "op-missing-start"
+        )
+
+    assert exc_info.value.code == "audit_integrity_error"
+
+
+def test_verified_operation_snapshot_rejects_projection_without_initializer(
+    tmp_path,
+):
+    start_operation(
+        tmp_path,
+        operation_id="op-projection-only",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-projection-only",
+        idempotency_key="idem-projection-only",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-projection-only"
+        / "events.jsonl"
+    )
+    events_path.unlink()
+    audit_module._operation_lock_path(
+        tmp_path, "op-projection-only"
+    ).unlink()
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_snapshot(
+            tmp_path, "op-projection-only"
+        )
+
+    assert exc_info.value.code == "audit_integrity_error"
+
+
+def test_verified_operation_snapshot_reports_live_initializer_busy(
+    tmp_path, monkeypatch
+):
+    initializer_locked = Event()
+    release_initializer = Event()
+    original_append_locked = audit_module._append_operation_event_locked
+    original_monotonic = audit_module.time.monotonic
+
+    def pause_initializer_before_start_event(
+        project_root,
+        operation_id,
+        event_type,
+        details,
+        principal=None,
+    ):
+        if (
+            operation_id == "op-live-initializer"
+            and event_type == "operation.started"
+        ):
+            initializer_locked.set()
+            assert release_initializer.wait(timeout=2)
+        return original_append_locked(
+            project_root,
+            operation_id,
+            event_type,
+            details,
+            principal,
+        )
+
+    monkeypatch.setattr(
+        audit_module,
+        "_append_operation_event_locked",
+        pause_initializer_before_start_event,
+    )
+
+    def initialize_operation():
+        return start_operation(
+            tmp_path,
+            operation_id="op-live-initializer",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-live-initializer",
+            idempotency_key="idem-live-initializer",
+            request_payload={"model_id": "pump-a"},
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        initializer = executor.submit(initialize_operation)
+        assert initializer_locked.wait(timeout=2)
+        clock = iter([0.0, 2.0])
+        monkeypatch.setattr(
+            audit_module.time, "monotonic", lambda: next(clock)
+        )
+        try:
+            with pytest.raises(ModelMatchingError) as exc_info:
+                audit_module.read_verified_operation_snapshot(
+                    tmp_path, "op-live-initializer"
+                )
+            assert exc_info.value.code == "operation_busy"
+        finally:
+            monkeypatch.setattr(
+                audit_module.time, "monotonic", original_monotonic
+            )
+            release_initializer.set()
+        operation, replayed = initializer.result(timeout=2)
+
+    assert replayed is False
+    assert operation["status"] == "running"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-live-initializer")
+    ] == ["operation.started"]
+
+
+def test_initial_projection_visibility_is_guarded_by_initializer_lock(
+    tmp_path, monkeypatch
+):
+    projection_written = Event()
+    release_projection_write = Event()
+    original_write_json = audit_module.write_json
+    original_monotonic = audit_module.time.monotonic
+
+    def pause_after_initial_projection_write(payload, path):
+        result = original_write_json(payload, path)
+        if (
+            payload.get("operation_id") == "op-projection-window"
+            and payload.get("status") == "running"
+        ):
+            projection_written.set()
+            assert release_projection_write.wait(timeout=2)
+        return result
+
+    monkeypatch.setattr(
+        audit_module, "write_json", pause_after_initial_projection_write
+    )
+
+    def initialize_operation():
+        return start_operation(
+            tmp_path,
+            operation_id="op-projection-window",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-projection-window",
+            idempotency_key="idem-projection-window",
+            request_payload={"model_id": "pump-a"},
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        initializer = executor.submit(initialize_operation)
+        assert projection_written.wait(timeout=2)
+        clock = iter([0.0, 2.0])
+        monkeypatch.setattr(
+            audit_module.time, "monotonic", lambda: next(clock)
+        )
+        try:
+            with pytest.raises(ModelMatchingError) as exc_info:
+                audit_module.read_verified_operation_snapshot(
+                    tmp_path, "op-projection-window"
+                )
+            assert exc_info.value.code == "operation_busy"
+        finally:
+            monkeypatch.setattr(
+                audit_module.time, "monotonic", original_monotonic
+            )
+            release_projection_write.set()
+        operation, replayed = initializer.result(timeout=2)
+
+    assert replayed is False
+    assert operation["status"] == "running"
+    snapshot = audit_module.read_verified_operation_snapshot(
+        tmp_path, "op-projection-window"
+    )
+    assert snapshot["operation"]["status"] == "running"
+    assert [event["event_type"] for event in snapshot["events"]] == [
+        "operation.started"
+    ]
+
+
+def test_verified_operation_snapshot_rejects_terminal_without_start(tmp_path):
+    start_operation(
+        tmp_path,
+        operation_id="op-terminal-only",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-terminal-only",
+        idempotency_key="idem-terminal-only",
+        request_payload={"model_id": "pump-a"},
+    )
+    events_path = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-terminal-only"
+        / "events.jsonl"
+    )
+    terminal = {
+        "schema_version": "1.0",
+        "event_id": "forged-terminal",
+        "operation_id": "op-terminal-only",
+        "sequence": 1,
+        "event_type": "operation.completed",
+        "timestamp": audit_module.utc_now(),
+        "actor_id": "alice",
+        "roles": ["expert"],
+        "principal_source": "configured_token",
+        "previous_event_hash": None,
+        "details": {"result": {"model_id": "pump-a"}},
+    }
+    terminal["event_hash"] = audit_module._event_hash(terminal)
+    events_path.write_text(json.dumps(terminal) + "\n", encoding="utf-8")
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_snapshot(
+            tmp_path, "op-terminal-only"
+        )
+
+    assert exc_info.value.code == "audit_integrity_error"
+
+
+def test_verified_operation_snapshot_returns_fresh_json_safe_values(tmp_path):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-fresh-snapshot",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-fresh-snapshot",
+        idempotency_key="idem-fresh-snapshot",
+        request_payload={"model_id": "pump-a"},
+    )
+    complete_operation(
+        tmp_path,
+        "op-fresh-snapshot",
+        {"model_id": "pump-a", "metrics": {"faces": 12}},
+    )
+
+    first = read_snapshot(tmp_path, "op-fresh-snapshot")
+    json.dumps(first)
+    first["operation"]["result"]["metrics"]["faces"] = -1
+    first["events"][0]["details"]["request_id"] = "mutated"
+    second = read_snapshot(tmp_path, "op-fresh-snapshot")
+
+    assert second["operation"]["result"]["metrics"]["faces"] == 12
+    assert second["events"][0]["details"]["request_id"] == (
+        "request-fresh-snapshot"
+    )
+
+
+def test_verified_operation_snapshot_maps_invalid_identifier_stably(tmp_path):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        read_snapshot(tmp_path, "../invalid-operation")
+
+    assert exc_info.value.code == "invalid_audit_request"
+    assert "../invalid-operation" not in str(exc_info.value)
+    assert not (tmp_path / "reports").exists()
+
+
+def test_verified_operation_snapshot_preserves_bounded_busy_result(
+    tmp_path, monkeypatch
+):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-snapshot-busy",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-snapshot-busy",
+        idempotency_key="idem-snapshot-busy",
+        request_payload={"model_id": "pump-a"},
+    )
+    clock = iter([0.0, 2.0])
+
+    @contextmanager
+    def always_busy(*args, **kwargs):
+        raise ModelMatchingError(
+            "operation_busy", "Operation is currently being updated."
+        )
+        yield
+
+    monkeypatch.setattr(audit_module, "_operation_write_lock", always_busy)
+    monkeypatch.setattr(
+        audit_module.time, "monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        read_snapshot(tmp_path, "op-snapshot-busy")
+
+    assert exc_info.value.code == "operation_busy"
+
+
+def test_verified_operation_snapshot_never_mixes_concurrent_terminal_append(
+    tmp_path, monkeypatch
+):
+    read_snapshot = audit_module.read_verified_operation_snapshot
+    start_operation(
+        tmp_path,
+        operation_id="op-concurrent-snapshot",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-concurrent-snapshot",
+        idempotency_key="idem-concurrent-snapshot",
+        request_payload={"model_id": "pump-a"},
+    )
+    event_read_entered = Event()
+    allow_event_read = Event()
+    first_writer_attempt_done = Event()
+    writer_contended = Event()
+    retry_writer = Event()
+    writer_completed = Event()
+    original_read_events_locked = (
+        audit_module._read_verified_operation_events_locked
+    )
+
+    def pause_before_real_event_read(project_root, operation_id):
+        if operation_id == "op-concurrent-snapshot":
+            event_read_entered.set()
+            assert allow_event_read.wait(timeout=2)
+        return original_read_events_locked(project_root, operation_id)
+
+    monkeypatch.setattr(
+        audit_module,
+        "_read_verified_operation_events_locked",
+        pause_before_real_event_read,
+    )
+
+    def complete_after_snapshot_unlocks():
+        try:
+            completed = complete_operation(
+                tmp_path,
+                "op-concurrent-snapshot",
+                {"model_id": "pump-a"},
+                _audit_rejection=False,
+            )
+        except ModelMatchingError as exc:
+            assert exc.code == "operation_busy"
+            writer_contended.set()
+            first_writer_attempt_done.set()
+            assert retry_writer.wait(timeout=2)
+            completed = complete_operation(
+                tmp_path,
+                "op-concurrent-snapshot",
+                {"model_id": "pump-a"},
+                _audit_rejection=False,
+            )
+        else:
+            first_writer_attempt_done.set()
+        writer_completed.set()
+        return completed
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reader = executor.submit(
+            read_snapshot, tmp_path, "op-concurrent-snapshot"
+        )
+        assert event_read_entered.wait(timeout=2)
+        writer = executor.submit(complete_after_snapshot_unlocks)
+        try:
+            assert first_writer_attempt_done.wait(timeout=2)
+            assert writer_contended.is_set()
+            assert not writer_completed.is_set()
+            allow_event_read.set()
+            before_terminal = reader.result(timeout=2)
+            assert before_terminal["operation"]["status"] == "running"
+            assert [
+                event["event_type"] for event in before_terminal["events"]
+            ] == ["operation.started"]
+            retry_writer.set()
+            completed = writer.result(timeout=2)
+        finally:
+            allow_event_read.set()
+            retry_writer.set()
+
+    assert writer_completed.is_set()
+    assert completed["status"] == "completed"
+    after_terminal = read_snapshot(tmp_path, "op-concurrent-snapshot")
+    assert after_terminal["operation"]["status"] == "completed"
+    assert after_terminal["operation"]["result"] == (
+        after_terminal["events"][-1]["details"]["result"]
+    )
+
+
 def test_denied_request_records_system_audit_without_raw_token(tmp_path):
     operation_id = record_denied_operation(
         tmp_path, request_id="request-denied-001", route="POST /model-library/models",
@@ -363,24 +934,19 @@ def test_concurrent_idempotency_replay_follows_started_event(tmp_path, monkeypat
             request_id="request-002",
             **arguments,
         )
-        assert replay_entered.wait(timeout=2)
-        assert replay_finished.wait(timeout=2)
-        with pytest.raises(ModelMatchingError) as exc_info:
-            replay.result(timeout=2)
-        assert exc_info.value.code == "operation_busy"
         release_claimant.set()
         claimant.result(timeout=2)
-        replayed_operation, replayed = start_operation(
-            tmp_path,
-            operation_id="op-002",
-            request_id="request-002",
-            **arguments,
-        )
+        replayed_operation, replayed = replay.result(timeout=2)
+        assert replay_entered.wait(timeout=2)
+        assert replay_finished.wait(timeout=2)
     assert replayed is True
     assert replayed_operation["operation_id"] == "op-001"
     assert [
         event["event_type"] for event in read_operation_events(tmp_path, "op-001")
     ] == ["operation.started", "operation.replayed"]
+    assert [
+        event["event_type"] for event in read_operation_events(tmp_path, "op-002")
+    ] == ["operation.start_failed"]
 
 
 def test_immutable_transition_is_recorded_as_failed_mutation(tmp_path):
@@ -408,13 +974,14 @@ def test_started_event_failure_is_audited_and_replays_deterministically(
 ):
     original_append = audit_module._append_operation_event_locked
     failed_once = {"value": False}
+    sensitive_error = "simulated started-event failure secret-token C:\\private"
 
     def interrupted_append(
         project_root, operation_id, event_type, details, *args, **kwargs
     ):
         if event_type == "operation.started" and not failed_once["value"]:
             failed_once["value"] = True
-            raise OSError("simulated started-event failure")
+            raise OSError(sensitive_error)
         return original_append(
             project_root, operation_id, event_type, details, *args, **kwargs
         )
@@ -441,6 +1008,17 @@ def test_started_event_failure_is_audited_and_replays_deterministically(
     assert [
         event["event_type"] for event in read_operation_events(tmp_path, "op-001")
     ] == ["operation.start_failed"]
+    persisted = json.dumps(
+        {
+            "operation": failed,
+            "events": read_operation_events(tmp_path, "op-001"),
+        }
+    )
+    assert "secret-token" not in persisted
+    assert "C:\\private" not in persisted
+    with pytest.raises(ModelMatchingError) as exc_info:
+        audit_module.read_verified_operation_snapshot(tmp_path, "op-001")
+    assert exc_info.value.code == "audit_integrity_error"
 
     replayed_operation, replayed = start_operation(
         tmp_path,
@@ -453,6 +1031,44 @@ def test_started_event_failure_is_audited_and_replays_deterministically(
     assert read_operation_events(tmp_path, "op-001")[-1]["event_type"] == (
         "operation.replayed"
     )
+
+
+def test_durable_started_event_wins_over_post_append_exception(
+    tmp_path, monkeypatch
+):
+    original_append = audit_module._append_operation_event_locked
+    interrupted = {"value": False}
+
+    def append_then_interrupt(
+        project_root, operation_id, event_type, details, *args, **kwargs
+    ):
+        event = original_append(
+            project_root, operation_id, event_type, details, *args, **kwargs
+        )
+        if event_type == "operation.started" and not interrupted["value"]:
+            interrupted["value"] = True
+            raise OSError("simulated post-append visibility exception")
+        return event
+
+    monkeypatch.setattr(
+        audit_module, "_append_operation_event_locked", append_then_interrupt
+    )
+    operation, replayed = start_operation(
+        tmp_path,
+        operation_id="op-post-append",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-post-append",
+        idempotency_key="idem-post-append",
+        request_payload={"model_id": "pump-a"},
+    )
+
+    assert replayed is False
+    assert operation["status"] == "running"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-post-append")
+    ] == ["operation.started"]
 
 
 @pytest.mark.parametrize("terminal_event", ["operation.completed", "operation.failed"])
@@ -509,95 +1125,6 @@ def test_terminal_projection_failure_is_reconciled_without_duplicate_events(
         if event["event_type"] == terminal_event
     ]
     assert terminal_events_after == terminal_events_before
-
-
-def test_losing_claim_cleanup_requires_unstarted_unlocked_operation(tmp_path):
-    operation, _ = start_operation(
-        tmp_path, operation_id="op-loser", operation_type="model_asset.create",
-        principal=PRINCIPAL, request_id="request-001", idempotency_key="idem-001",
-        request_payload={"model_id": "pump-a"},
-    )
-    operation_root = (
-        tmp_path / "reports" / "model_matching_operations" / "op-loser"
-    )
-    (operation_root / "events.jsonl").unlink()
-    with audit_module._operation_write_lock(tmp_path, "op-loser"):
-        with pytest.raises(ModelMatchingError) as exc_info:
-            audit_module._discard_unstarted_operation(
-                tmp_path, "op-loser", operation["request_fingerprint"]
-            )
-    assert exc_info.value.code == "operation_busy"
-    assert operation_root.is_dir()
-
-    with audit_module._operation_write_lock(tmp_path, "op-loser"):
-        audit_module._append_operation_event_locked(
-            tmp_path,
-            "op-loser",
-            "operation.started",
-            {
-                "request_id": "request-001",
-                "request_fingerprint": operation["request_fingerprint"],
-            },
-        )
-    with pytest.raises(ModelMatchingError) as exc_info:
-        audit_module._discard_unstarted_operation(
-            tmp_path, "op-loser", operation["request_fingerprint"]
-        )
-    assert exc_info.value.code == "operation_immutable"
-    assert operation_root.is_dir()
-
-
-def test_busy_losing_claim_cleanup_is_audited_by_start_operation(
-    tmp_path, monkeypatch
-):
-    original_claim = audit_module._claim_idempotency_index
-    original_discard = audit_module._discard_unstarted_operation
-
-    def busy_discard(*args, **kwargs):
-        raise ModelMatchingError(
-            "operation_busy", "Operation is currently being updated."
-        )
-
-    monkeypatch.setattr(
-        audit_module, "_discard_unstarted_operation", busy_discard
-    )
-
-    def lose_claim(path, payload):
-        if payload["operation_id"] != "op-loser":
-            return original_claim(path, payload)
-        original_claim(
-            path,
-            {
-                **payload,
-                "operation_id": "op-winner",
-                "initializer_owner_token": "winner-token",
-            },
-        )
-        raise FileExistsError(path)
-
-    monkeypatch.setattr(audit_module, "_claim_idempotency_index", lose_claim)
-    with pytest.raises(ModelMatchingError) as exc_info:
-        start_operation(
-            tmp_path,
-            operation_id="op-loser",
-            operation_type="model_asset.create",
-            principal=PRINCIPAL,
-            request_id="request-001",
-            idempotency_key="idem-001",
-            request_payload={"model_id": "pump-a"},
-        )
-    assert exc_info.value.code == "operation_busy"
-    audits = mutation_failure_audits(tmp_path, "op-loser")
-    assert len(audits) == 1
-    assert any(
-        event["event_type"] == "operation.mutation_rejected"
-        and event["details"]["code"] == "operation_busy"
-        and event["details"]["attempted_mutation"] == "operation.started"
-        for event in audits[0][1]
-    )
-    monkeypatch.setattr(
-        audit_module, "_discard_unstarted_operation", original_discard
-    )
 
 
 def test_replay_and_conflict_use_attempting_principal_as_event_identity(tmp_path):
@@ -701,7 +1228,7 @@ def test_denied_audit_recovers_each_write_boundary(
     )
 
 
-def test_existing_operation_id_uses_stable_audited_error(tmp_path):
+def test_existing_operation_id_mismatch_uses_stable_integrity_error(tmp_path):
     start_operation(
         tmp_path, operation_id="op-001", operation_type="model_asset.create",
         principal=PRINCIPAL, request_id="request-001", idempotency_key="idem-001",
@@ -716,14 +1243,14 @@ def test_existing_operation_id_uses_stable_audited_error(tmp_path):
             idempotency_key="idem-002",
             request_payload={"model_id": "pump-b"},
         )
-    assert exc_info.value.code == "operation_exists"
+    assert exc_info.value.code == "audit_integrity_error"
     assert load_operation(tmp_path, "op-001") == operation_before
     assert read_operation_events(tmp_path, "op-001") == events_before
     audits = mutation_failure_audits(tmp_path, "op-001")
     assert len(audits) == 1
     assert any(
         event["event_type"] == "operation.mutation_rejected"
-        and event["details"]["code"] == "operation_exists"
+        and event["details"]["code"] == "audit_integrity_error"
         for event in audits[0][1]
     )
 
@@ -752,7 +1279,8 @@ def test_initial_projection_failure_uses_stable_audited_error(
     target_root = (
         tmp_path / "reports" / "model_matching_operations" / "op-001"
     )
-    assert not target_root.exists()
+    assert target_root.is_dir()
+    assert list(target_root.iterdir()) == []
     audits = mutation_failure_audits(tmp_path, "op-001")
     assert len(audits) == 1
     assert any(
@@ -760,6 +1288,14 @@ def test_initial_projection_failure_uses_stable_audited_error(
         and event["details"]["code"] == "operation_persistence_failed"
         for event in audits[0][1]
     )
+    operation, replayed = start_operation(
+        tmp_path, operation_id="op-001", operation_type="model_asset.create",
+        principal=PRINCIPAL, request_id="request-001",
+        idempotency_key="idem-001",
+        request_payload={"model_id": "pump-a"},
+    )
+    assert replayed is False
+    assert operation["status"] == "running"
 
 
 def test_restart_reconciles_claim_without_initial_event(tmp_path, monkeypatch):
@@ -798,6 +1334,302 @@ def test_restart_reconciles_claim_without_initial_event(tmp_path, monkeypatch):
         "operation.replayed",
     ]
     assert verify_operation_chain(events) is True
+
+
+def test_retry_recovers_matching_projection_before_index_once(
+    tmp_path, monkeypatch
+):
+    original_claim = audit_module._claim_idempotency_index
+    interrupted = {"value": False}
+
+    def interrupt_before_index(path, payload):
+        if not interrupted["value"]:
+            interrupted["value"] = True
+            raise KeyboardInterrupt("simulated process interruption")
+        return original_claim(path, payload)
+
+    monkeypatch.setattr(
+        audit_module, "_claim_idempotency_index", interrupt_before_index
+    )
+    arguments = {
+        "operation_id": "op-projection-recovery",
+        "operation_type": "model_asset.create",
+        "principal": PRINCIPAL,
+        "request_id": "request-projection-recovery",
+        "idempotency_key": "idem-projection-recovery",
+        "request_payload": {"model_id": "pump-a"},
+    }
+    with pytest.raises(KeyboardInterrupt, match="process interruption"):
+        start_operation(tmp_path, **arguments)
+
+    root = (
+        tmp_path
+        / "reports"
+        / "model_matching_operations"
+        / "op-projection-recovery"
+    )
+    assert (root / "operation.json").is_file()
+    assert read_operation_events(tmp_path, "op-projection-recovery") == []
+    assert not audit_module._idempotency_path(
+        tmp_path, "idem-projection-recovery"
+    ).exists()
+
+    monkeypatch.setattr(
+        audit_module, "_claim_idempotency_index", original_claim
+    )
+    operation, replayed = start_operation(tmp_path, **arguments)
+    assert replayed is False
+    assert operation["status"] == "running"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-projection-recovery")
+    ] == ["operation.started"]
+
+
+def test_retry_recovers_own_visible_index_before_started_once(
+    tmp_path, monkeypatch
+):
+    original_append = audit_module._append_operation_event_locked
+    interrupted = {"value": False}
+
+    def interrupt_started_event(
+        project_root, operation_id, event_type, details, *args, **kwargs
+    ):
+        if event_type == "operation.started" and not interrupted["value"]:
+            interrupted["value"] = True
+            raise KeyboardInterrupt("simulated post-index interruption")
+        return original_append(
+            project_root, operation_id, event_type, details, *args, **kwargs
+        )
+
+    monkeypatch.setattr(
+        audit_module, "_append_operation_event_locked", interrupt_started_event
+    )
+    arguments = {
+        "operation_id": "op-index-recovery",
+        "operation_type": "model_asset.create",
+        "principal": PRINCIPAL,
+        "request_id": "request-index-recovery",
+        "idempotency_key": "idem-index-recovery",
+        "request_payload": {"model_id": "pump-a"},
+    }
+    with pytest.raises(KeyboardInterrupt, match="post-index interruption"):
+        audit_module._start_operation(
+            tmp_path, **arguments, _recover_start_failure=False
+        )
+
+    assert audit_module._idempotency_path(
+        tmp_path, "idem-index-recovery"
+    ).is_file()
+    assert read_operation_events(tmp_path, "op-index-recovery") == []
+
+    monkeypatch.setattr(
+        audit_module, "_append_operation_event_locked", original_append
+    )
+    operation, replayed = start_operation(tmp_path, **arguments)
+    assert replayed is False
+    assert operation["status"] == "running"
+    operation, replayed = start_operation(tmp_path, **arguments)
+    assert replayed is True
+    lifecycle = [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-index-recovery")
+        if event["event_type"] in {
+            "operation.started",
+            "operation.start_failed",
+        }
+    ]
+    assert lifecycle == ["operation.started"]
+
+
+def test_losing_idempotency_claim_is_terminalized_in_place(tmp_path):
+    winner, _ = start_operation(
+        tmp_path,
+        operation_id="op-race-winner",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-race-winner",
+        idempotency_key="idem-race-terminal",
+        request_payload={"model_id": "pump-a"},
+    )
+
+    replayed_operation, replayed = start_operation(
+        tmp_path,
+        operation_id="op-race-loser",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-race-loser",
+        idempotency_key="idem-race-terminal",
+        request_payload={"model_id": "pump-a"},
+    )
+
+    assert replayed is True
+    assert replayed_operation["operation_id"] == winner["operation_id"]
+    loser = load_operation(tmp_path, "op-race-loser")
+    assert loser["status"] == "failed"
+    assert loser["error"]["code"] == "idempotency_race_lost"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-race-loser")
+    ] == ["operation.start_failed"]
+
+
+def test_index_publication_failure_is_terminalized_in_place(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        audit_module,
+        "_claim_idempotency_index",
+        lambda _path, _payload: audit_module._PublicationResult(
+            "not_published", OSError("simulated publication failure")
+        ),
+    )
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path,
+            operation_id="op-publication-failed",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-publication-failed",
+            idempotency_key="idem-publication-failed",
+            request_payload={"model_id": "pump-a"},
+        )
+
+    assert exc_info.value.code == "audit_persistence_error"
+    failed = load_operation(tmp_path, "op-publication-failed")
+    assert failed["status"] == "failed"
+    assert failed["error"]["code"] == "audit_persistence_error"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-publication-failed")
+    ] == ["operation.start_failed"]
+
+
+def test_unconfirmed_publication_preserves_running_candidate_for_retry(
+    tmp_path, monkeypatch
+):
+    original_claim = audit_module._claim_idempotency_index
+    unconfirmed = {"value": False}
+
+    def publish_then_report_unconfirmed(path, payload):
+        result = original_claim(path, payload)
+        if not unconfirmed["value"]:
+            unconfirmed["value"] = True
+            assert result.state == "published_confirmed"
+            return audit_module._PublicationResult(
+                "published_unconfirmed",
+                OSError("simulated durability uncertainty"),
+            )
+        return result
+
+    monkeypatch.setattr(
+        audit_module,
+        "_claim_idempotency_index",
+        publish_then_report_unconfirmed,
+    )
+    arguments = {
+        "operation_id": "op-publication-unconfirmed",
+        "operation_type": "model_asset.create",
+        "principal": PRINCIPAL,
+        "request_id": "request-publication-unconfirmed",
+        "idempotency_key": "idem-publication-unconfirmed",
+        "request_payload": {"model_id": "pump-a"},
+    }
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(tmp_path, **arguments)
+    assert exc_info.value.code == "audit_persistence_error"
+    assert load_operation(tmp_path, "op-publication-unconfirmed")[
+        "status"
+    ] == "running"
+    assert read_operation_events(tmp_path, "op-publication-unconfirmed") == []
+
+    operation, replayed = start_operation(tmp_path, **arguments)
+    assert replayed is False
+    assert operation["status"] == "running"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(
+            tmp_path, "op-publication-unconfirmed"
+        )
+    ] == ["operation.started"]
+
+
+def test_existing_operation_envelope_mismatch_fails_without_mutation(tmp_path):
+    start_operation(
+        tmp_path,
+        operation_id="op-envelope",
+        operation_type="model_asset.create",
+        principal=PRINCIPAL,
+        request_id="request-envelope",
+        idempotency_key="idem-envelope",
+        request_payload={"model_id": "pump-a"},
+    )
+    root = (
+        tmp_path / "reports" / "model_matching_operations" / "op-envelope"
+    )
+    projection_before = (root / "operation.json").read_bytes()
+    events_before = (root / "events.jsonl").read_bytes()
+
+    with pytest.raises(ModelMatchingError) as exc_info:
+        start_operation(
+            tmp_path,
+            operation_id="op-envelope",
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id="request-changed",
+            idempotency_key="idem-envelope-changed",
+            request_payload={"model_id": "pump-b"},
+        )
+
+    assert exc_info.value.code == "audit_integrity_error"
+    assert (root / "operation.json").read_bytes() == projection_before
+    assert (root / "events.jsonl").read_bytes() == events_before
+
+
+def test_same_idempotency_key_has_one_started_winner_and_terminal_losers(
+    tmp_path,
+):
+    operation_ids = [f"op-concurrent-{index}" for index in range(4)]
+
+    def begin(operation_id):
+        return start_operation(
+            tmp_path,
+            operation_id=operation_id,
+            operation_type="model_asset.create",
+            principal=PRINCIPAL,
+            request_id=f"request-{operation_id}",
+            idempotency_key="idem-concurrent-terminal",
+            request_payload={"model_id": "pump-a"},
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(begin, operation_ids))
+
+    winner_ids = {
+        operation["operation_id"] for operation, _replayed in results
+    }
+    assert len(winner_ids) == 1
+    started = []
+    failed = []
+    for operation_id in operation_ids:
+        events = read_operation_events(tmp_path, operation_id)
+        lifecycle = [
+            event for event in events if event["event_type"] in {
+                "operation.started",
+                "operation.start_failed",
+            }
+        ]
+        assert len(lifecycle) == 1
+        if lifecycle[0]["event_type"] == "operation.started":
+            started.append(operation_id)
+        else:
+            assert lifecycle[0]["details"]["code"] == (
+                "idempotency_race_lost"
+            )
+            failed.append(operation_id)
+    assert started == list(winner_ids)
+    assert sorted(failed) == sorted(set(operation_ids) - winner_ids)
 
 
 def _denied_recovery_paths(project_root):
@@ -1282,7 +2114,7 @@ def test_hash_valid_contradictory_lifecycle_fails_integrity(tmp_path):
     assert exc_info.value.code == "audit_integrity_error"
 
 
-def test_idempotency_claim_io_failure_cleans_and_audits(
+def test_idempotency_claim_io_failure_terminalizes_in_place_and_audits(
     tmp_path, monkeypatch
 ):
     original_claim = audit_module._claim_idempotency_index
@@ -1308,12 +2140,20 @@ def test_idempotency_claim_io_failure_cleans_and_audits(
             request_payload={"model_id": "pump-a"},
         )
     assert exc_info.value.code == "audit_persistence_error"
-    assert not (
+    failed_root = (
         tmp_path
         / "reports"
         / "model_matching_operations"
         / "op-index-fault"
-    ).exists()
+    )
+    assert failed_root.is_dir()
+    failed = load_operation(tmp_path, "op-index-fault")
+    assert failed["status"] == "failed"
+    assert failed["error"]["code"] == "audit_persistence_error"
+    assert [
+        event["event_type"]
+        for event in read_operation_events(tmp_path, "op-index-fault")
+    ] == ["operation.start_failed"]
     assert not audit_module._idempotency_path(
         tmp_path, "idem-index-fault"
     ).exists()
@@ -2027,61 +2867,6 @@ def test_corrupt_marker_audit_retries_until_durable_without_duplicate(
 
     assert audit_module.recover_denied_operations(tmp_path) == []
     assert len(mutation_failure_audits(tmp_path, "000-retry")) == 1
-
-
-def test_losing_operation_cleanup_interruption_does_not_mask_winner(
-    tmp_path, monkeypatch
-):
-    winner, _ = start_operation(
-        tmp_path,
-        operation_id="op-winner",
-        operation_type="model_asset.create",
-        principal=PRINCIPAL,
-        request_id="request-winner",
-        idempotency_key="idem-winner",
-        request_payload={"model_id": "pump-a"},
-    )
-    original_claim = audit_module._claim_idempotency_index
-
-    def lose_claim(path, payload):
-        if payload["operation_id"] != "op-loser":
-            return original_claim(path, payload)
-        original_claim(
-            path,
-            {
-                "operation_id": "op-winner",
-                "request_fingerprint": winner["request_fingerprint"],
-                "initializer_owner_token": winner["initializer_owner_token"],
-            },
-        )
-        result_type = getattr(audit_module, "_PublicationResult", None)
-        if result_type is None:
-            raise FileExistsError(path)
-        return result_type("not_published", FileExistsError(path))
-
-    monkeypatch.setattr(audit_module, "_claim_idempotency_index", lose_claim)
-    monkeypatch.setattr(
-        audit_module.shutil,
-        "rmtree",
-        lambda _path: (_ for _ in ()).throw(
-            OSError("simulated discarded-tree cleanup interruption")
-        ),
-    )
-    replayed_operation, replayed = start_operation(
-        tmp_path,
-        operation_id="op-loser",
-        operation_type="model_asset.create",
-        principal=PRINCIPAL,
-        request_id="request-loser",
-        idempotency_key="idem-race",
-        request_payload={"model_id": "pump-a"},
-    )
-    assert replayed is True
-    assert replayed_operation["operation_id"] == "op-winner"
-    operations_root = (
-        tmp_path / "reports" / "model_matching_operations"
-    )
-    assert list(operations_root.glob(".op-loser.discarded-*"))
 
 
 def test_task2_docs_converge_publication_state_contract():

@@ -58,6 +58,12 @@ def test_role_check_requires_one_allowed_role():
     assert exc_info.value.code == "permission_denied"
 
 
+def test_cli_principal_with_expert_role_is_trusted():
+    principal = Principal("alice", frozenset({"expert"}), "cli")
+
+    assert principal == Principal("alice", frozenset({"expert"}), "cli")
+
+
 class _TextSubclass(str):
     pass
 

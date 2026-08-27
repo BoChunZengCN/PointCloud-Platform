@@ -1,13 +1,33 @@
 import json
 import os
+import stat as stat_module
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import ClientDisconnect
 
 from pc_system.config import ProjectConfig
 from pc_system.identifiers import validate_identifier
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
+from pc_system.model_import import import_model_version, list_model_versions
+from pc_system.model_library import (
+    create_model_asset,
+    list_model_assets,
+    load_model_asset,
+)
+from pc_system.model_matching_audit import (
+    read_verified_operation_snapshot,
+    record_denied_operation,
+)
+from pc_system.model_matching_errors import ModelMatchingError
+from pc_system.model_matching_identity import (
+    ALLOWED_ROLES,
+    Principal,
+    require_any_role,
+    resolve_principal,
+)
 from pc_system.phase11_report_center import build_report_center
 from pc_system.segmentation_correction_events import (
     apply_correction_event,
@@ -164,13 +184,365 @@ def _correction_http_error(exc: CorrectionError) -> HTTPException:
         detail={"code": exc.code, "message": str(exc)},
     )
 
-def create_app(project_root: Path, api_key: str | None = None, run_mode: str | None = None) -> FastAPI:
+
+_PHASE15_NOT_FOUND = {
+    "model_not_found",
+    "model_version_not_found",
+    "operation_not_found",
+}
+_PHASE15_CONFLICT = {
+    "idempotency_conflict",
+    "model_exists",
+    "model_version_exists",
+    "operation_busy",
+    "operation_exists",
+}
+_PHASE15_SERVICE_UNAVAILABLE = {
+    "audit_persistence_error",
+    "mesh_engine_unavailable",
+    "model_asset_persistence_error",
+    "model_staging_quota_exceeded",
+    "model_version_cleanup_required",
+    "model_version_reservation_error",
+    "model_version_reservation_integrity_error",
+    "operation_persistence_failed",
+    "publication_recovery_required",
+}
+_PHASE15_BAD_REQUEST = {
+    "invalid_audit_request",
+    "invalid_model_asset",
+    "invalid_model_format",
+    "invalid_model_geometry",
+    "invalid_model_path",
+    "invalid_model_unit",
+    "invalid_model_version",
+    "invalid_request_body",
+    "invalid_staged_source",
+    "model_file_error",
+    "model_source_not_found",
+    "model_source_read_error",
+    "model_source_too_large",
+}
+_REPARSE_POINT = 0x400
+MAX_PHASE15_REQUEST_BODY_BYTES = 1024 * 1024
+
+
+def _phase15_http_error(exc: ModelMatchingError) -> HTTPException:
+    if exc.code == "permission_denied":
+        status_code = 403
+    elif exc.code in _PHASE15_NOT_FOUND:
+        status_code = 404
+    elif exc.code in _PHASE15_CONFLICT:
+        status_code = 409
+    elif exc.code in _PHASE15_SERVICE_UNAVAILABLE:
+        status_code = 503
+    elif exc.code in _PHASE15_BAD_REQUEST:
+        status_code = 400
+    else:
+        status_code = 500
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+def _invalid_request(message: str) -> ModelMatchingError:
+    return ModelMatchingError("invalid_request_body", message)
+
+
+def _freeze_principal_bindings(raw: object) -> dict[str, Principal]:
+    if raw is None:
+        configured = os.environ.get("PC_SYSTEM_PRINCIPALS_JSON")
+        if configured is None:
+            raw = {}
+        else:
+            try:
+                raw = json.loads(configured)
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                raise ValueError(
+                    "PC_SYSTEM_PRINCIPALS_JSON must be valid JSON."
+                ) from exc
+    if type(raw) is not dict:
+        raise ValueError("Principal bindings must be an exact mapping.")
+
+    frozen: dict[str, Principal] = {}
+    for token, value in tuple(raw.items()):
+        if type(token) is not str or not token:
+            raise ValueError("Principal binding tokens must be exact strings.")
+        if type(value) is Principal:
+            principal_state = (
+                value.actor_id,
+                value.roles,
+                value.source,
+            )
+            actor_id, roles, source = principal_state
+            if (
+                type(actor_id) is not str
+                or type(roles) is not frozenset
+                or not roles
+                or any(
+                    type(role) is not str or role not in ALLOWED_ROLES
+                    for role in roles
+                )
+                or type(source) is not str
+                or source != "configured_token"
+            ):
+                raise ValueError(
+                    "Configured principal contains untrusted values."
+                )
+            if principal_state != (
+                value.actor_id,
+                value.roles,
+                value.source,
+            ):
+                raise ValueError(
+                    "Configured principal changed while being captured."
+                )
+            principal = Principal(
+                actor_id=actor_id,
+                roles=frozenset(tuple(roles)),
+                source=source,
+            )
+        else:
+            if type(value) is not dict or set(value) not in (
+                {"actor_id", "roles"},
+                {"actor_id", "roles", "source"},
+            ):
+                raise ValueError("Principal binding has an invalid structure.")
+            binding_items = tuple(value.items())
+            binding = dict(binding_items)
+            if binding_items != tuple(value.items()):
+                raise ValueError(
+                    "Principal binding changed while being captured."
+                )
+            actor_id = binding["actor_id"]
+            roles = binding["roles"]
+            source = binding.get("source", "configured_token")
+            if type(roles) is not list:
+                raise ValueError("Principal binding contains untrusted values.")
+            role_snapshot = tuple(roles)
+            if role_snapshot != tuple(roles):
+                raise ValueError(
+                    "Principal roles changed while being captured."
+                )
+            if (
+                type(actor_id) is not str
+                or not role_snapshot
+                or any(
+                    type(role) is not str or role not in ALLOWED_ROLES
+                    for role in role_snapshot
+                )
+                or type(source) is not str
+                or source != "configured_token"
+            ):
+                raise ValueError("Principal binding contains untrusted values.")
+            principal = Principal(
+                actor_id=actor_id,
+                roles=frozenset(role_snapshot),
+                source=source,
+            )
+        frozen[token] = principal
+    return frozen
+
+
+def _path_entry_is_link_or_reparse(info: os.stat_result) -> bool:
+    return stat_module.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & _REPARSE_POINT
+    )
+
+
+def _staged_model_source(project_root: Path, relative: object) -> Path:
+    if type(relative) is not str:
+        raise ModelMatchingError(
+            "invalid_staged_source", "Staged model source must be an exact string."
+        )
+    if (
+        not relative
+        or "\\" in relative
+        or ":" in relative
+        or "\0" in relative
+    ):
+        raise ModelMatchingError(
+            "invalid_staged_source", "Staged model source path is not canonical."
+        )
+    parts = relative.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ModelMatchingError(
+            "invalid_staged_source", "Staged model source path is not canonical."
+        )
+
+    root = Path(project_root)
+    candidate = root.joinpath(*parts)
+    staging = root / "imports" / "models"
+    try:
+        current = root
+        for index, part in enumerate(parts):
+            current = current / part
+            info = current.lstat()
+            final = index == len(parts) - 1
+            if _path_entry_is_link_or_reparse(info):
+                raise OSError("Path contains a link or reparse point.")
+            if final:
+                if not stat_module.S_ISREG(info.st_mode):
+                    raise OSError("Staged source is not a regular file.")
+            elif not stat_module.S_ISDIR(info.st_mode):
+                raise OSError("Staged source parent is not a directory.")
+        resolved_staging = staging.resolve(strict=True)
+        resolved_candidate = candidate.resolve(strict=True)
+        resolved_candidate.relative_to(resolved_staging)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ModelMatchingError(
+            "invalid_staged_source",
+            "Model source must be a regular file inside imports/models.",
+        ) from exc
+    return candidate
+
+
+async def _phase15_json_object(request: Request) -> dict:
+    def reject_nonstandard_number(value: str) -> None:
+        raise ValueError(f"Non-standard JSON number: {value}")
+
+    raw_content_length = request.headers.get("content-length")
+    try:
+        content_length = (
+            int(raw_content_length)
+            if raw_content_length is not None
+            else None
+        )
+    except ValueError:
+        content_length = None
+    if (
+        content_length is not None
+        and content_length > MAX_PHASE15_REQUEST_BODY_BYTES
+    ):
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "request_body_too_large",
+                "message": "Request body exceeds the Phase 15 limit.",
+            },
+        )
+
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_PHASE15_REQUEST_BODY_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "code": "request_body_too_large",
+                        "message": (
+                            "Request body exceeds the Phase 15 limit."
+                        ),
+                    },
+                )
+            body.extend(chunk)
+    except (HTTPException, ModelMatchingError):
+        raise
+    except ClientDisconnect as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "request_body_interrupted",
+                "message": "Request body transfer was interrupted.",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "request_stream_error",
+                "message": "Request body stream could not be read.",
+            },
+        ) from exc
+
+    try:
+        payload = json.loads(
+            bytes(body), parse_constant=reject_nonstandard_number
+        )
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise _phase15_http_error(
+            _invalid_request("Request body must contain valid JSON.")
+        ) from exc
+    if type(payload) is not dict:
+        raise _phase15_http_error(
+            _invalid_request("Request body must be a JSON object.")
+        )
+    return payload
+
+
+def _capture_payload(payload: dict, allowed: set[str]) -> dict:
+    if set(payload) - allowed:
+        raise _phase15_http_error(
+            _invalid_request("Request body fields do not match the route schema.")
+        )
+    return {field: value for field, value in payload.items()}
+
+
+def _require_payload_shape(
+    payload: dict,
+    *,
+    text_fields: set[str],
+    list_fields: set[str] = frozenset(),
+    object_fields: set[str] = frozenset(),
+    optional_text_fields: set[str] = frozenset(),
+) -> dict:
+    allowed = text_fields | list_fields | object_fields | optional_text_fields
+    missing = (text_fields | list_fields | object_fields) - set(payload)
+    if missing or set(payload) - allowed:
+        raise _phase15_http_error(
+            _invalid_request("Request body fields do not match the route schema.")
+        )
+    if any(type(payload[field]) is not str for field in text_fields):
+        raise _phase15_http_error(
+            _invalid_request("Request text fields must be exact strings.")
+        )
+    for field in optional_text_fields:
+        if (
+            field in payload
+            and payload[field] is not None
+            and type(payload[field]) is not str
+        ):
+            raise _phase15_http_error(
+                _invalid_request("Optional request text fields must be exact strings.")
+            )
+    if any(
+        type(payload[field]) is not list
+        or any(type(item) is not str for item in payload[field])
+        for field in list_fields
+    ):
+        raise _phase15_http_error(
+            _invalid_request("Request list fields must contain exact strings.")
+        )
+    if any(type(payload[field]) is not dict for field in object_fields):
+        raise _phase15_http_error(
+            _invalid_request("Request object fields must be JSON objects.")
+        )
+    return {field: payload.get(field) for field in allowed}
+
+
+def create_app(
+    project_root: Path,
+    api_key: str | None = None,
+    run_mode: str | None = None,
+    principal_bindings: dict | None = None,
+) -> FastAPI:
     """创建最小 API 应用。"""
 
-    resolved_run_mode = run_mode or os.environ.get("PC_SYSTEM_RUN_MODE", "development")
+    resolved_run_mode = (
+        os.environ.get("PC_SYSTEM_RUN_MODE", "development")
+        if run_mode is None
+        else run_mode
+    )
+    if type(resolved_run_mode) is not str or resolved_run_mode not in {
+        "development",
+        "production",
+    }:
+        raise ValueError("run_mode must be development or production.")
     resolved_api_key = api_key if api_key is not None else os.environ.get("PC_SYSTEM_API_KEY")
     if resolved_run_mode == "production" and not resolved_api_key:
         raise ValueError("PC_SYSTEM_API_KEY is required in production mode.")
+    resolved_principal_bindings = _freeze_principal_bindings(principal_bindings)
     cors_origins = [] if resolved_run_mode == "production" else ["*"]
     app = FastAPI(title="Point Cloud Platform API", version="0.1.0")
     app.add_middleware(
@@ -201,6 +573,82 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
                 },
             ) from exc
 
+    def phase15_action(function, /, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except ModelMatchingError as exc:
+            raise _phase15_http_error(exc) from exc
+        except ValueError as exc:
+            error = _invalid_request("Request contains an invalid identifier.")
+            raise _phase15_http_error(error) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "internal_error",
+                    "message": "Phase 15 operation failed unexpectedly.",
+                },
+            ) from exc
+
+    def require_phase15_principal(
+        request: Request, *, route: str, allowed_roles: set[str]
+    ) -> Principal:
+        token = request.headers.get("x-api-key")
+        actor_header = request.headers.get("x-actor-id")
+        roles_header = request.headers.get("x-actor-roles")
+        try:
+            principal = resolve_principal(
+                run_mode=resolved_run_mode,
+                token=token,
+                actor_header=(
+                    actor_header
+                    if resolved_run_mode == "development"
+                    else None
+                ),
+                roles_header=(
+                    roles_header
+                    if resolved_run_mode == "development"
+                    else None
+                ),
+                bindings=resolved_principal_bindings,
+            )
+            require_any_role(principal, allowed_roles)
+            return principal
+        except (ModelMatchingError, ValueError) as exc:
+            denied = ModelMatchingError(
+                "permission_denied",
+                "A trusted principal with a required role is required.",
+            )
+            try:
+                record_denied_operation(
+                    project_root,
+                    request_id=f"request-denied-{uuid.uuid4().hex}",
+                    route=route,
+                    token=token,
+                    reason="permission_denied",
+                )
+            except ModelMatchingError as audit_exc:
+                if audit_exc.code in {
+                    "audit_integrity_error",
+                    "audit_persistence_error",
+                }:
+                    durable_error = audit_exc
+                else:
+                    durable_error = ModelMatchingError(
+                        "audit_persistence_error",
+                        "Denied request audit could not be made durable.",
+                    )
+                raise _phase15_http_error(durable_error) from audit_exc
+            except Exception as audit_exc:
+                persistence_error = ModelMatchingError(
+                    "audit_persistence_error",
+                    "Denied request audit could not be made durable.",
+                )
+                raise _phase15_http_error(persistence_error) from audit_exc
+            raise _phase15_http_error(denied) from exc
+
     @app.get("/health")
     def health() -> dict:
         """健康检查，返回当前绑定的项目目录。"""
@@ -218,6 +666,191 @@ def create_app(project_root: Path, api_key: str | None = None, run_mode: str | N
         """返回项目资产索引。"""
 
         return _load_registry(project_root)
+
+    @app.get("/model-library")
+    def get_model_library() -> dict:
+        """Model metadata is intentionally readable without authentication."""
+
+        models = phase15_action(list_model_assets, project_root)
+        return {"model_count": len(models), "models": models}
+
+    @app.post("/model-library/models", status_code=status.HTTP_201_CREATED)
+    async def post_model_library_model(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-library/models",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "model_id",
+            "display_name",
+            "category_id",
+            "manufacturer",
+            "model_number",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        list_fields = {"keywords", "tags"}
+        captured = _capture_payload(payload, text_fields | list_fields)
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            list_fields=list_fields,
+        )
+        return phase15_action(
+            create_model_asset,
+            project_root,
+            model_id=values["model_id"],
+            display_name=values["display_name"],
+            category_id=values["category_id"],
+            manufacturer=values["manufacturer"],
+            model_number=values["model_number"],
+            keywords=values["keywords"],
+            tags=values["tags"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-library/models/{model_id}")
+    def get_model_library_model(model_id: str) -> dict:
+        """Published model metadata is intentionally public."""
+
+        model = phase15_action(load_model_asset, project_root, model_id)
+        versions = phase15_action(
+            list_model_versions, project_root, model_id
+        )
+        return {
+            "model": model,
+            "version_count": len(versions),
+            "versions": versions,
+        }
+
+    @app.post(
+        "/model-library/models/{model_id}/versions",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_library_version(
+        model_id: str, request: Request
+    ) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-library/models/{model_id}/versions",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "version_id",
+            "staged_source",
+            "declared_unit",
+            "license",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        object_fields = {"provenance"}
+        optional_text_fields = {"supersedes_version_id"}
+        captured = _capture_payload(
+            payload,
+            text_fields | object_fields | optional_text_fields,
+        )
+        source_path = phase15_action(
+            _staged_model_source,
+            project_root,
+            captured.get("staged_source"),
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            object_fields=object_fields,
+            optional_text_fields=optional_text_fields,
+        )
+        return phase15_action(
+            import_model_version,
+            project_root,
+            model_id=model_id,
+            version_id=values["version_id"],
+            source_path=source_path,
+            declared_unit=values["declared_unit"],
+            license_name=values["license"],
+            provenance=values["provenance"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+            supersedes_version_id=values["supersedes_version_id"],
+        )
+
+    @app.get("/audit/operations/{operation_id}")
+    def get_model_matching_operation(
+        operation_id: str, request: Request
+    ) -> dict:
+        require_phase15_principal(
+            request,
+            route="GET /audit/operations/{operation_id}",
+            allowed_roles={"auditor"},
+        )
+        try:
+            normalized_operation_id = validate_identifier(
+                operation_id, "operation_id"
+            )
+        except ValueError as exc:
+            phase15_action(
+                read_verified_operation_snapshot,
+                project_root,
+                operation_id,
+            )
+            raise AssertionError("Invalid audit request unexpectedly returned.") from exc
+        operation_root = (
+            Path(project_root)
+            / "reports"
+            / "model_matching_operations"
+            / normalized_operation_id
+        )
+        try:
+            operation_path_chain = (
+                Path(project_root) / "reports",
+                Path(project_root)
+                / "reports"
+                / "model_matching_operations",
+                operation_root,
+            )
+            operation_infos = [
+                path.lstat() for path in operation_path_chain
+            ]
+        except FileNotFoundError:
+            raise _phase15_http_error(
+                ModelMatchingError(
+                    "operation_not_found", "Audit operation does not exist."
+                )
+            )
+        except OSError as exc:
+            raise _phase15_http_error(
+                ModelMatchingError(
+                    "audit_persistence_error",
+                    "Audit operation path could not be inspected.",
+                )
+            ) from exc
+        if any(
+            _path_entry_is_link_or_reparse(info)
+            or not stat_module.S_ISDIR(info.st_mode)
+            for info in operation_infos
+        ):
+            raise _phase15_http_error(
+                ModelMatchingError(
+                    "audit_integrity_error",
+                    "Audit operation path is not a plain directory.",
+                )
+            )
+        snapshot = phase15_action(
+            read_verified_operation_snapshot,
+            project_root,
+            normalized_operation_id,
+        )
+        return {**snapshot, "chain_valid": True}
 
     @app.get("/assets/{asset_id}")
     def get_asset(asset_id: str) -> dict:

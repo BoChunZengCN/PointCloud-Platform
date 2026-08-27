@@ -91,6 +91,9 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 11 | P11-M6 报告中心 / Report center | 已完成 / Done | 新增 GET /project-gate、GET /reports/center 和前端报告中心入口。 |
 | Phase 13A | 分割质量基础 / Segmentation foundation | 已完成 / Done | 版本化分割运行、保守预处理、真实引擎记录、对象点工件和运行质量代理门禁。 |
 | Phase 12 | P12 生产可靠性闭环 / Production reliability | 已完成 / Done | 修复路径安全、生产 API 保护、可执行计划、交付审计、真实产物状态和分析性能。 |
+| Phase 13B | 黄金分割评估 / Golden segmentation evaluation | 已完成 / Done | 黄金标签评估、回归门禁与有界参数搜索。 |
+| Phase 14 | 分割纠正闭环 / Segmentation correction loop | 已完成 / Done | 人工确认、合并、拆分、改类、发布和反馈数据。 |
+| Phase 15A | CAD 模型库基础 / CAD model library foundation | 已完成 / Done | 不可变模型资产与版本、网格导入、可信身份、幂等操作和哈希链审计。 |
 
 ## 技术路线 / Technical Routes
 
@@ -755,3 +758,33 @@ python -m pc_system.cli create-segmentation-correction `
 ```
 
 浏览器入口为 `frontend/correction.html`。发布会生成派生 Phase 13B benchmark 与 `datasets/segmentation_feedback/<release_id>/`；黄金回归数据始终仅用于评估。完整说明见 `docs/phase14-segmentation-correction-loop.md`。
+
+### Phase 15A CAD 模型库基础 / CAD Model Library Foundation
+
+Phase 15A 提供 STL、OBJ、PLY 模型资产与不可变版本导入，统一 `mm`、`cm`、`m` 到米制几何，并为创建和导入操作记录可信主体、幂等键与哈希链事件。
+
+```powershell
+python -m pc_system.cli create-model-asset `
+  --project-root workspace `
+  --model-id pump-a `
+  --display-name "Pump A" `
+  --category-id pump `
+  --actor alice `
+  --operation-id op-model-001 `
+  --request-id request-model-001 `
+  --idempotency-key idem-model-001
+
+python -m pc_system.cli import-model `
+  --project-root workspace `
+  --model-id pump-a `
+  --version-id v1 `
+  --source imports/models/pump-a.obj `
+  --unit mm `
+  --license internal `
+  --actor alice `
+  --operation-id op-import-001 `
+  --request-id request-import-001 `
+  --idempotency-key idem-import-001
+```
+
+本阶段只完成 CAD 模型库基础，不代表全部 Phase 15 已完成。混合候选检索、刚性配准、模型绑定和受控自动优化分别属于 Phase 15B–15F。操作与集成说明见 `docs/phase15-model-library.md`。
