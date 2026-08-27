@@ -217,7 +217,7 @@ def test_successor_with_earlier_started_time_remains_graph_head(tmp_path):
     assert load_current_model_release(tmp_path, "pump-a") == second
 ```
 
-保留并扩展既有测试：发布 v1、升级 v2、追加回滚 v1；版本目录字节不变；陈旧头、并发推进、回滚到当前、跨模型回滚、重复发布编号、无效原因、非专家、幂等重放；owner/release/projection/audit 四个中断时点；较新后继投影恢复；完整 canonical 字段篡改；失败审计持久化错误不得静默。
+保留并扩展既有测试：发布 v1、升级 v2、追加回滚 v1；版本目录字节不变；陈旧头、并发推进、回滚到当前、跨模型回滚、重复发布编号、无效原因、非专家、幂等重放；owner/release/projection/audit 四个中断时点；较新后继投影恢复；完整 canonical 字段篡改；失败审计持久化错误不得静默。架构重设计后必须额外覆盖：可见 release 搭配结构合法但字段被修改的 owner 时原操作保持 `running`；只有 owner、release 与另一 verified canonical 操作完整闭环时才返回 `VERIFIED_FOREIGN`；无法证明归属时进入 `UNCERTAIN`。
 
 - [ ] **步骤 2：运行发布事务测试并确认 RED**
 
@@ -234,6 +234,8 @@ uv run --extra test python -m pytest -q tests/test_phase15b1_model_release.py -p
 - [ ] **步骤 4：实现单一磁盘状态采集与分类循环**
 
 在模型资源锁内，每次动作前重新读取 owner、release、projection、审计和全部发布图，调用任务 2A 分类器。每个状态只允许一个动作：发布 owner、发布 release、推进旧投影、补齐业务事件、完成审计或返回已完成记录；动作后重新分类。不同请求观察到运行中的可见 owner/release 时返回 `publication_recovery_required`，不得创建候选或推进投影。
+
+异常处理使用独立四状态归属分类：`ABSENT`、`OWNED`、`VERIFIED_FOREIGN`、`UNCERTAIN`。`FOREIGN` 不得根据 owner 与预期不相等直接推断；必须读取另一操作的 verified snapshot，并用请求指纹、主体、时间、owner 和可见 release 构成完整证据闭环。只有 `ABSENT` 与 `VERIFIED_FOREIGN` 允许终止当前操作；`OWNED` 与 `UNCERTAIN` 始终保留 `running`。
 
 - [ ] **步骤 5：实现审计绑定查询与图链头投影校验**
 

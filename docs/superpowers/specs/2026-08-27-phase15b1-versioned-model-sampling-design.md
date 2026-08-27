@@ -185,7 +185,16 @@ reports/model_matching_resource_locks/
 
 `operation_owner.json` 与 `release.json` 都先写入并同步同目录临时文件，再通过原子 no-replace 发布最终路径。最终路径从不可见直接变为完整内容；若最终路径可见但目录同步结果未知，操作保持 `running` 并进入恢复，不得写入失败终态。
 
-所有者信封或发布记录一旦在最终路径可见，无论目录同步是已确认还是结果未知，该操作都不得进入 `failed`。恢复时从 canonical start、冻结请求、当前版本清单和清单指纹重新构造完整预期 owner 与 release，并执行逐字段相等比较；不得只比较调用方字段子集。
+所有者信封与当前操作完全匹配，或发布记录已经在最终路径可见但归属尚不能安全证明时，当前操作不得进入 `failed`。恢复时从 canonical start、冻结请求、当前版本清单和清单指纹重新构造完整预期 owner 与 release，并执行逐字段相等比较；不得只比较调用方字段子集。
+
+异常路径不得把“owner 结构合法但不等于当前预期”直接当作其他操作。候选归属必须由独立的四状态分类器判定：
+
+1. **`ABSENT`。** owner 与 release 两个最终路径都被明确证明不存在；只有该状态允许把当前操作写为业务失败。
+2. **`OWNED`。** owner 与当前 canonical 操作完整逐字段相等；出现持久化中断时保留当前操作 `running` 并由同一幂等请求恢复。
+3. **`VERIFIED_FOREIGN`。** owner 指向另一操作，而且 owner、可见 release（如有）、另一操作的 verified canonical start、冻结请求指纹、主体、时间和清单指纹形成完整一致的闭环。只有证明该闭环后，当前请求才可以按发布编号冲突或待恢复外部发布失败；不得修改外部操作。
+4. **`UNCERTAIN`。** 任一最终路径可见，但 owner/release 损坏、缺失、暂时不可读，或者无法证明属于当前或另一 verified canonical 操作。该状态失败关闭，保留当前操作 `running`，返回完整性错误或 `publication_recovery_required`，等待重试或人工审计。
+
+`VERIFIED_FOREIGN` 不是“字典不相等”的同义词。owner 中任一合法字段被修改、foreign 审计链不可验证、release 与 foreign 请求指纹不一致，或可见 release 没有可证明的 owner 时，都必须归入 `UNCERTAIN`。
 
 公开读取必须把每条发布记录绑定到已验证审计链：`operation.started` 的主体和时间、唯一发布或回滚业务事件、事件中的发布指纹，以及完成结果必须与 `release.json` 一致。
 
@@ -202,10 +211,10 @@ reports/model_matching_resource_locks/
 
 ### 6.4 失败审计规则
 
-- 无 owner/release 最终路径可见时，业务失败必须写入与原错误完全一致的 `operation.failed`。
+- owner/release 两个最终路径都被明确证明不存在时，业务失败必须写入与原错误完全一致的 `operation.failed`。
 - `fail_operation` 返回异常时，必须重新读取操作并验证是否已以同一错误完成失败；无法证明时返回原稳定审计错误或 `audit_persistence_error`，不得静默返回业务错误。
-- 任一 owner/release 最终路径可见时，不调用 `fail_operation`；返回 `publication_recovery_required` 并保留 `running`，由相同幂等请求恢复。
-- 不同请求观察到运行中的可见发布时，只记录自身失败，不得修改原操作、原候选或当前投影。
+- 候选归属为 `OWNED` 或 `UNCERTAIN` 时不调用 `fail_operation`；返回原完整性错误或 `publication_recovery_required` 并保留 `running`。
+- 只有候选归属为 `VERIFIED_FOREIGN` 时，当前请求才可以记录自身失败；不得修改外部操作、外部候选或当前投影。
 
 ## 7. 版本查询
 
