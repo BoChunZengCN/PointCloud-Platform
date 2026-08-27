@@ -42,7 +42,12 @@ from pc_system.commands.phase14 import (
     run_retry_segmentation_publication,
     run_submit_segmentation_correction,
 )
-from pc_system.commands.phase15 import run_create_model_asset, run_import_model
+from pc_system.commands.phase15 import (
+    run_create_model_asset,
+    run_import_model,
+    run_list_model_releases,
+    run_release_model_version,
+)
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -343,6 +348,25 @@ def main(
                 operation_id=args.operation_id,
                 request_id=args.request_id,
                 idempotency_key=args.idempotency_key,
+            )
+        if args.command == "release-model-version":
+            return run_release_model_version(
+                args.project_root,
+                model_id=args.model_id,
+                version_id=args.version_id,
+                release_id=args.release_id,
+                action=args.action,
+                expected_current_release_id=args.expected_current_release_id,
+                rollback_of_release_id=args.rollback_of_release_id,
+                reason=args.reason,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "list-model-releases":
+            return run_list_model_releases(
+                args.project_root, model_id=args.model_id
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except ModelMatchingError as exc:

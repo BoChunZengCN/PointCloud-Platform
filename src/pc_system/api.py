@@ -28,6 +28,11 @@ from pc_system.model_matching_identity import (
     require_any_role,
     resolve_principal,
 )
+from pc_system.model_release import (
+    list_model_releases,
+    load_current_model_release,
+    release_model_version,
+)
 from pc_system.phase11_report_center import build_report_center
 from pc_system.segmentation_correction_events import (
     apply_correction_event,
@@ -187,6 +192,7 @@ def _correction_http_error(exc: CorrectionError) -> HTTPException:
 
 _PHASE15_NOT_FOUND = {
     "model_not_found",
+    "model_release_not_found",
     "model_version_not_found",
     "operation_not_found",
 }
@@ -194,8 +200,10 @@ _PHASE15_CONFLICT = {
     "idempotency_conflict",
     "model_exists",
     "model_version_exists",
+    "model_release_exists",
     "operation_busy",
     "operation_exists",
+    "stale_model_release",
 }
 _PHASE15_SERVICE_UNAVAILABLE = {
     "audit_persistence_error",
@@ -214,6 +222,7 @@ _PHASE15_BAD_REQUEST = {
     "invalid_model_format",
     "invalid_model_geometry",
     "invalid_model_path",
+    "invalid_model_release",
     "invalid_model_unit",
     "invalid_model_version",
     "invalid_request_body",
@@ -723,11 +732,71 @@ def create_app(
         versions = phase15_action(
             list_model_versions, project_root, model_id
         )
+        current_release = phase15_action(
+            load_current_model_release, project_root, model_id
+        )
+        release_history = phase15_action(
+            list_model_releases, project_root, model_id
+        )
         return {
             "model": model,
             "version_count": len(versions),
             "versions": versions,
+            "current_release": current_release,
+            "release_history": release_history,
         }
+
+    @app.post(
+        "/model-library/models/{model_id}/releases",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_library_release(
+        model_id: str, request: Request
+    ) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-library/models/{model_id}/releases",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "version_id",
+            "release_id",
+            "action",
+            "reason",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        optional_text_fields = {
+            "expected_current_release_id",
+            "rollback_of_release_id",
+        }
+        captured = _capture_payload(
+            payload, text_fields | optional_text_fields
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            optional_text_fields=optional_text_fields,
+        )
+        return phase15_action(
+            release_model_version,
+            project_root,
+            model_id=model_id,
+            version_id=values["version_id"],
+            release_id=values["release_id"],
+            action=values["action"],
+            expected_current_release_id=values[
+                "expected_current_release_id"
+            ],
+            rollback_of_release_id=values["rollback_of_release_id"],
+            reason=values["reason"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
 
     @app.post(
         "/model-library/models/{model_id}/versions",
