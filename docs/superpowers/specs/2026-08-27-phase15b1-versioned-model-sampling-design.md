@@ -59,6 +59,7 @@ models/<model_id>/
     source/model.<ext>
 
   releases/<release_id>/
+    operation_owner.json
     release.json
   current_release.json
 
@@ -68,11 +69,11 @@ models/<model_id>/
     representation.json
 
 reports/model_matching_resource_locks/
-  model-release-<model_id>.lock
-  model-sampling-<model_id>-<version_id>-<representation_id>.lock
+  release-<resource_identity_sha256>.lock
+  sampling-<resource_identity_sha256>.lock
 ```
 
-`versions`、`releases` 和完整的 `representations` 条目不可覆盖。资源锁文件是永久协调工件。`current_release.json` 可以原子替换，因为它只是投影；任何读取都必须验证投影引用的发布记录。
+`versions`、`releases` 和完整的 `representations` 条目不可覆盖。资源身份由 `resource_kind` 与标识符数组的 canonical JSON 计算 SHA-256，锁文件名使用完整摘要，避免外部标识符拼接造成 Windows 长路径。资源锁文件是永久协调工件。`current_release.json` 可以原子替换，因为它只是投影；任何读取都必须验证投影引用的发布记录。
 
 ## 5. 模型发布记录
 
@@ -141,8 +142,8 @@ reports/model_matching_resource_locks/
 
 1. 验证模型资产、目标版本和当前投影；
 2. 验证 `expected_current_release_id`；
-3. 构造发布记录并写入操作专属临时文件；
-4. 通过 no-replace 原子发布 `releases/<release_id>/release.json`；
+3. 创建或验证 `releases/<release_id>/operation_owner.json`，冻结操作和请求身份；
+4. 构造发布记录并通过 no-replace 原子发布 `releases/<release_id>/release.json`；
 5. 原子替换 `current_release.json` 投影；
 6. 写入 `model_release.published` 或 `model_release.rolled_back`；
 7. 完成审计操作。
@@ -223,7 +224,7 @@ cad-sampled-<完整配置指纹>
 
 - 面按源文件稳定顺序处理；
 - 三角面保持不变；
-- 多边形 `[v0, v1, ..., vn]` 固定展开为 `[v0,v1,v2]`、`[v0,v2,v3]` 等扇形三角形；
+- 四边形 `[v0,v1,v2,v3]` 固定展开为 `[v0,v1,v2]`、`[v0,v2,v3]`；更多顶点继续以 `v0` 为扇心按源索引顺序展开；
 - 顶点先按清单比例转换为米；
 - 三角形面积使用三维叉积计算；
 - 面积为零的退化三角形忽略；
@@ -235,7 +236,7 @@ cad-sampled-<完整配置指纹>
 算法不依赖 Python `random` 的实现细节。第 `i` 个点的三个均匀值分别取自：
 
 ```text
-SHA256("phase15b1" || config_fingerprint || uint64_be(i) || lane)
+SHA256("phase15b1" || config_fingerprint_raw_32_bytes || uint64_be(i) || lane)
 ```
 
 `lane` 分别为 `0`、`1`、`2`。摘要前 8 字节按无符号大端整数解释，再除以 `2^64`，得到 `[0,1)`。
@@ -320,7 +321,7 @@ SHA256("phase15b1" || config_fingerprint || uint64_be(i) || lane)
 - `model_representation_not_found`
 - `model_representation_exists`
 - `model_representation_integrity_error`
-- `sampling_engine_unavailable`
+- `mesh_engine_unavailable`
 - `operation_busy`
 - `idempotency_conflict`
 - `publication_recovery_required`
