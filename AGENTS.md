@@ -1,86 +1,64 @@
-# Point Cloud Platform — Project Memory
+# 点云平台——项目记忆
 
-## Development Efficiency Protocol
+## 开发效率协议
 
-These rules are the default operating model for future phases. They exist to
-preserve engineering quality while limiting unnecessary execution time,
-review loops, test runs, and conversation/token usage.
+以下规则是后续阶段的默认工作方式，用于在保障工程质量的同时，减少不必要的执行时间、复审循环、测试次数以及对话和令牌消耗。
 
-### 1. Freeze scope before implementation
+### 1. 实施前冻结范围
 
-- Define the task outcome, allowed files, acceptance tests, and explicit
-  non-goals before editing production code.
-- Treat newly discovered non-blocking work as follow-up debt instead of
-  silently expanding the active task.
-- Security-, concurrency-, persistence-, and recovery-sensitive work requires
-  a short written design and threat boundary before implementation.
+- 编辑生产代码前，明确任务产出、允许修改的文件、验收测试和明确不做的事项。
+- 新发现但不阻塞当前任务的问题，应记录为后续技术债，不得静默扩大当前任务范围。
+- 涉及安全、并发、持久化和恢复的工作，实施前必须形成简短的书面设计和威胁边界。
 
-### 2. Stop patch stacking early
+### 2. 尽早停止补丁堆叠
 
-- Permit at most two local fix/review cycles for the same defect class.
-- If a second review still finds a related Critical or Important issue, stop
-  local patching and redesign the affected mechanism at the architectural
-  level before continuing.
-- Do not build increasingly complex filesystem or concurrency safeguards on a
-  design whose core primitive cannot satisfy the required invariant.
+- 同一类缺陷最多允许两轮本地修复与复审。
+- 若第二轮复审仍发现同类严重或重要问题，应停止局部打补丁，先从架构层重新设计受影响机制，再继续实施。
+- 如果核心原语无法满足所需不变量，不得继续叠加更复杂的文件系统或并发防护。
 
-### 3. Use proportional verification
+### 3. 按比例执行验证
 
-For each change, run tests in this order:
+每项变更按以下顺序运行测试：
 
-1. New or directly affected regression tests.
-2. The affected module or focused integration suite.
-3. The full repository suite once at the phase/commit readiness gate.
-4. The full suite once more only when required before push or merge.
+1. 新增或直接受影响的回归测试。
+2. 受影响模块或聚焦集成测试集。
+3. 在阶段或提交就绪门禁时运行一次全仓测试。
+4. 仅在推送或合并前确有必要时，再运行一次全仓测试。
 
-Do not rerun the full suite after every micro-edit. A failing focused test must
-be resolved before advancing to broader verification.
+不要在每次微小编辑后重复运行全仓测试。聚焦测试失败时，必须先解决，再进入更广泛的验证。
 
-### 4. Keep review bounded
+### 4. 控制复审范围
 
-- Default to one implementer and one independent final reviewer per task.
-- Perform design review before implementation for high-risk mechanisms, then
-  perform one implementation review after focused verification.
-- Fix all confirmed Critical and Important findings. Record Minor findings for
-  later unless they block the stated acceptance criteria.
-- Review summaries should contain only verdict, Critical/Important findings,
-  verification evidence, and commit SHA. Store detailed probes in project
-  reports rather than repeating them in the main conversation.
+- 每项任务默认由一名实施者和一名独立最终复审者完成。
+- 高风险机制先做设计复审；完成聚焦验证后，再做一次实施复审。
+- 修复所有已确认的严重和重要问题。除非影响既定验收标准，否则轻微问题记录为后续事项。
+- 复审摘要只保留结论、严重或重要问题、验证证据和提交 SHA。详细探针结果存入项目报告，不在主对话中重复展开。
 
-### 5. Control context and token usage
+### 5. 控制上下文与令牌消耗
 
-- Main progress updates should use the compact form: completed work, test
-  evidence, current blocker, next action.
-- Avoid repeating unchanged history, full command transcripts, temporary test
-  paths, or previously reported findings.
-- Give sub-agents only the task brief, relevant file paths, exact Git range,
-  and acceptance criteria; do not fork the complete conversation unless it is
-  genuinely required.
-- Prefer one consolidated tool call for independent read-only checks and avoid
-  polling or duplicate repository inspection.
+- 主进度更新使用紧凑格式：已完成工作、测试证据、当前阻塞、下一步动作。
+- 避免重复不变的历史、完整命令输出、临时测试路径或已经报告的问题。
+- 给子代理的上下文只包含任务简述、相关文件路径、精确 Git 范围和验收标准；除非确有必要，不复制完整对话。
+- 对相互独立的只读检查，优先使用一次合并工具调用，避免轮询和重复检查仓库。
 
-### 6. Keep commits intentional
+### 6. 保持提交意图单一
 
-- Aim for one feature commit and at most one review-fix commit per bounded
-  task.
-- Stage exact files only; never use broad staging for a dirty worktree.
-- Do not mix unrelated fixes, generated test directories, or another task's
-  changes into a commit.
-- Run focused verification, static checks, and diff checks before committing;
-  run the full suite at the readiness gate defined above.
+- 每个边界明确的任务以一个功能提交为目标，复审修复提交最多一个。
+- 只暂存精确文件；工作区不干净时绝不使用宽泛暂存。
+- 不得把无关修复、生成的测试目录或其他任务的修改混入同一提交。
+- 提交前运行聚焦验证、静态检查和差异检查；在上述就绪门禁运行全仓测试。
 
-### 7. Escalate architecture decisions explicitly
+### 7. 明确升级架构决策
 
-Stop and request direction when completion requires a meaningful change to
-the approved architecture, threat model, persistence semantics, or user-visible
-workflow. Present one recommended option with its trade-offs instead of
-continuing an open-ended patch loop.
+如果完成任务需要实质改变已批准的架构、威胁模型、持久化语义或用户可见工作流，应停止执行并请求确认。给出一个推荐方案及其取舍，不得继续开放式叠加补丁。
 
-## Current Lesson from Phase 15A
+### 8. 资料语言
 
-The audit-discard work demonstrated that path-based cleanup and quarantine can
-expand into a cross-platform secure-filesystem transaction problem. Future
-work in this area must begin with an explicit recovery architecture and threat
-model. Do not attempt repeated TOCTOU fixes around automatic rename or
-recursive deletion without first proving that the underlying platform
-primitive can enforce the required invariant.
+- 项目资料以中文为主，包括架构规格、实施计划、阶段盘点、操作说明、验收标准和复审结论。
+- 文档标题、章节名、任务名和解释性正文必须使用中文；需要双语时中文置于英文之前。
+- 代码标识符、命令、API 路径、文件名、协议字段、稳定错误码和行业通用缩写可以保留英文。
+- 引用外部英文资料时应提供中文说明，不得让英文引用取代项目自身的中文结论。
+
+## Phase 15A 当前经验
+
+审计丢弃处理表明，基于路径的清理与隔离可能演变为跨平台安全文件系统事务问题。今后涉及此类工作的阶段，必须先明确恢复架构和威胁模型。除非已经证明底层平台原语能够强制满足所需不变量，否则不得围绕自动重命名或递归删除反复修补检查时与使用时竞态（TOCTOU）问题。

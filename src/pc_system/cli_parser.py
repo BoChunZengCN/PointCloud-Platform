@@ -325,6 +325,30 @@ def build_parser() -> argparse.ArgumentParser:
     import_model.add_argument("--operation-id", required=True)
     import_model.add_argument("--request-id", required=True)
     import_model.add_argument("--idempotency-key", required=True)
+    release_model = subparsers.add_parser(
+        "release-model-version",
+        help="Publish or roll back one immutable model version release.",
+    )
+    release_model.add_argument("--project-root", required=True, type=Path)
+    release_model.add_argument("--model-id", required=True)
+    release_model.add_argument("--version-id", required=True)
+    release_model.add_argument("--release-id", required=True)
+    release_model.add_argument(
+        "--action", required=True, choices=["activate", "rollback"]
+    )
+    release_model.add_argument("--expected-current-release-id")
+    release_model.add_argument("--rollback-of-release-id")
+    release_model.add_argument("--reason", required=True)
+    release_model.add_argument("--actor", required=True)
+    release_model.add_argument("--operation-id", required=True)
+    release_model.add_argument("--request-id", required=True)
+    release_model.add_argument("--idempotency-key", required=True)
+
+    list_releases = subparsers.add_parser(
+        "list-model-releases", help="List verified immutable model releases."
+    )
+    list_releases.add_argument("--project-root", required=True, type=Path)
+    list_releases.add_argument("--model-id", required=True)
     return parser
 
 

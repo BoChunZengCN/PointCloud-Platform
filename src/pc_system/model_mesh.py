@@ -37,8 +37,9 @@ def trimesh_mesh_reader(path: Path) -> dict[str, Any]:
         raise ModelMatchingError("invalid_model_geometry", "Unable to read mesh geometry.") from exc
 
 
-def inspect_mesh(path: Path, declared_unit: str, *, reader: MeshReader) -> dict[str, Any]:
-    """Inspect a supported mesh and report its geometry in meters."""
+def _read_mesh_geometry_with_metadata(
+    path: Path, declared_unit: str, *, reader: MeshReader
+) -> tuple[list[list[float]], list[list[int]], Mapping, str, str, float]:
     if not path.is_file():
         raise FileNotFoundError(path)
 
@@ -62,13 +63,41 @@ def inspect_mesh(path: Path, declared_unit: str, *, reader: MeshReader) -> dict[
     try:
         vertices, faces = _validated_geometry(mesh)
         scale = UNIT_SCALE_TO_METERS[unit]
-        minimum = [min(vertex[axis] for vertex in vertices) * scale for axis in range(3)]
-        maximum = [max(vertex[axis] for vertex in vertices) * scale for axis in range(3)]
-        is_watertight = mesh.get("is_watertight")
+        vertices_m = [
+            [coordinate * scale for coordinate in vertex]
+            for vertex in vertices
+        ]
     except ModelMatchingError:
         raise
     except Exception as exc:
         raise ModelMatchingError("invalid_model_geometry", "Unable to read mesh geometry.") from exc
+
+    return vertices_m, faces, mesh, unit, suffix, scale
+
+
+def read_mesh_geometry_m(
+    path: Path, declared_unit: str, *, reader: MeshReader
+) -> tuple[list[list[float]], list[list[int]]]:
+    """Read one validated mesh and convert every vertex to meters once."""
+    vertices, faces, _mesh, _unit, _suffix, _scale = (
+        _read_mesh_geometry_with_metadata(path, declared_unit, reader=reader)
+    )
+    return vertices, faces
+
+
+def inspect_mesh(path: Path, declared_unit: str, *, reader: MeshReader) -> dict[str, Any]:
+    """Inspect a supported mesh and report its geometry in meters."""
+    vertices, faces, mesh, unit, suffix, scale = _read_mesh_geometry_with_metadata(
+        path, declared_unit, reader=reader
+    )
+    try:
+        minimum = [min(vertex[axis] for vertex in vertices) for axis in range(3)]
+        maximum = [max(vertex[axis] for vertex in vertices) for axis in range(3)]
+        is_watertight = mesh.get("is_watertight")
+    except Exception as exc:
+        raise ModelMatchingError(
+            "invalid_model_geometry", "Unable to read mesh geometry."
+        ) from exc
 
     return {
         "schema_version": "1.0",

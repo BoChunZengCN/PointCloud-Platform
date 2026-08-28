@@ -12,6 +12,7 @@ from pc_system.model_matching_audit import fail_operation, start_operation
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal
 from pc_system.model_mesh import trimesh_mesh_reader
+from pc_system.model_release import list_model_releases, release_model_version
 
 
 _MAX_PROVENANCE_BYTES = 1024 * 1024
@@ -262,4 +263,43 @@ def run_import_model(
         model_version_dir(project_root, version["model_id"], version["version_id"])
         / "model_manifest.json"
     )
+    return 0
+
+
+def run_release_model_version(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    release_id: str,
+    action: str,
+    expected_current_release_id: str | None,
+    rollback_of_release_id: str | None,
+    reason: str,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    release = release_model_version(
+        project_root,
+        model_id=model_id,
+        version_id=version_id,
+        release_id=release_id,
+        action=action,
+        expected_current_release_id=expected_current_release_id,
+        rollback_of_release_id=rollback_of_release_id,
+        reason=reason,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(release, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_list_model_releases(project_root: Path, *, model_id: str) -> int:
+    releases = list_model_releases(project_root, model_id)
+    print(json.dumps(releases, ensure_ascii=False, sort_keys=True))
     return 0
