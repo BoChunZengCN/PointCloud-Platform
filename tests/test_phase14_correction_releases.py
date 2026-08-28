@@ -121,6 +121,7 @@ def test_publication_writes_derived_benchmark_and_feedback(tmp_path):
         "provenance.json",
         "publication_tasks.json",
         "training_policy.json",
+        "object_review_evidence.json",
     } <= {path.name for path in root.iterdir()}
     assert [item["point_index"] for item in labels["point_labels"]] == [0, 1, 2, 3]
     assert (benchmark_root / "benchmark.json").is_file()
