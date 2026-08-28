@@ -340,16 +340,43 @@ SHA256("phase15b1" || config_fingerprint_raw_32_bytes || uint64_be(i) || lane)
 - `status = "ready"`
 
 读取表达时必须验证目录路径绑定、结构、配置指纹、点数组、源版本当前完整性和采样工件指纹。
+`operation_id` 永远表示首次生产并发布该表达的生产操作；后续复用操作不得改写该字段，也不得改写 `generated_by` 或 `generated_at`。
 
 ## 10. 采样发布与恢复
 
-表达目录是一个原位恢复的 canonical 候选：
+### 10.1 生产操作与复用操作分离
+
+表达目录是一个原位恢复的 canonical 候选。首次生产操作按以下顺序执行：
 
 1. 在采样资源锁内创建表达目录；
 2. 写入 `operation_owner.json`，冻结操作、模型、版本和配置指纹；
 3. 写入 `sampled_points.json`；
 4. 最后 no-replace 发布 `representation.json` 作为可见性标记；
-5. 写入 `model_sampling.completed` 并完成审计操作。
+5. 写入仅属于生产操作的 `model_sampling.representation_published` 并完成审计操作。
+
+相同模型版本和配置由其他操作再次请求时，只允许在完整验证原生产 owner、表达清单、采样点和原生产审计后复用。复用操作写入 `model_sampling.representation_reused`，引用原生产 `operation_id` 和既有证据指纹；不得重新写入 `source_verified`、`points_generated` 或 `representation_published`，不得声明自己生产了表达。
+
+### 10.2 字节级发布证据
+
+owner、采样点和表达清单都使用稳定 canonical JSON 字节发布。no-replace 返回已存在时，必须读取普通文件的原始字节并与预期 canonical 字节完全相等；不得使用会把 `10` 与 `10.0` 视为相等的对象比较。生产发布事件绑定：
+
+- `operation_owner.json` 的 SHA-256；
+- `sampled_points.json` 的 SHA-256；
+- `representation.json` 的 SHA-256；
+- 原生产操作、源版本、配置与请求指纹。
+
+公开读取必须使用表达中冻结的原生产 `operation_id` 验证事件序列和上述三个文件指纹。合法复用操作不能成为新的生产真值。
+
+### 10.3 四态候选分类
+
+资源锁内先只读分类，再执行唯一动作：
+
+- `ABSENT`：候选不存在，当前操作可创建并冻结 owner；
+- `OWNED_RECOVERABLE`：owner 与当前运行操作及 canonical 请求完全匹配，只允许原位验证并继续；
+- `VERIFIED_PUBLISHED`：owner 属于另一操作，但表达、字节指纹和原生产审计全部有效，只允许记录复用事件；
+- `UNCERTAIN`：无 owner、owner 损坏、外部未完成、路径类型异常或任何证据不完整，拒绝接管并保持当前操作可重试。
+
+已完成幂等重放在取得资源锁前走只读验证路径；锁竞争、不确定候选和发布持久化不确定不得把运行操作错误改为失败，也不得尝试修改终态操作。
 
 读取方只枚举具有完整、验证通过的 `representation.json` 的目录。中断留下的候选目录不被视为表达；完全相同的操作重试时验证 owner 和已有字节并原位继续。不同操作遇到未完成候选返回 `operation_busy` 或完整性错误，不删除、不接管。
 
@@ -372,7 +399,13 @@ SHA256("phase15b1" || config_fingerprint_raw_32_bytes || uint64_be(i) || lane)
 - `model_sampling.representation_published`
 - `operation.completed`
 
-失败使用现有 `operation.failed` 或 `operation.start_failed`。事件详情记录模型、版本、发布或表达编号、输入指纹、配置指纹、随机种子、点数、工件指纹和自动动作原因，不记录 API token。
+采样复用：
+
+- `operation.started`
+- `model_sampling.representation_reused`
+- `operation.completed`
+
+失败使用现有 `operation.failed` 或 `operation.start_failed`。事件详情记录模型、版本、发布或表达编号、原生产操作、owner/表达/采样点指纹、输入指纹、配置指纹、随机种子、点数和自动动作原因，不记录 API token。
 
 ## 12. 稳定错误码
 

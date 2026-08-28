@@ -457,7 +457,7 @@ def test_sample_model_version_publishes_outside_immutable_version(tmp_path):
     ) == representation
 ```
 
-补充源清单篡改、采样点篡改、表达清单篡改、相同请求重放、同配置不同操作的复用规则、部分所有者恢复、外部所有者拒绝、清单发布前失败、清单发布后失败和有效审计事件顺序测试。
+补充源清单篡改、采样点篡改、表达清单篡改、相同请求重放、同配置不同操作的复用规则、生产归属协同重绑定、canonical 字节冲突、部分所有者恢复、外部所有者拒绝、清单发布前失败、清单发布后失败和有效审计事件顺序测试。
 
 - [ ] **步骤 2：运行发布测试并确认 RED**
 
@@ -469,11 +469,11 @@ uv run --extra test python -m pytest -q tests/test_phase15b1_sampling_publicatio
 
 - [ ] **步骤 3：实现严格的采样点与表达读取器**
 
-验证精确结构字段、路径身份、普通目录/文件、有限坐标、点数、配置指纹、源指纹、工件 URI 和 SHA-256。没有有效最终 `representation.json` 的目录不得由列表接口返回。
+验证精确结构字段、路径身份、普通目录/文件、有限坐标、点数、配置指纹、源指纹、工件 URI 和 SHA-256。公开读取必须把 owner、表达清单和采样点的原始文件指纹绑定到原生产操作审计；没有有效最终 `representation.json` 的目录不得由列表接口返回。
 
 - [ ] **步骤 4：实现受审计的原位候选发布**
 
-使用确定性表达编号和任务 1 的采样资源锁。冻结 `operation_owner.json`，写入采样点，最后发布 `representation.json` 作为可见性标记。匹配的重试验证并继续已有字节；所有者或内容不匹配时失败关闭。绝不递归删除或隔离候选目录。
+使用确定性表达编号和任务 1 的采样资源锁。以 `ABSENT / OWNED_RECOVERABLE / VERIFIED_PUBLISHED / UNCERTAIN` 四态先分类后执行；冻结 `operation_owner.json`，写入采样点，最后发布 `representation.json` 作为可见性标记。no-replace 冲突必须比较 canonical 原始字节。匹配的原生产操作重试验证并继续；已验证外部表达只写 `model_sampling.representation_reused`，不得重写生产事件；不确定候选失败关闭但保持运行操作可重试。绝不递归删除或隔离候选目录。
 
 - [ ] **步骤 5：运行发布与导入完整性测试并确认 GREEN**
 
