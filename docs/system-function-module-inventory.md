@@ -214,7 +214,10 @@ LAS/LAZ or FLS source
 | P15-M1.4 模型版本导入 / Model version import | 已完成 / Done | 校验 STL、OBJ、PLY，统一单位，发布不可覆盖版本。 | `model_manifest.json`, `source_geometry.json` |
 | P15-M1.5 API 与 CLI / API and CLI | 已完成 / Done | 创建资产、导入版本、读取模型库和验证审计。 | model-library API, CLI |
 | P15-M1.6 文档与回归 / Documentation and regression | 已完成 / Done | 操作集成说明、端到端审计与失败回滚覆盖。 | `phase15-model-library.md` |
-| P15-M2 混合候选检索 / Hybrid retrieval | 已规划 / Planned | 文本、标签、尺寸和几何特征 Top-K 候选检索。 | feature index, candidates |
+| P15-M2.1 版本发布与回滚 / Version release and rollback | 已完成 / Done | 激活不可变版本、查询历史发布、比较当前头并受审计回滚。 | `release.json`, `current_release.json` |
+| P15-M2.2 确定性采样表达 / Deterministic sampled representation | 已完成 / Done | 按显式点数和种子生成、验证并复用不可变网格表面采样点云。 | `sampled_points.json`, `representation.json` |
+| P15-M2.3 采样 CLI 与端到端审计 / Sampling CLI and E2E audit | 已完成 / Done | 提供采样、表达列表命令及导入—发布—采样—回滚审计链。 | CLI, audit events |
+| P15-M2.4 混合候选检索 / Hybrid retrieval | 已规划 / Planned | 文本、标签、尺寸和几何特征 Top-K 候选检索。 | feature index, candidates |
 | P15-M3 刚性配准 / Rigid registration | 已规划 / Planned | FPFH/RANSAC/FGR、ICP 和残差质量门禁。 | rigid transform, quality gate |
 | P15-M4 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
 | P15-M5 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
@@ -234,6 +237,8 @@ python -m pc_system.cli export-delivery-package --project-root .\workspace --ass
 python -m pc_system.cli serve-api --project-root .\workspace --host 127.0.0.1 --port 8000
 python -m pc_system.cli create-model-asset --project-root .\workspace --model-id pump-a --display-name "Pump A" --category-id pump --actor alice --operation-id op-model-001 --request-id request-model-001 --idempotency-key idem-model-001
 python -m pc_system.cli import-model --project-root .\workspace --model-id pump-a --version-id v1 --source .\imports\models\pump-a.obj --unit mm --license internal --actor alice --operation-id op-import-001 --request-id request-import-001 --idempotency-key idem-import-001
+python -m pc_system.cli sample-model-version --project-root .\workspace --model-id pump-a --version-id v1 --point-count 100000 --random-seed 20260828 --actor alice --operation-id op-sample-001 --request-id request-sample-001 --idempotency-key idem-sample-001
+python -m pc_system.cli list-model-representations --project-root .\workspace --model-id pump-a --version-id v1
 ```
 
 ## 关键 API / Key APIs
@@ -264,7 +269,7 @@ python -m pc_system.cli import-model --project-root .\workspace --model-id pump-
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. Phase 15B：实现确定性网格采样、版本化特征和混合 Top-K 检索。
+1. Phase 15B-2：基于已完成的确定性采样实现版本化特征和混合 Top-K 检索。
 2. Phase 15C：实现刚性粗配准、多尺度 ICP 和残差门禁。
 3. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
 4. Phase 15E：接入受验证的实物参考点云模板。

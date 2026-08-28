@@ -45,8 +45,10 @@ from pc_system.commands.phase14 import (
 from pc_system.commands.phase15 import (
     run_create_model_asset,
     run_import_model,
+    run_list_model_representations,
     run_list_model_releases,
     run_release_model_version,
+    run_sample_model_version,
 )
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
@@ -367,6 +369,24 @@ def main(
         if args.command == "list-model-releases":
             return run_list_model_releases(
                 args.project_root, model_id=args.model_id
+            )
+        if args.command == "sample-model-version":
+            return run_sample_model_version(
+                args.project_root,
+                model_id=args.model_id,
+                version_id=args.version_id,
+                point_count=args.point_count,
+                random_seed=args.random_seed,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "list-model-representations":
+            return run_list_model_representations(
+                args.project_root,
+                model_id=args.model_id,
+                version_id=args.version_id,
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except ModelMatchingError as exc:

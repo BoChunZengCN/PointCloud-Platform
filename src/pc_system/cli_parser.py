@@ -349,6 +349,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_releases.add_argument("--project-root", required=True, type=Path)
     list_releases.add_argument("--model-id", required=True)
+
+    sample_model = subparsers.add_parser(
+        "sample-model-version",
+        help="Generate a deterministic sampled point representation.",
+    )
+    sample_model.add_argument("--project-root", required=True, type=Path)
+    sample_model.add_argument("--model-id", required=True)
+    sample_model.add_argument("--version-id", required=True)
+    sample_model.add_argument("--point-count", required=True, type=int)
+    sample_model.add_argument("--random-seed", required=True, type=int)
+    sample_model.add_argument("--actor", required=True)
+    sample_model.add_argument("--operation-id", required=True)
+    sample_model.add_argument("--request-id", required=True)
+    sample_model.add_argument("--idempotency-key", required=True)
+
+    list_representations = subparsers.add_parser(
+        "list-model-representations",
+        help="List verified sampled point representations.",
+    )
+    list_representations.add_argument("--project-root", required=True, type=Path)
+    list_representations.add_argument("--model-id", required=True)
+    list_representations.add_argument("--version-id", required=True)
     return parser
 
 

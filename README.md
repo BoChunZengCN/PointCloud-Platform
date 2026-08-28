@@ -94,6 +94,7 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 13B | 黄金分割评估 / Golden segmentation evaluation | 已完成 / Done | 黄金标签评估、回归门禁与有界参数搜索。 |
 | Phase 14 | 分割纠正闭环 / Segmentation correction loop | 已完成 / Done | 人工确认、合并、拆分、改类、发布和反馈数据。 |
 | Phase 15A | CAD 模型库基础 / CAD model library foundation | 已完成 / Done | 不可变模型资产与版本、网格导入、可信身份、幂等操作和哈希链审计。 |
+| Phase 15B-1 | 版本发布与确定性采样 / Version release and deterministic sampling | 已完成 / Done | 模型版本激活、历史查询、受审计回滚及不可变网格表面采样表达。 |
 
 ## 技术路线 / Technical Routes
 
@@ -788,3 +789,27 @@ python -m pc_system.cli import-model `
 ```
 
 本阶段只完成 CAD 模型库基础，不代表全部 Phase 15 已完成。混合候选检索、刚性配准、模型绑定和受控自动优化分别属于 Phase 15B–15F。操作与集成说明见 `docs/phase15-model-library.md`。
+
+### Phase 15B-1 版本发布与确定性采样
+
+Phase 15B-1 支持已导入模型版本的激活、历史版本查询、回滚，以及按显式点数和随机种子生成不可变的确定性表面采样点云。
+
+```powershell
+python -m pc_system.cli sample-model-version `
+  --project-root workspace `
+  --model-id pump-a `
+  --version-id v1 `
+  --point-count 100000 `
+  --random-seed 20260828 `
+  --actor alice `
+  --operation-id op-sample-001 `
+  --request-id request-sample-001 `
+  --idempotency-key idem-sample-001
+
+python -m pc_system.cli list-model-representations `
+  --project-root workspace `
+  --model-id pump-a `
+  --version-id v1
+```
+
+相同源版本、点数、随机种子和算法版本会确定性复用同一表达；回滚只改变当前发布投影，不修改历史版本或采样数据。完整说明见 `docs/phase15b1-versioned-model-sampling.md`。

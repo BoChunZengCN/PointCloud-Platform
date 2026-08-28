@@ -13,6 +13,10 @@ from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal
 from pc_system.model_mesh import trimesh_mesh_reader
 from pc_system.model_release import list_model_releases, release_model_version
+from pc_system.model_sampling import (
+    list_sampled_representations,
+    sample_model_version,
+)
 
 
 _MAX_PROVENANCE_BYTES = 1024 * 1024
@@ -302,4 +306,52 @@ def run_release_model_version(
 def run_list_model_releases(project_root: Path, *, model_id: str) -> int:
     releases = list_model_releases(project_root, model_id)
     print(json.dumps(releases, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_sample_model_version(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    point_count: int,
+    random_seed: int,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    representation = sample_model_version(
+        project_root,
+        model_id=model_id,
+        version_id=version_id,
+        point_count=point_count,
+        random_seed=random_seed,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        mesh_reader=trimesh_mesh_reader,
+    )
+    representation_path = (
+        project_root
+        / "models"
+        / model_id
+        / "representations"
+        / version_id
+        / "cad_sampled"
+        / representation["representation_id"]
+        / "representation.json"
+    )
+    print(representation_path)
+    return 0
+
+
+def run_list_model_representations(
+    project_root: Path, *, model_id: str, version_id: str
+) -> int:
+    representations = list_sampled_representations(
+        project_root, model_id, version_id
+    )
+    print(json.dumps(representations, ensure_ascii=False, sort_keys=True))
     return 0
