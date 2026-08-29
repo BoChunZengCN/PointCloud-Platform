@@ -14,7 +14,7 @@ from pc_system.model_matching_audit import (
 )
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
-from pc_system.model_release import _load_json, _record_failure, _require_plain, list_model_releases
+from pc_system.model_release import _record_failure, _require_plain, list_model_releases
 from pc_system.model_resource_lock import model_resource_lock
 from pc_system.model_retrieval_config import load_retrieval_config
 from pc_system.model_retrieval_input import _reload_retrieval_object, load_retrieval_object
@@ -107,13 +107,32 @@ def _base(root: Path, feature_type: str, source: dict) -> Path:
     raise ModelMatchingError("feature_integrity_error", "Feature type is invalid.")
 
 
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
 def _read_json(path: Path) -> dict:
     try:
         _require_plain(path, directory=False)
         if path.stat().st_size > _MAX_FEATURE_BYTES:
             raise ValueError("feature artifact too large")
-        value = _load_json(path)
-    except (FileNotFoundError, OSError, ValueError, ModelMatchingError) as exc:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_json_object,
+        )
+    except (
+        FileNotFoundError,
+        OSError,
+        RecursionError,
+        UnicodeError,
+        ValueError,
+        ModelMatchingError,
+    ) as exc:
         if isinstance(exc, ModelMatchingError) and exc.code == "operation_busy":
             raise
         raise ModelMatchingError(

@@ -14,7 +14,7 @@ from pc_system.model_matching_audit import (
 )
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
-from pc_system.model_release import _load_json, _record_failure, _require_plain
+from pc_system.model_release import _record_failure, _require_plain
 from pc_system.model_resource_lock import model_resource_lock
 from pc_system.model_retrieval_config import load_retrieval_config
 from pc_system.model_sampling import _publish_exact_json
@@ -86,12 +86,24 @@ def _projection_path(root: Path) -> Path:
     return root / "models" / "current_feature_index.json"
 
 
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
 def _read_json(path: Path, *, not_found: bool = False) -> dict:
     try:
         _require_plain(path, directory=False)
         if path.stat().st_size > 16 * 1024 * 1024:
             raise ValueError("index release file too large")
-        value = _load_json(path)
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_json_object,
+        )
     except FileNotFoundError as exc:
         code = "model_index_release_not_found" if not_found else "model_index_integrity_error"
         raise ModelMatchingError(code, "Index release artifact does not exist.") from exc
@@ -165,7 +177,9 @@ def _load_release(root: Path, release_id: str) -> dict:
     return json.loads(json.dumps(release, ensure_ascii=False))
 
 
-def list_model_feature_index_releases(project_root: Path) -> list[dict]:
+def _list_model_feature_index_releases(
+    project_root: Path, *, exclude_release_id: str | None = None
+) -> list[dict]:
     root = Path(project_root)
     parent = root / "models" / "feature_index_releases"
     try:
@@ -174,6 +188,8 @@ def list_model_feature_index_releases(project_root: Path) -> list[dict]:
         return []
     releases = []
     for candidate in candidates:
+        if candidate.name == exclude_release_id:
+            continue
         if (candidate / "release.json").is_file():
             releases.append(_load_release(root, candidate.name))
     releases.sort(key=lambda item: (item["created_at"], item["release_id"]))
@@ -185,6 +201,10 @@ def list_model_feature_index_releases(project_root: Path) -> list[dict]:
             )
         previous = release["release_id"]
     return releases
+
+
+def list_model_feature_index_releases(project_root: Path) -> list[dict]:
+    return _list_model_feature_index_releases(project_root)
 
 
 def _load_projection(root: Path) -> dict | None:
@@ -296,6 +316,13 @@ def release_model_feature_index(
         idempotency_key=idempotency_key,
         request_payload=request_payload,
     )
+    owner = {
+        "schema_version": "1.0",
+        "release_id": release_id,
+        "operation_id": operation_id,
+        "request_id": operation["request_id"],
+        "request_fingerprint": operation["request_fingerprint"],
+    }
     if replayed and operation["status"] == "failed":
         error = operation.get("error") or {}
         raise ModelMatchingError(
@@ -322,7 +349,23 @@ def release_model_feature_index(
                 raise ModelMatchingError(
                     "model_index_release_conflict", "Current index release changed."
                 )
-            history = list_model_feature_index_releases(root)
+            candidate_owner = None
+            candidate_owner_path = (
+                _release_root(root, release_id) / "operation_owner.json"
+            )
+            try:
+                candidate_owner = _read_json(
+                    candidate_owner_path, not_found=True
+                )
+            except ModelMatchingError as exc:
+                if exc.code != "model_index_release_not_found":
+                    raise
+            history = _list_model_feature_index_releases(
+                root,
+                exclude_release_id=(
+                    release_id if candidate_owner == owner else None
+                ),
+            )
             if action == "rollback":
                 target = next(
                     (item for item in history if item["release_id"] == rollback_of_release_id),
@@ -360,13 +403,6 @@ def release_model_feature_index(
                 "created_by": started["actor_id"],
                 "created_at": started["timestamp"],
                 "status": "published",
-            }
-            owner = {
-                "schema_version": "1.0",
-                "release_id": release_id,
-                "operation_id": operation_id,
-                "request_id": operation["request_id"],
-                "request_fingerprint": operation["request_fingerprint"],
             }
             directory = _release_root(root, release_id)
             directory.mkdir(parents=True, exist_ok=True)

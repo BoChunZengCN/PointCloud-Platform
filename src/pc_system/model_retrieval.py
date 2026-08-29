@@ -21,7 +21,7 @@ from pc_system.model_matching_audit import (
 )
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
-from pc_system.model_release import _load_json, _record_failure, _require_plain
+from pc_system.model_release import _record_failure, _require_plain
 from pc_system.model_resource_lock import model_resource_lock
 from pc_system.model_retrieval_config import load_retrieval_config
 from pc_system.model_retrieval_input import load_retrieval_object
@@ -29,6 +29,13 @@ from pc_system.model_sampling import _publish_exact_json
 
 
 _SPLIT = re.compile(r"[^\w]+", re.UNICODE)
+_OWNER_FIELDS = {
+    "schema_version",
+    "retrieval_run_id",
+    "operation_id",
+    "request_id",
+    "request_fingerprint",
+}
 
 
 def _round(value: float) -> float:
@@ -164,11 +171,31 @@ def _run_root(root: Path, asset_id: str, source_id: str, instance_id: str, run_i
     return root / "reports" / "model_retrieval" / asset_id / source_id / instance_id / run_id
 
 
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
 def _read(path: Path) -> dict:
     try:
         _require_plain(path, directory=False)
-        value = _load_json(path)
-    except (OSError, ModelMatchingError) as exc:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("retrieval artifact too large")
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_json_object,
+        )
+    except (
+        OSError,
+        RecursionError,
+        UnicodeError,
+        ValueError,
+        ModelMatchingError,
+    ) as exc:
         raise ModelMatchingError("feature_integrity_error", "Retrieval artifact is invalid.") from exc
     if type(value) is not dict:
         raise ModelMatchingError("feature_integrity_error", "Retrieval artifact is invalid.")
@@ -198,7 +225,10 @@ def load_model_retrieval(project_root: Path, *, asset_id: str, source_id: str, i
             {key: value for key, value in report.items() if key != "report_fingerprint"}
         )
         if (
-            report["status"] != "completed"
+            set(owner) != _OWNER_FIELDS
+            or owner["schema_version"] != "1.0"
+            or owner["retrieval_run_id"] != values[3]
+            or report["status"] != "completed"
             or report["asset_id"] != values[0]
             or report["source_id"] != values[1]
             or report["instance_id"] != values[2]
@@ -358,7 +388,48 @@ def retrieve_model_candidates(
             _publish_exact_json(directory / "operation_owner.json", owner, conflict_code="operation_busy", conflict_message="Retrieval owner conflicts.")
             _publish_exact_json(directory / "query_feature.json", query_feature, conflict_code="feature_integrity_error", conflict_message="Query feature conflicts.")
             _publish_exact_json(directory / "candidates.json", candidates_artifact, conflict_code="feature_integrity_error", conflict_message="Candidates conflict.")
-            _publish_exact_json(directory / "retrieval_report.json", report, conflict_code="feature_integrity_error", conflict_message="Retrieval report conflicts.")
+            report_path = directory / "retrieval_report.json"
+            if report_path.is_file():
+                visible = _read(report_path)
+                visible_basis = {
+                    key: value
+                    for key, value in visible.items()
+                    if key not in {"scan_duration_microseconds", "report_fingerprint"}
+                }
+                expected_basis = {
+                    key: value
+                    for key, value in report.items()
+                    if key not in {"scan_duration_microseconds", "report_fingerprint"}
+                }
+                visible_duration = visible.get("scan_duration_microseconds")
+                if (
+                    visible_basis != expected_basis
+                    or type(visible_duration) is not int
+                    or visible_duration < 0
+                    or visible.get("report_fingerprint")
+                    != _hash(
+                        {
+                            key: value
+                            for key, value in visible.items()
+                            if key != "report_fingerprint"
+                        }
+                    )
+                ):
+                    raise ModelMatchingError(
+                        "feature_integrity_error", "Retrieval report conflicts."
+                    )
+                report = visible
+                result = {
+                    "retrieval_run_id": retrieval_run_id,
+                    "report_fingerprint": report["report_fingerprint"],
+                }
+            else:
+                _publish_exact_json(
+                    report_path,
+                    report,
+                    conflict_code="feature_integrity_error",
+                    conflict_message="Retrieval report conflicts.",
+                )
             ensure_operation_event(root, operation_id, "model_retrieval.completed", result)
             complete_operation(root, operation_id, result)
             return load_model_retrieval(root, asset_id=asset_id, source_id=source_id, instance_id=instance_id, retrieval_run_id=retrieval_run_id)

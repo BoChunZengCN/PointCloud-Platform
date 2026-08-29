@@ -21,6 +21,7 @@ from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
 from pc_system.model_mesh import trimesh_mesh_reader
 from pc_system.model_release import (
+    _fsync_directory,
     _record_failure,
     _require_plain,
     list_model_releases,
@@ -46,6 +47,13 @@ _FATAL_CHILD_CODES = {
     "publication_recovery_required",
 }
 _TOKEN_SPLIT = re.compile(r"[^\w]+", flags=re.UNICODE)
+_OWNER_FIELDS = {
+    "schema_version",
+    "index_id",
+    "operation_id",
+    "request_id",
+    "request_fingerprint",
+}
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -315,9 +323,19 @@ def _publish_exact_bytes(path: Path, payload: bytes) -> None:
                 raise ModelMatchingError(
                     "model_index_integrity_error", "Index entries conflict."
                 )
+        try:
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise ModelMatchingError(
+                "publication_recovery_required",
+                "Index entries are visible but durability must be recovered.",
+            ) from exc
     finally:
         if temporary is not None:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _index_root(root: Path, index_id: str) -> Path:
@@ -362,13 +380,25 @@ def _read_json(path: Path) -> dict:
         _require_plain(path, directory=False)
         if path.stat().st_size > 16 * 1024 * 1024:
             raise ValueError("index artifact too large")
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_json_object,
+        )
     except (OSError, RecursionError, UnicodeError, ValueError, ModelMatchingError) as exc:
         raise ModelMatchingError(
             "model_index_integrity_error", "Index artifact could not be read."
         ) from exc
     if type(value) is not dict:
         raise ModelMatchingError("model_index_integrity_error", "Index artifact is invalid.")
+    return value
+
+
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
     return value
 
 
@@ -388,7 +418,11 @@ def load_model_feature_index(
     manifest = _read_json(directory / "index_manifest.json")
     try:
         if (
-            manifest["schema_version"] != "1.0"
+            set(owner) != _OWNER_FIELDS
+            or owner["schema_version"] != "1.0"
+            or owner["index_id"] != index_id
+            or owner["operation_id"] != manifest["operation_id"]
+            or manifest["schema_version"] != "1.0"
             or manifest["index_id"] != index_id
             or manifest["index_mode"] not in {"production", "challenger"}
             or manifest["status"] != "ready"
@@ -596,17 +630,27 @@ def build_model_feature_index(
         with model_resource_lock(root, "feature-index", index_id):
             directory.mkdir(parents=True, exist_ok=True)
             if (directory / "index_manifest.json").is_file():
-                visible = load_model_feature_index(root, index_id, require_current_heads=False)
-                if visible["entries_fingerprint"] != manifest["entries_fingerprint"]:
-                    raise ModelMatchingError("model_index_integrity_error", "Index identity conflicts.")
-                ensure_operation_event(
-                    root,
-                    operation_id,
-                    "model_feature_index.reused",
-                    {**_result(visible), "producer_operation_id": visible["operation_id"]},
-                )
-                complete_operation(root, operation_id, _result(visible))
-                return visible
+                actual_owner = _read_json(directory / "operation_owner.json")
+                if actual_owner != owner:
+                    visible = load_model_feature_index(
+                        root, index_id, require_current_heads=False
+                    )
+                    if visible["entries_fingerprint"] != manifest["entries_fingerprint"]:
+                        raise ModelMatchingError(
+                            "model_index_integrity_error",
+                            "Index identity conflicts.",
+                        )
+                    ensure_operation_event(
+                        root,
+                        operation_id,
+                        "model_feature_index.reused",
+                        {
+                            **_result(visible),
+                            "producer_operation_id": visible["operation_id"],
+                        },
+                    )
+                    complete_operation(root, operation_id, _result(visible))
+                    return visible
             _publish_exact_json(directory / "operation_owner.json", owner, conflict_code="operation_busy", conflict_message="Index owner conflicts.")
             _publish_exact_bytes(directory / "entries.jsonl", entries_payload)
             _publish_exact_json(directory / "exclusions.json", {"exclusions": exclusions}, conflict_code="model_index_integrity_error", conflict_message="Index exclusions conflict.")
