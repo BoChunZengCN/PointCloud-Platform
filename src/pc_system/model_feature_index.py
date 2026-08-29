@@ -87,15 +87,7 @@ def _release_fingerprint(release: dict) -> str:
     return _fingerprint(release)
 
 
-def _tokenize(asset: dict) -> list[str]:
-    values = [
-        asset.get("display_name", ""),
-        asset.get("manufacturer", ""),
-        asset.get("model_number", ""),
-        asset.get("category_id", ""),
-    ]
-    values.extend(asset.get("keywords", []))
-    values.extend(asset.get("tags", []))
+def _tokens(values: list[str]) -> list[str]:
     tokens: set[str] = set()
     for raw in values:
         if type(raw) is not str:
@@ -106,6 +98,18 @@ def _tokenize(asset: dict) -> list[str]:
         tokens.add(normalized)
         tokens.update(part for part in _TOKEN_SPLIT.split(normalized) if part)
     return sorted(tokens)
+
+
+def _tokenize(asset: dict) -> list[str]:
+    values = [
+        asset.get("display_name", ""),
+        asset.get("manufacturer", ""),
+        asset.get("model_number", ""),
+        asset.get("category_id", ""),
+    ]
+    values.extend(asset.get("keywords", []))
+    values.extend(asset.get("tags", []))
+    return _tokens(values)
 
 
 def _matching_config(config: dict) -> dict:
@@ -235,6 +239,8 @@ def _build_entry(
         "display_name": asset["display_name"],
         "manufacturer": asset["manufacturer"],
         "model_number": asset["model_number"],
+        "keyword_terms": _tokens(asset.get("keywords", [])),
+        "tag_terms": _tokens(asset.get("tags", [])),
         "terms": _tokenize(asset),
     }
 
