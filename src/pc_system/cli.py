@@ -43,10 +43,19 @@ from pc_system.commands.phase14 import (
     run_submit_segmentation_correction,
 )
 from pc_system.commands.phase15 import (
+    run_build_model_feature_index,
+    run_create_model_retrieval_config,
     run_create_model_asset,
     run_import_model,
+    run_list_model_feature_index_releases,
+    run_list_model_feature_indexes,
+    run_list_model_representations,
     run_list_model_releases,
+    run_release_model_feature_index,
     run_release_model_version,
+    run_retrieve_model_candidates,
+    run_sample_model_version,
+    run_show_model_retrieval,
 )
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
@@ -367,6 +376,95 @@ def main(
         if args.command == "list-model-releases":
             return run_list_model_releases(
                 args.project_root, model_id=args.model_id
+            )
+        if args.command == "sample-model-version":
+            return run_sample_model_version(
+                args.project_root,
+                model_id=args.model_id,
+                version_id=args.version_id,
+                point_count=args.point_count,
+                random_seed=args.random_seed,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "list-model-representations":
+            return run_list_model_representations(
+                args.project_root,
+                model_id=args.model_id,
+                version_id=args.version_id,
+            )
+        if args.command == "create-model-retrieval-config":
+            return run_create_model_retrieval_config(
+                args.project_root,
+                config_id=args.config_id,
+                feature_path=args.feature,
+                scoring_path=args.scoring,
+                category_mapping_path=args.category_mapping,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "build-model-feature-index":
+            return run_build_model_feature_index(
+                args.project_root,
+                index_id=args.index_id,
+                index_mode=args.index_mode,
+                config_id=args.config_id,
+                historical_releases_path=args.historical_releases,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "release-model-feature-index":
+            return run_release_model_feature_index(
+                args.project_root,
+                index_id=args.index_id,
+                release_id=args.release_id,
+                action=args.action,
+                expected_current_release_id=args.expected_current_release_id,
+                rollback_of_release_id=args.rollback_of_release_id,
+                reason=args.reason,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "list-model-feature-indexes":
+            return run_list_model_feature_indexes(args.project_root)
+        if args.command == "list-model-feature-index-releases":
+            return run_list_model_feature_index_releases(args.project_root)
+        if args.command == "retrieve-model-candidates":
+            return run_retrieve_model_candidates(
+                args.project_root,
+                retrieval_run_id=args.retrieval_run_id,
+                source_kind=args.source_kind,
+                asset_id=args.asset_id,
+                source_id=args.source_id,
+                instance_id=args.instance_id,
+                index_release_id=args.index_release_id,
+                index_id=args.index_id,
+                top_k=args.top_k,
+                keywords=args.keyword,
+                tags=args.tag,
+                manufacturer=args.manufacturer,
+                model_number=args.model_number,
+                hint_source=args.hint_source,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "show-model-retrieval":
+            return run_show_model_retrieval(
+                args.project_root,
+                asset_id=args.asset_id,
+                source_id=args.source_id,
+                instance_id=args.instance_id,
+                retrieval_run_id=args.retrieval_run_id,
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except ModelMatchingError as exc:

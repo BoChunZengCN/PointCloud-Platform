@@ -7,12 +7,31 @@ import uuid
 from pathlib import Path
 
 from pc_system.model_import import import_model_version
+from pc_system.model_feature_index import (
+    build_model_feature_index,
+    list_model_feature_indexes,
+)
+from pc_system.model_index_release import (
+    list_model_feature_index_releases,
+    release_model_feature_index,
+)
 from pc_system.model_library import create_model_asset, model_asset_path, model_version_dir
 from pc_system.model_matching_audit import fail_operation, start_operation
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal
 from pc_system.model_mesh import trimesh_mesh_reader
 from pc_system.model_release import list_model_releases, release_model_version
+from pc_system.model_sampling import (
+    list_sampled_representations,
+    sample_model_version,
+)
+from pc_system.model_retrieval import (
+    load_model_retrieval,
+    retrieve_model_candidates,
+)
+from pc_system.model_retrieval_config import (
+    publish_retrieval_config,
+)
 
 
 _MAX_PROVENANCE_BYTES = 1024 * 1024
@@ -92,6 +111,59 @@ def _load_provenance(path: Path | None) -> dict:
         return value
     except (OSError, RecursionError, UnicodeError, ValueError) as exc:
         raise _invalid_provenance() from exc
+
+
+def _load_phase15b2_json(
+    path: Path,
+    *,
+    expected_type: type,
+    code: str,
+    message: str,
+) -> object:
+    try:
+        before = path.lstat()
+        reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or bool(getattr(before, "st_file_attributes", 0) & reparse_point)
+            or before.st_size > _MAX_PROVENANCE_BYTES
+        ):
+            raise ValueError("unsafe Phase 15B-2 JSON file")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_size > _MAX_PROVENANCE_BYTES
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("unsafe Phase 15B-2 JSON file")
+            chunks: list[bytes] = []
+            remaining = _MAX_PROVENANCE_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            if len(payload) > _MAX_PROVENANCE_BYTES:
+                raise ValueError("Phase 15B-2 JSON file is too large")
+        finally:
+            os.close(descriptor)
+        value = json.loads(
+            payload.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
+            object_pairs_hook=_json_object,
+        )
+        if type(value) is not expected_type:
+            raise ValueError("Phase 15B-2 JSON value has the wrong type")
+        return value
+    except (OSError, RecursionError, UnicodeError, ValueError) as exc:
+        raise ModelMatchingError(code, message) from exc
 
 
 def _attempt_value(value: object) -> bytes:
@@ -302,4 +374,247 @@ def run_release_model_version(
 def run_list_model_releases(project_root: Path, *, model_id: str) -> int:
     releases = list_model_releases(project_root, model_id)
     print(json.dumps(releases, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_sample_model_version(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    point_count: int,
+    random_seed: int,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    representation = sample_model_version(
+        project_root,
+        model_id=model_id,
+        version_id=version_id,
+        point_count=point_count,
+        random_seed=random_seed,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        mesh_reader=trimesh_mesh_reader,
+    )
+    representation_path = (
+        project_root
+        / "models"
+        / model_id
+        / "representations"
+        / version_id
+        / "cad_sampled"
+        / representation["representation_id"]
+        / "representation.json"
+    )
+    print(representation_path)
+    return 0
+
+
+def run_list_model_representations(
+    project_root: Path, *, model_id: str, version_id: str
+) -> int:
+    representations = list_sampled_representations(
+        project_root, model_id, version_id
+    )
+    print(json.dumps(representations, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_create_model_retrieval_config(
+    project_root: Path,
+    *,
+    config_id: str,
+    feature_path: Path,
+    scoring_path: Path,
+    category_mapping_path: Path,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    error = {
+        "expected_type": dict,
+        "code": "feature_config_invalid",
+        "message": "Retrieval configuration input must be a safe JSON object.",
+    }
+    config = publish_retrieval_config(
+        project_root,
+        config_id=config_id,
+        feature=_load_phase15b2_json(feature_path, **error),
+        scoring=_load_phase15b2_json(scoring_path, **error),
+        category_mapping=_load_phase15b2_json(category_mapping_path, **error),
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(config, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_build_model_feature_index(
+    project_root: Path,
+    *,
+    index_id: str,
+    index_mode: str,
+    config_id: str,
+    historical_releases_path: Path | None,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    historical_releases = None
+    if historical_releases_path is not None:
+        historical_releases = _load_phase15b2_json(
+            historical_releases_path,
+            expected_type=list,
+            code="feature_config_invalid",
+            message="Historical releases must be a safe JSON list.",
+        )
+    index = build_model_feature_index(
+        project_root,
+        index_id=index_id,
+        index_mode=index_mode,
+        config_id=config_id,
+        historical_releases=historical_releases,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(index, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_release_model_feature_index(
+    project_root: Path,
+    *,
+    index_id: str,
+    release_id: str,
+    action: str,
+    expected_current_release_id: str | None,
+    rollback_of_release_id: str | None,
+    reason: str,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    release = release_model_feature_index(
+        project_root,
+        index_id=index_id,
+        release_id=release_id,
+        action=action,
+        expected_current_release_id=expected_current_release_id,
+        rollback_of_release_id=rollback_of_release_id,
+        reason=reason,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(release, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_list_model_feature_indexes(project_root: Path) -> int:
+    print(
+        json.dumps(
+            list_model_feature_indexes(project_root),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def run_list_model_feature_index_releases(project_root: Path) -> int:
+    print(
+        json.dumps(
+            list_model_feature_index_releases(project_root),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def run_retrieve_model_candidates(
+    project_root: Path,
+    *,
+    retrieval_run_id: str,
+    source_kind: str,
+    asset_id: str,
+    source_id: str,
+    instance_id: str,
+    index_release_id: str | None,
+    index_id: str | None,
+    top_k: int,
+    keywords: list[str],
+    tags: list[str],
+    manufacturer: str | None,
+    model_number: str | None,
+    hint_source: str | None,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    has_hints = bool(keywords or tags or manufacturer or model_number)
+    if (
+        type(top_k) is not int
+        or not 1 <= top_k <= 50
+        or (index_id is not None and index_release_id is not None)
+        or (has_hints and hint_source not in {"human", "upstream_system"})
+        or (not has_hints and hint_source is not None)
+    ):
+        raise ModelMatchingError(
+            "invalid_retrieval_input", "Retrieval parameters are invalid."
+        )
+    report = retrieve_model_candidates(
+        project_root,
+        retrieval_run_id=retrieval_run_id,
+        source_kind=source_kind,
+        asset_id=asset_id,
+        source_id=source_id,
+        instance_id=instance_id,
+        index_release_id=index_release_id,
+        index_id=index_id,
+        top_k=top_k,
+        keywords=list(keywords),
+        tags=list(tags),
+        manufacturer=manufacturer,
+        model_number=model_number,
+        hint_source=hint_source,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_show_model_retrieval(
+    project_root: Path,
+    *,
+    asset_id: str,
+    source_id: str,
+    instance_id: str,
+    retrieval_run_id: str,
+) -> int:
+    report = load_model_retrieval(
+        project_root,
+        asset_id=asset_id,
+        source_id=source_id,
+        instance_id=instance_id,
+        retrieval_run_id=retrieval_run_id,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0

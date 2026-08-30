@@ -349,6 +349,129 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_releases.add_argument("--project-root", required=True, type=Path)
     list_releases.add_argument("--model-id", required=True)
+
+    sample_model = subparsers.add_parser(
+        "sample-model-version",
+        help="Generate a deterministic sampled point representation.",
+    )
+    sample_model.add_argument("--project-root", required=True, type=Path)
+    sample_model.add_argument("--model-id", required=True)
+    sample_model.add_argument("--version-id", required=True)
+    sample_model.add_argument("--point-count", required=True, type=int)
+    sample_model.add_argument("--random-seed", required=True, type=int)
+    sample_model.add_argument("--actor", required=True)
+    sample_model.add_argument("--operation-id", required=True)
+    sample_model.add_argument("--request-id", required=True)
+    sample_model.add_argument("--idempotency-key", required=True)
+
+    list_representations = subparsers.add_parser(
+        "list-model-representations",
+        help="List verified sampled point representations.",
+    )
+    list_representations.add_argument("--project-root", required=True, type=Path)
+    list_representations.add_argument("--model-id", required=True)
+    list_representations.add_argument("--version-id", required=True)
+
+    create_retrieval_config = subparsers.add_parser(
+        "create-model-retrieval-config",
+        help="Publish an immutable Phase 15B-2 retrieval configuration.",
+    )
+    create_retrieval_config.add_argument("--project-root", required=True, type=Path)
+    create_retrieval_config.add_argument("--config-id", required=True)
+    create_retrieval_config.add_argument("--feature", required=True, type=Path)
+    create_retrieval_config.add_argument("--scoring", required=True, type=Path)
+    create_retrieval_config.add_argument(
+        "--category-mapping", required=True, type=Path
+    )
+    create_retrieval_config.add_argument("--actor", required=True)
+    create_retrieval_config.add_argument("--operation-id", required=True)
+    create_retrieval_config.add_argument("--request-id", required=True)
+    create_retrieval_config.add_argument("--idempotency-key", required=True)
+
+    build_feature_index = subparsers.add_parser(
+        "build-model-feature-index",
+        help="Build an immutable production or Challenger feature index.",
+    )
+    build_feature_index.add_argument("--project-root", required=True, type=Path)
+    build_feature_index.add_argument("--index-id", required=True)
+    build_feature_index.add_argument(
+        "--index-mode", required=True, choices=["production", "challenger"]
+    )
+    build_feature_index.add_argument("--config-id", required=True)
+    build_feature_index.add_argument("--historical-releases", type=Path)
+    build_feature_index.add_argument("--actor", required=True)
+    build_feature_index.add_argument("--operation-id", required=True)
+    build_feature_index.add_argument("--request-id", required=True)
+    build_feature_index.add_argument("--idempotency-key", required=True)
+
+    release_feature_index = subparsers.add_parser(
+        "release-model-feature-index",
+        help="Activate or roll back an immutable model feature index release.",
+    )
+    release_feature_index.add_argument("--project-root", required=True, type=Path)
+    release_feature_index.add_argument("--index-id", required=True)
+    release_feature_index.add_argument("--release-id", required=True)
+    release_feature_index.add_argument(
+        "--action", required=True, choices=["activate", "rollback"]
+    )
+    release_feature_index.add_argument("--expected-current-release-id")
+    release_feature_index.add_argument("--rollback-of-release-id")
+    release_feature_index.add_argument("--reason", required=True)
+    release_feature_index.add_argument("--actor", required=True)
+    release_feature_index.add_argument("--operation-id", required=True)
+    release_feature_index.add_argument("--request-id", required=True)
+    release_feature_index.add_argument("--idempotency-key", required=True)
+
+    list_feature_indexes = subparsers.add_parser(
+        "list-model-feature-indexes", help="List verified model feature indexes."
+    )
+    list_feature_indexes.add_argument("--project-root", required=True, type=Path)
+
+    list_feature_index_releases = subparsers.add_parser(
+        "list-model-feature-index-releases",
+        help="List verified model feature index releases.",
+    )
+    list_feature_index_releases.add_argument(
+        "--project-root", required=True, type=Path
+    )
+
+    retrieve_candidates = subparsers.add_parser(
+        "retrieve-model-candidates",
+        help="Run an explainable Phase 15B-2 hybrid model retrieval.",
+    )
+    retrieve_candidates.add_argument("--project-root", required=True, type=Path)
+    retrieve_candidates.add_argument("--retrieval-run-id", required=True)
+    retrieve_candidates.add_argument(
+        "--source-kind",
+        required=True,
+        choices=["correction_release", "segmentation_run"],
+    )
+    retrieve_candidates.add_argument("--asset-id", required=True)
+    retrieve_candidates.add_argument("--source-id", required=True)
+    retrieve_candidates.add_argument("--instance-id", required=True)
+    retrieve_candidates.add_argument("--index-release-id")
+    retrieve_candidates.add_argument("--index-id")
+    retrieve_candidates.add_argument("--top-k", required=True, type=int)
+    retrieve_candidates.add_argument("--keyword", action="append", default=[])
+    retrieve_candidates.add_argument("--tag", action="append", default=[])
+    retrieve_candidates.add_argument("--manufacturer")
+    retrieve_candidates.add_argument("--model-number")
+    retrieve_candidates.add_argument(
+        "--hint-source", choices=["human", "upstream_system"]
+    )
+    retrieve_candidates.add_argument("--actor", required=True)
+    retrieve_candidates.add_argument("--operation-id", required=True)
+    retrieve_candidates.add_argument("--request-id", required=True)
+    retrieve_candidates.add_argument("--idempotency-key", required=True)
+
+    show_retrieval = subparsers.add_parser(
+        "show-model-retrieval", help="Read a verified model retrieval report."
+    )
+    show_retrieval.add_argument("--project-root", required=True, type=Path)
+    show_retrieval.add_argument("--asset-id", required=True)
+    show_retrieval.add_argument("--source-id", required=True)
+    show_retrieval.add_argument("--instance-id", required=True)
+    show_retrieval.add_argument("--retrieval-run-id", required=True)
     return parser
 
 

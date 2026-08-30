@@ -297,17 +297,7 @@ def _apply_label_operation(
     )
 
 
-def materialize_correction(baseline: dict, events: list[dict]) -> dict:
-    """Replay events from an immutable baseline into one deterministic draft."""
-
-    baseline_items = baseline.get("assignments")
-    if not isinstance(baseline_items, list):
-        raise CorrectionError(
-            "invalid_baseline", "Baseline assignments must be an array."
-        )
-    baseline_map = {
-        int(item["source_point_index"]): dict(item) for item in baseline_items
-    }
+def _event_history(events: list[dict]) -> tuple[list[dict], list[dict]]:
     active_events: list[dict] = []
     redo_events: list[dict] = []
     for event in events:
@@ -324,6 +314,28 @@ def materialize_correction(baseline: dict, events: list[dict]) -> dict:
         else:
             active_events.append(event)
             redo_events.clear()
+    return active_events, redo_events
+
+
+def active_correction_events(events: list[dict]) -> list[dict]:
+    """Return the effective non-undo/redo events without mutating the log."""
+
+    active_events, _redo_events = _event_history(events)
+    return list(active_events)
+
+
+def materialize_correction(baseline: dict, events: list[dict]) -> dict:
+    """Replay events from an immutable baseline into one deterministic draft."""
+
+    baseline_items = baseline.get("assignments")
+    if not isinstance(baseline_items, list):
+        raise CorrectionError(
+            "invalid_baseline", "Baseline assignments must be an array."
+        )
+    baseline_map = {
+        int(item["source_point_index"]): dict(item) for item in baseline_items
+    }
+    active_events, redo_events = _event_history(events)
     assignments = {index: dict(item) for index, item in baseline_map.items()}
     confirmed: set[str] = set()
     for event in active_events:

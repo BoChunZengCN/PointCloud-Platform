@@ -12,6 +12,14 @@ from pc_system.config import ProjectConfig
 from pc_system.identifiers import validate_identifier
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
 from pc_system.model_import import import_model_version, list_model_versions
+from pc_system.model_feature_index import (
+    build_model_feature_index,
+    list_model_feature_indexes,
+)
+from pc_system.model_index_release import (
+    list_model_feature_index_releases,
+    release_model_feature_index,
+)
 from pc_system.model_library import (
     create_model_asset,
     list_model_assets,
@@ -32,6 +40,14 @@ from pc_system.model_release import (
     list_model_releases,
     load_current_model_release,
     release_model_version,
+)
+from pc_system.model_retrieval import (
+    load_model_retrieval,
+    retrieve_model_candidates,
+)
+from pc_system.model_retrieval_config import (
+    list_retrieval_configs,
+    publish_retrieval_config,
 )
 from pc_system.phase11_report_center import build_report_center
 from pc_system.segmentation_correction_events import (
@@ -191,16 +207,23 @@ def _correction_http_error(exc: CorrectionError) -> HTTPException:
 
 
 _PHASE15_NOT_FOUND = {
+    "feature_not_found",
     "model_not_found",
+    "model_index_release_not_found",
     "model_release_not_found",
     "model_version_not_found",
     "operation_not_found",
+    "retrieval_object_not_found",
 }
 _PHASE15_CONFLICT = {
     "idempotency_conflict",
     "model_exists",
     "model_version_exists",
     "model_release_exists",
+    "model_index_coverage_rejected",
+    "model_index_not_ready",
+    "model_index_release_conflict",
+    "model_index_stale",
     "operation_busy",
     "operation_exists",
     "stale_model_release",
@@ -217,6 +240,7 @@ _PHASE15_SERVICE_UNAVAILABLE = {
     "publication_recovery_required",
 }
 _PHASE15_BAD_REQUEST = {
+    "feature_config_invalid",
     "invalid_audit_request",
     "invalid_model_asset",
     "invalid_model_format",
@@ -226,11 +250,13 @@ _PHASE15_BAD_REQUEST = {
     "invalid_model_unit",
     "invalid_model_version",
     "invalid_request_body",
+    "invalid_retrieval_input",
     "invalid_staged_source",
     "model_file_error",
     "model_source_not_found",
     "model_source_read_error",
     "model_source_too_large",
+    "no_candidate_models",
 }
 _REPARSE_POINT = 0x400
 MAX_PHASE15_REQUEST_BODY_BYTES = 1024 * 1024
@@ -495,9 +521,23 @@ def _require_payload_shape(
     list_fields: set[str] = frozenset(),
     object_fields: set[str] = frozenset(),
     optional_text_fields: set[str] = frozenset(),
+    integer_fields: set[str] = frozenset(),
+    nullable_object_list_fields: set[str] = frozenset(),
 ) -> dict:
-    allowed = text_fields | list_fields | object_fields | optional_text_fields
-    missing = (text_fields | list_fields | object_fields) - set(payload)
+    allowed = (
+        text_fields
+        | list_fields
+        | object_fields
+        | optional_text_fields
+        | integer_fields
+        | nullable_object_list_fields
+    )
+    missing = (
+        text_fields
+        | list_fields
+        | object_fields
+        | integer_fields
+    ) - set(payload)
     if missing or set(payload) - allowed:
         raise _phase15_http_error(
             _invalid_request("Request body fields do not match the route schema.")
@@ -527,7 +567,38 @@ def _require_payload_shape(
         raise _phase15_http_error(
             _invalid_request("Request object fields must be JSON objects.")
         )
+    if any(type(payload[field]) is not int for field in integer_fields):
+        raise _phase15_http_error(
+            _invalid_request("Request integer fields must be exact integers.")
+        )
+    if any(
+        payload[field] is not None
+        and (
+            type(payload[field]) is not list
+            or any(type(item) is not dict for item in payload[field])
+        )
+        for field in nullable_object_list_fields
+    ):
+        raise _phase15_http_error(
+            _invalid_request(
+                "Request object-list fields must contain JSON objects or null."
+            )
+        )
     return {field: payload.get(field) for field in allowed}
+
+
+_PHASE15_IGNORED_IDENTITY_FIELDS = {"actor", "roles", "source"}
+
+
+def _capture_phase15b2_payload(payload: dict, allowed: set[str]) -> dict:
+    captured = _capture_payload(
+        payload, allowed | _PHASE15_IGNORED_IDENTITY_FIELDS
+    )
+    return {
+        field: value
+        for field, value in captured.items()
+        if field not in _PHASE15_IGNORED_IDENTITY_FIELDS
+    }
 
 
 def create_app(
@@ -605,6 +676,22 @@ def create_app(
         request: Request, *, route: str, allowed_roles: set[str]
     ) -> Principal:
         token = request.headers.get("x-api-key")
+        authorization = request.headers.get("authorization")
+        bearer_token: str | None = None
+        if authorization is not None:
+            parts = authorization.split(" ")
+            if len(parts) == 2 and parts[0] == "Bearer" and parts[1]:
+                bearer_token = parts[1]
+            else:
+                bearer_token = ""
+        if (
+            token is not None
+            and bearer_token is not None
+            and token != bearer_token
+        ):
+            token = ""
+        elif bearer_token is not None:
+            token = bearer_token
         actor_header = request.headers.get("x-actor-id")
         roles_header = request.headers.get("x-actor-roles")
         try:
@@ -851,6 +938,257 @@ def create_app(
             request_id=values["request_id"],
             idempotency_key=values["idempotency_key"],
             supersedes_version_id=values["supersedes_version_id"],
+        )
+
+    @app.post(
+        "/model-matching/retrieval-configs",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_retrieval_config(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/retrieval-configs",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "config_id",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        object_fields = {"feature", "scoring", "category_mapping"}
+        captured = _capture_phase15b2_payload(
+            payload, text_fields | object_fields
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            object_fields=object_fields,
+        )
+        return phase15_action(
+            publish_retrieval_config,
+            project_root,
+            config_id=values["config_id"],
+            feature=values["feature"],
+            scoring=values["scoring"],
+            category_mapping=values["category_mapping"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-matching/retrieval-configs")
+    def get_model_retrieval_configs(request: Request) -> dict:
+        require_phase15_principal(
+            request,
+            route="GET /model-matching/retrieval-configs",
+            allowed_roles={"expert", "auditor"},
+        )
+        configs = phase15_action(list_retrieval_configs, project_root)
+        return {"config_count": len(configs), "configs": configs}
+
+    @app.post(
+        "/model-matching/feature-indexes",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_feature_index(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/feature-indexes",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "index_id",
+            "index_mode",
+            "config_id",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        optional_history = {"historical_releases"}
+        captured = _capture_phase15b2_payload(
+            payload, text_fields | optional_history
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            nullable_object_list_fields=optional_history,
+        )
+        return phase15_action(
+            build_model_feature_index,
+            project_root,
+            index_id=values["index_id"],
+            index_mode=values["index_mode"],
+            config_id=values["config_id"],
+            historical_releases=values["historical_releases"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-matching/feature-indexes")
+    def get_model_feature_indexes(request: Request) -> dict:
+        require_phase15_principal(
+            request,
+            route="GET /model-matching/feature-indexes",
+            allowed_roles={"expert", "auditor"},
+        )
+        indexes = phase15_action(list_model_feature_indexes, project_root)
+        return {"index_count": len(indexes), "indexes": indexes}
+
+    @app.post(
+        "/model-matching/feature-index-releases",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_feature_index_release(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/feature-index-releases",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "index_id",
+            "release_id",
+            "action",
+            "reason",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        optional_text_fields = {
+            "expected_current_release_id",
+            "rollback_of_release_id",
+        }
+        captured = _capture_phase15b2_payload(
+            payload, text_fields | optional_text_fields
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            optional_text_fields=optional_text_fields,
+        )
+        return phase15_action(
+            release_model_feature_index,
+            project_root,
+            index_id=values["index_id"],
+            release_id=values["release_id"],
+            action=values["action"],
+            expected_current_release_id=values[
+                "expected_current_release_id"
+            ],
+            rollback_of_release_id=values["rollback_of_release_id"],
+            reason=values["reason"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-matching/feature-index-releases")
+    def get_model_feature_index_releases(request: Request) -> dict:
+        require_phase15_principal(
+            request,
+            route="GET /model-matching/feature-index-releases",
+            allowed_roles={"expert", "auditor"},
+        )
+        releases = phase15_action(
+            list_model_feature_index_releases, project_root
+        )
+        return {"release_count": len(releases), "releases": releases}
+
+    @app.post(
+        "/model-matching/retrievals",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_retrieval(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/retrievals",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "retrieval_run_id",
+            "source_kind",
+            "asset_id",
+            "source_id",
+            "instance_id",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        optional_text_fields = {
+            "index_release_id",
+            "index_id",
+            "manufacturer",
+            "model_number",
+            "hint_source",
+        }
+        list_fields = {"keywords", "tags"}
+        integer_fields = {"top_k"}
+        captured = _capture_phase15b2_payload(
+            payload,
+            text_fields | optional_text_fields | list_fields | integer_fields,
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            optional_text_fields=optional_text_fields,
+            list_fields=list_fields,
+            integer_fields=integer_fields,
+        )
+        return phase15_action(
+            retrieve_model_candidates,
+            project_root,
+            retrieval_run_id=values["retrieval_run_id"],
+            source_kind=values["source_kind"],
+            asset_id=values["asset_id"],
+            source_id=values["source_id"],
+            instance_id=values["instance_id"],
+            index_release_id=values["index_release_id"],
+            index_id=values["index_id"],
+            top_k=values["top_k"],
+            keywords=values["keywords"],
+            tags=values["tags"],
+            manufacturer=values["manufacturer"],
+            model_number=values["model_number"],
+            hint_source=values["hint_source"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get(
+        "/model-matching/retrievals/{asset_id}/{source_id}/{instance_id}/{retrieval_run_id}"
+    )
+    def get_model_retrieval(
+        asset_id: str,
+        source_id: str,
+        instance_id: str,
+        retrieval_run_id: str,
+        request: Request,
+    ) -> dict:
+        require_phase15_principal(
+            request,
+            route=(
+                "GET /model-matching/retrievals/"
+                "{asset_id}/{source_id}/{instance_id}/{retrieval_run_id}"
+            ),
+            allowed_roles={"expert", "auditor"},
+        )
+        return phase15_action(
+            load_model_retrieval,
+            project_root,
+            asset_id=asset_id,
+            source_id=source_id,
+            instance_id=instance_id,
+            retrieval_run_id=retrieval_run_id,
         )
 
     @app.get("/audit/operations/{operation_id}")

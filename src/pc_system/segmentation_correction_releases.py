@@ -12,6 +12,7 @@ from pc_system.segmentation_benchmarks import BENCHMARK_SPLITS
 from pc_system.segmentation_evaluation import evaluate_segmentation_run
 from pc_system.segmentation_regression import compare_evaluations
 from pc_system.segmentation_correction_events import (
+    active_correction_events,
     materialize_correction,
     read_correction_events,
 )
@@ -27,6 +28,7 @@ from pc_system.segmentation_corrections import (
     load_correction_session,
 )
 from pc_system.segmentation_review_queue import build_correction_diff
+from pc_system.segmentation_review_evidence import build_object_review_evidence
 
 
 TRANSITIONS = {
@@ -393,6 +395,14 @@ def _publish_correction_release_unlocked(
         search_config=search_config,
     )
     correction_diff = build_correction_diff(baseline, draft)
+    review_evidence = build_object_review_evidence(
+        asset_id=asset_id,
+        release_id=release_id,
+        source_fingerprint=str(run.get("source_fingerprint")),
+        draft=draft,
+        objects=objects,
+        active_events=active_correction_events(correction_events),
+    )
     provenance = {
         "schema_version": "1.0",
         "asset_id": asset_id,
@@ -430,6 +440,7 @@ def _publish_correction_release_unlocked(
             "provenance": "provenance.json",
             "publication_tasks": "publication_tasks.json",
             "training_policy": "training_policy.json",
+            "object_review_evidence": "object_review_evidence.json",
         },
     }
     benchmark_manifest = {
@@ -495,6 +506,10 @@ def _publish_correction_release_unlocked(
         write_json(provenance, release_stage / "provenance.json")
         write_json(tasks, release_stage / "publication_tasks.json")
         write_json(training_policy, release_stage / "training_policy.json")
+        write_json(
+            review_evidence,
+            release_stage / "object_review_evidence.json",
+        )
 
         write_json(benchmark_manifest, benchmark_stage / "benchmark.json")
         write_json(
