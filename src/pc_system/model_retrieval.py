@@ -10,6 +10,7 @@ from pc_system.identifiers import validate_identifier
 from pc_system.model_feature_index import load_model_feature_index, read_index_entries
 from pc_system.model_feature_store import load_feature, publish_object_feature
 from pc_system.model_index_release import (
+    list_model_feature_index_releases,
     load_current_model_feature_index_release,
 )
 from pc_system.model_matching_audit import (
@@ -253,10 +254,16 @@ def load_model_retrieval(project_root: Path, *, asset_id: str, source_id: str, i
         if config["config_fingerprint"] != report["config_fingerprint"]:
             raise ValueError("retrieval config differs")
         if report["index_release_id"] is not None:
-            release = load_current_model_feature_index_release(root)
+            release = next(
+                (
+                    item
+                    for item in list_model_feature_index_releases(root)
+                    if item["release_id"] == report["index_release_id"]
+                ),
+                None,
+            )
             if (
                 release is None
-                or release["release_id"] != report["index_release_id"]
                 or release["index_id"] != report["index_id"]
             ):
                 raise ValueError("production index release differs")
@@ -288,7 +295,20 @@ def retrieve_model_candidates(
     keyword_terms, tag_terms = _tokens(keywords), _tokens(tags)
     manufacturer, model_number = _normalized(manufacturer), _normalized(model_number)
     has_hints = bool(keyword_terms or tag_terms or manufacturer or model_number)
-    if type(top_k) is not int or not 1 <= top_k <= 50 or (has_hints and hint_source not in {"human", "upstream_system"}) or (not has_hints and hint_source is not None):
+    invalid_source_selection = (
+        source_kind == "correction_release" and index_id is not None
+    ) or (
+        source_kind == "segmentation_run"
+        and (index_id is None or index_release_id is not None)
+    )
+    if (
+        source_kind not in {"correction_release", "segmentation_run"}
+        or invalid_source_selection
+        or type(top_k) is not int
+        or not 1 <= top_k <= 50
+        or (has_hints and hint_source not in {"human", "upstream_system"})
+        or (not has_hints and hint_source is not None)
+    ):
         raise ModelMatchingError("invalid_retrieval_input", "Retrieval parameters are invalid.")
     require_any_role(principal, {"expert"})
     request_payload = {

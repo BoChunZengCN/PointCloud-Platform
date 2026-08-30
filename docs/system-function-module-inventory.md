@@ -217,11 +217,15 @@ LAS/LAZ or FLS source
 | P15-M2.1 版本发布与回滚 / Version release and rollback | 已完成 / Done | 激活不可变版本、查询历史发布、比较当前头并受审计回滚。 | `release.json`, `current_release.json` |
 | P15-M2.2 确定性采样表达 / Deterministic sampled representation | 已完成 / Done | 按显式点数和种子生成、验证并复用不可变网格表面采样点云。 | `sampled_points.json`, `representation.json` |
 | P15-M2.3 采样 CLI 与端到端审计 / Sampling CLI and E2E audit | 已完成 / Done | 提供采样、表达列表命令及导入—发布—采样—回滚审计链。 | CLI, audit events |
-| P15-M2.4 混合候选检索 / Hybrid retrieval | 已规划 / Planned | 文本、标签、尺寸和几何特征 Top-K 候选检索。 | feature index, candidates |
-| P15-M3 刚性配准 / Rigid registration | 已规划 / Planned | FPFH/RANSAC/FGR、ICP 和残差质量门禁。 | rigid transform, quality gate |
-| P15-M4 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
-| P15-M5 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
-| P15-M6 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
+| P15-M2.4 对象审查与输入 / Object review and input | 已完成 / Done | 新 Phase 14 对象证据硬过滤、旧发布安全软评分、Phase 13A 实验输入。 | review evidence, retrieval object |
+| P15-M2.5 版本化特征与配置 / Versioned features and config | 已完成 / Done | 为模型和对象生成同构几何特征，并冻结采样、评分和类别映射配置。 | retrieval config, feature artifacts |
+| P15-M2.6 特征索引与发布 / Feature index and release | 已完成 / Done | 构建不可变生产/Challenger 索引，自动采样、覆盖率门禁、激活、历史、陈旧检测和回滚。 | index manifest, release history |
+| P15-M2.7 可解释 Top-K 检索 / Explainable Top-K retrieval | 已完成 / Done | 混合类别、文本、厂商型号、尺寸、形状和占用评分，输出降级原因与风险。 | candidates, retrieval report |
+| P15-M2.8 公共入口与恢复 / Public surfaces and recovery | 已完成 / Done | 七个 CLI、八个 API、可信身份、幂等重放、哈希链审计和端到端恢复。 | CLI, API, audit events |
+| Phase 15C 刚性配准 / Rigid registration | 已规划 / Planned | FPFH/RANSAC/FGR、ICP 和残差质量门禁。 | rigid transform, quality gate |
+| Phase 15D 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
+| Phase 15E 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
+| Phase 15F 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
 
 ```powershell
 python -m pc_system.cli init --project-root .\workspace
@@ -239,6 +243,11 @@ python -m pc_system.cli create-model-asset --project-root .\workspace --model-id
 python -m pc_system.cli import-model --project-root .\workspace --model-id pump-a --version-id v1 --source .\imports\models\pump-a.obj --unit mm --license internal --actor alice --operation-id op-import-001 --request-id request-import-001 --idempotency-key idem-import-001
 python -m pc_system.cli sample-model-version --project-root .\workspace --model-id pump-a --version-id v1 --point-count 100000 --random-seed 20260828 --actor alice --operation-id op-sample-001 --request-id request-sample-001 --idempotency-key idem-sample-001
 python -m pc_system.cli list-model-representations --project-root .\workspace --model-id pump-a --version-id v1
+python -m pc_system.cli create-model-retrieval-config --project-root .\workspace --config-id retrieval-v1 --feature .\config\feature.json --scoring .\config\scoring.json --category-mapping .\config\mapping.json --actor alice --operation-id op-config-001 --request-id req-config-001 --idempotency-key idem-config-001
+python -m pc_system.cli build-model-feature-index --project-root .\workspace --index-id index-production-001 --index-mode production --config-id retrieval-v1 --actor alice --operation-id op-index-001 --request-id req-index-001 --idempotency-key idem-index-001
+python -m pc_system.cli release-model-feature-index --project-root .\workspace --index-id index-production-001 --release-id index-release-001 --action activate --reason production --actor alice --operation-id op-index-release-001 --request-id req-index-release-001 --idempotency-key idem-index-release-001
+python -m pc_system.cli retrieve-model-candidates --project-root .\workspace --retrieval-run-id retrieval-001 --source-kind correction_release --asset-id scan-a --source-id release-001 --instance-id pump-001 --top-k 10 --actor alice --operation-id op-retrieval-001 --request-id req-retrieval-001 --idempotency-key idem-retrieval-001
+python -m pc_system.cli show-model-retrieval --project-root .\workspace --asset-id scan-a --source-id release-001 --instance-id pump-001 --retrieval-run-id retrieval-001
 ```
 
 ## 关键 API / Key APIs
@@ -257,6 +266,14 @@ python -m pc_system.cli list-model-representations --project-root .\workspace --
 | `PATCH /runs/<asset_id>/jobs/<job_id>/steps/<step_id>` | 更新 job step。 |
 | `GET /deployment/<asset_id>` | 部署检查清单。 |
 | `GET /delivery/<asset_id>/status` | 交付状态。 |
+| `POST /model-matching/retrieval-configs` | 发布不可变检索配置。 |
+| `GET /model-matching/retrieval-configs` | 查询检索配置。 |
+| `POST /model-matching/feature-indexes` | 构建生产或 Challenger 特征索引。 |
+| `GET /model-matching/feature-indexes` | 查询已验证索引。 |
+| `POST /model-matching/feature-index-releases` | 激活或回滚生产索引。 |
+| `GET /model-matching/feature-index-releases` | 查询索引发布历史。 |
+| `POST /model-matching/retrievals` | 执行生产或实验 Top-K 检索。 |
+| `GET /model-matching/retrievals/<asset_id>/<source_id>/<instance_id>/<retrieval_run_id>` | 读取已验证检索报告。 |
 
 ## 主要前端入口 / Frontend Entrypoints
 
@@ -269,7 +286,7 @@ python -m pc_system.cli list-model-representations --project-root .\workspace --
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. Phase 15B-2：基于已完成的确定性采样实现版本化特征和混合 Top-K 检索。
+1. Phase 15B-2：本地开发与门禁完成后统一推送、创建 PR 和合并。
 2. Phase 15C：实现刚性粗配准、多尺度 ICP 和残差门禁。
 3. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
 4. Phase 15E：接入受验证的实物参考点云模板。

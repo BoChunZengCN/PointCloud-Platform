@@ -93,21 +93,41 @@ def recovery_project(tmp_path):
         operation_id="op-index-release-production-001",
         expected_current_release_id=None,
     )
+    challenger = _build_index(
+        tmp_path,
+        index_id="index-challenger-recovery",
+        operation_id="op-index-challenger-recovery",
+        index_mode="challenger",
+        historical_releases=[
+            {
+                "model_id": "pump-a",
+                "release_id": prepared["pump_v1_release"]["release_id"],
+            }
+        ],
+    )
     return {
         "root": tmp_path,
         "prepared": prepared,
         "index": index,
         "release": release,
+        "challenger": challenger,
     }
 
 
-def _build_index(root, *, index_id, operation_id):
+def _build_index(
+    root,
+    *,
+    index_id,
+    operation_id,
+    index_mode="production",
+    historical_releases=None,
+):
     return build_model_feature_index(
         root,
         index_id=index_id,
-        index_mode="production",
+        index_mode=index_mode,
         config_id="retrieval-v1",
-        historical_releases=None,
+        historical_releases=historical_releases,
         principal=EXPERT,
         operation_id=operation_id,
         request_id=f"req-{operation_id}",
@@ -148,7 +168,7 @@ def _retrieve(root, *, run_id="retrieval-recovery-001", operation_id="op-retriev
         source_id="run-recovery-001",
         instance_id="obj-001",
         index_release_id=None,
-        index_id=None,
+        index_id="index-challenger-recovery",
         top_k=10,
         keywords=[],
         tags=[],

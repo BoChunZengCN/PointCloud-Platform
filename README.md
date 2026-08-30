@@ -95,6 +95,7 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 14 | 分割纠正闭环 / Segmentation correction loop | 已完成 / Done | 人工确认、合并、拆分、改类、发布和反馈数据。 |
 | Phase 15A | CAD 模型库基础 / CAD model library foundation | 已完成 / Done | 不可变模型资产与版本、网格导入、可信身份、幂等操作和哈希链审计。 |
 | Phase 15B-1 | 版本发布与确定性采样 / Version release and deterministic sampling | 已完成 / Done | 模型版本激活、历史查询、受审计回滚及不可变网格表面采样表达。 |
+| Phase 15B-2 | 版本化特征与混合候选检索 / Versioned features and hybrid retrieval | 已完成 / Done | Phase 14/13A 对象输入、生产/Challenger 索引、可解释 Top-K、索引发布回滚和审计恢复。 |
 
 ## 技术路线 / Technical Routes
 
@@ -813,3 +814,34 @@ python -m pc_system.cli list-model-representations `
 ```
 
 相同源版本、点数、随机种子和算法版本会确定性复用同一表达；回滚只改变当前发布投影，不修改历史版本或采样数据。完整说明见 `docs/phase15b1-versioned-model-sampling.md`。
+
+### Phase 15B-2 版本化特征与混合模型检索
+
+Phase 15B-2 已打通“Phase 14 已审查对象 → 同构几何特征 → 不可变生产索引 → 可解释 Top-K 候选”的完整闭环。系统同时支持旧 Phase 14 发布安全软评分、Phase 13A Challenger 实验检索、索引覆盖率门禁、激活历史、陈旧检测和受审计回滚。
+
+```powershell
+python -m pc_system.cli build-model-feature-index `
+  --project-root workspace `
+  --index-id index-production-001 `
+  --index-mode production `
+  --config-id retrieval-v1 `
+  --actor alice `
+  --operation-id op-index-001 `
+  --request-id req-index-001 `
+  --idempotency-key idem-index-001
+
+python -m pc_system.cli retrieve-model-candidates `
+  --project-root workspace `
+  --retrieval-run-id retrieval-001 `
+  --source-kind correction_release `
+  --asset-id scan-a `
+  --source-id release-001 `
+  --instance-id pump-001 `
+  --top-k 10 `
+  --actor alice `
+  --operation-id op-retrieval-001 `
+  --request-id req-retrieval-001 `
+  --idempotency-key idem-retrieval-001
+```
+
+检索结果包含类别、文本、厂商型号、尺寸、形状和空间占用等分量解释，以及降级原因和风险。该阶段不执行配准或自动绑定；刚性配准属于 Phase 15C。完整操作、API、恢复和阶段边界见 `docs/phase15b2-hybrid-model-retrieval.md`。
