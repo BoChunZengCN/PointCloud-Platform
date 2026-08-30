@@ -95,7 +95,9 @@ def test_score_components_are_explainable_and_missing_weights_are_renormalized()
     assert set(result["components"]) == {
         "category", "terms", "manufacturer_model", "dimensions", "shape", "occupancy"
     }
-    assert sum(result["effective_weights"].values()) == 1.0
+    assert sum(result["effective_weights"].values()) == pytest.approx(
+        1.0, abs=1e-12
+    )
     assert metadata_only["risks"] == ["geometry_degenerate", "metadata_only"]
     assert set(metadata_only["effective_weights"]) == {"category", "terms", "manufacturer_model"}
 
