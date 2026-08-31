@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-31
 
-**状态：** 已完成会话设计确认，等待书面规格终审
+**状态：** 书面规格已终审确认
 
 **目标分支：** `codex/phase15c-rigid-registration`
 
@@ -160,6 +160,8 @@ Open3D 作为可选依赖单独声明。缺失或版本不兼容时返回 `regis
 
 负责主流程编排、权限、幂等操作、审计事件、候选工件、原子发布、失败终态和重放。
 
+引擎解析必须发生在审计操作成功开始之后。API/CLI 只传入受控引擎 resolver；依赖缺失或版本不兼容由领域编排记录 `registration_engine_unavailable`，不能在审计边界之外提前失败。
+
 API 和 CLI 只做边界输入校验及调用，不复制算法或门禁逻辑。
 
 ## 7. Phase 15B-2 候选契约升级
@@ -254,6 +256,8 @@ API 和 CLI 只做边界输入校验及调用，不复制算法或门禁逻辑�
 - `failed`：只允许作为诊断性失败报告；`gate_status` 和正式矩阵必须为空，不能进入 Phase 15D 确认流程。
 
 `rejected` 是成功完成计算后的质量结论，不等同于系统执行失败。
+
+所有 `rigid_transform_4x4` 采用唯一方向：把候选模型采样表达中的点从模型坐标系变换到对象点云坐标系。引擎适配器、指标计算、预览工件和 Phase 15D 后续绑定必须使用同一方向；需要逆变换时由调用方显式计算并标注，不能复用同一字段名。
 
 ## 10. 配准算法
 
@@ -476,10 +480,11 @@ Phase 15C 新增或稳定使用：
 - `registration_input_incomplete`
 - `object_fingerprint_stale`
 - `registration_engine_unavailable`
+- `registration_engine_failed`
 - `registration_config_invalid`
-- `coarse_registration_failed`
-- `fine_registration_failed`
-- `non_rigid_transform`
+- `coarse_registration_failed`，仅作为报告中的稳定质量原因码
+- `fine_registration_failed`，仅作为报告中的稳定质量原因码
+- `non_rigid_transform`，引擎输出违反契约时作为引擎失败原因
 - `registration_gate_rejected`，仅作为报告中的稳定质量原因码
 - `ambiguous_symmetric_pose`
 - `artifact_integrity_failed`
@@ -487,7 +492,9 @@ Phase 15C 新增或稳定使用：
 - `idempotency_conflict`
 - `operation_busy`
 
-质量门禁拒绝必须作为已完成报告返回，并以 `registration_gate_rejected` 记录在 `gate_reasons`；它不是传输层异常，不得映射成 HTTP 4xx/5xx 或 CLI 非零执行错误。输入损坏、权限失败、引擎异常和发布失败使用现有统一 API/CLI 错误映射规则。
+没有合法粗配准或精配准假设属于几何质量结论：系统发布 `completed/rejected` 报告，并把 `coarse_registration_failed` 或 `fine_registration_failed` 写入 `gate_reasons`。其他质量门禁拒绝以 `registration_gate_rejected` 记录。上述质量原因都不是传输层异常，不得映射成 HTTP 4xx/5xx 或 CLI 非零执行错误。
+
+输入损坏和陈旧使用 4xx；引擎缺失、引擎运行异常、非法引擎矩阵和发布失败使用现有 503 服务错误规则。引擎故障必须审计，允许保存不含正式矩阵和门禁状态的诊断性 `failed` 报告。
 
 ## 18. 测试策略
 
