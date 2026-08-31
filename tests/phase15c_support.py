@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from phase15b2_support import AUDITOR, EXPERT
 
 
@@ -99,6 +101,13 @@ IDENTITY_TRANSFORM = [
 ]
 
 
+def prepare_schema_1_1_retrieval(project_root: Path) -> dict:
+    from test_phase15b2_retrieval import _prepare_project, _retrieve
+
+    _prepare_project(project_root)
+    return _retrieve(project_root)
+
+
 __all__ = [
     "AUDITOR",
     "EXPERT",
@@ -106,4 +115,5 @@ __all__ = [
     "MODEL_POINTS",
     "OBJECT_POINTS",
     "REGISTRATION_V1",
+    "prepare_schema_1_1_retrieval",
 ]
