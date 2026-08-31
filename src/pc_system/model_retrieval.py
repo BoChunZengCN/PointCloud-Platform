@@ -37,6 +37,13 @@ _OWNER_FIELDS = {
     "request_id",
     "request_fingerprint",
 }
+_REGISTRATION_EVIDENCE_FIELDS = {
+    "release_id",
+    "representation_id",
+    "representation_fingerprint",
+    "feature_id",
+    "feature_vector_fingerprint",
+}
 
 
 def _round(value: float) -> float:
@@ -152,6 +159,11 @@ def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
     return {
         "model_id": candidate["model_id"],
         "version_id": candidate["version_id"],
+        "release_id": candidate["release_id"],
+        "representation_id": candidate["representation_id"],
+        "representation_fingerprint": candidate["representation_fingerprint"],
+        "feature_id": candidate["feature_id"],
+        "feature_vector_fingerprint": candidate["feature_vector_fingerprint"],
         "score": _round(total),
         "components": components,
         "effective_weights": effective,
@@ -161,6 +173,28 @@ def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
 
 def _hash(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _validate_retrieval_contract_version(report: dict, candidates: dict) -> str:
+    report_version = report.get("schema_version")
+    candidates_version = candidates.get("schema_version")
+    if report_version not in {"1.0", "1.1"} or candidates_version != report_version:
+        raise ValueError("retrieval schema versions differ")
+    items = candidates.get("candidates")
+    if type(items) is not list:
+        raise ValueError("retrieval candidate schema is invalid")
+    if report_version == "1.1":
+        for candidate in items:
+            if (
+                type(candidate) is not dict
+                or any(
+                    type(candidate.get(field)) is not str
+                    or not candidate[field]
+                    for field in _REGISTRATION_EVIDENCE_FIELDS
+                )
+            ):
+                raise ValueError("retrieval candidate evidence is incomplete")
+    return report_version
 
 
 def _child(prefix: str, operation_id: str) -> tuple[str, str, str]:
@@ -219,6 +253,7 @@ def load_model_retrieval(project_root: Path, *, asset_id: str, source_id: str, i
     candidates = _read(directory / "candidates.json")
     report = _read(directory / "retrieval_report.json")
     try:
+        _validate_retrieval_contract_version(report, candidates)
         snapshot = read_verified_operation_snapshot(root, report["operation_id"])
         operation = snapshot["operation"]
         completed = [event for event in snapshot["events"] if event["event_type"] == "model_retrieval.completed"]
@@ -385,9 +420,9 @@ def retrieve_model_candidates(
         ensure_operation_event(root, operation_id, "model_retrieval.input_verified", {"object_fingerprint": query_object["object_fingerprint"], "index_id": selected_index_id})
         snapshot = read_verified_operation_snapshot(root, operation_id)
         first_event = snapshot["events"][0]
-        candidates_artifact = {"schema_version": "1.0", "candidates": returned}
+        candidates_artifact = {"schema_version": "1.1", "candidates": returned}
         report = {
-            "schema_version": "1.0", "retrieval_run_id": retrieval_run_id, "asset_id": asset_id,
+            "schema_version": "1.1", "retrieval_run_id": retrieval_run_id, "asset_id": asset_id,
             "source_id": source_id, "instance_id": instance_id, "source_kind": source_kind,
             "object_fingerprint": query_object["object_fingerprint"], "query_feature_id": query_feature["feature_id"],
             "query_feature_fingerprint": _hash(query_feature), "index_release_id": selected_release_id,

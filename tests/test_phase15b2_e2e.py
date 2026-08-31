@@ -5,6 +5,7 @@ import pytest
 from pc_system.model_feature_index import (
     build_model_feature_index,
     load_model_feature_index,
+    read_index_entries,
 )
 from pc_system.model_index_release import release_model_feature_index
 from pc_system.model_matching_audit import (
@@ -202,7 +203,26 @@ def test_published_object_to_explainable_top_k_and_index_rollback(tmp_path):
     prepared = _prepare_project(tmp_path)
     report = _retrieve(tmp_path)
 
+    assert report["schema_version"] == "1.1"
     assert report["candidates"][0]["model_id"] == "pump-a"
+    assert report["candidates"][0]["release_id"] == prepared["pump_v2_release"]["release_id"]
+    assert (
+        report["candidates"][0]["representation_id"]
+        == prepared["pump_v2_representation"]["representation_id"]
+    )
+    indexed = next(
+        entry
+        for entry in read_index_entries(tmp_path, report["index_id"])
+        if entry["model_id"] == "pump-a"
+    )
+    for field in (
+        "release_id",
+        "representation_id",
+        "representation_fingerprint",
+        "feature_id",
+        "feature_vector_fingerprint",
+    ):
+        assert report["candidates"][0][field] == indexed[field]
     assert set(report["candidates"][0]["components"]) >= {
         "category",
         "dimensions",
