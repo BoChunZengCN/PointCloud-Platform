@@ -3,7 +3,7 @@ name = "pc-system"
 version = "0.1.0"
 description = "Phase 1 point cloud LAS/LAZ processing system"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["numpy>=2,<3"]
 
 [project.scripts]
 pc-system = "pc_system.cli:main"
@@ -12,6 +12,7 @@ pc-system = "pc_system.cli:main"
 las = ["laspy"]
 api = ["fastapi", "uvicorn"]
 models = ["trimesh>=4,<5"]
+registration = ["open3d>=0.19,<1"]
 test = [
   "pytest>=8,<9",
   "fastapi>=0.115,<1",

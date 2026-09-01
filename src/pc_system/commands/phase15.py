@@ -32,6 +32,15 @@ from pc_system.model_retrieval import (
 from pc_system.model_retrieval_config import (
     publish_retrieval_config,
 )
+from pc_system.model_registration import (
+    load_model_registration,
+    register_model_candidate,
+)
+from pc_system.model_registration_config import (
+    list_registration_configs,
+    publish_registration_config,
+)
+from pc_system.model_registration_open3d import resolve_registration_engine
 
 
 _MAX_PROVENANCE_BYTES = 1024 * 1024
@@ -615,6 +624,99 @@ def run_show_model_retrieval(
         source_id=source_id,
         instance_id=instance_id,
         retrieval_run_id=retrieval_run_id,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_publish_model_registration_config(
+    project_root: Path,
+    *,
+    config_id: str,
+    config_path: Path,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    config = _load_phase15b2_json(
+        config_path,
+        expected_type=dict,
+        code="registration_config_invalid",
+        message="Registration configuration must be a safe JSON object.",
+    )
+    result = publish_registration_config(
+        project_root,
+        config_id=config_id,
+        config=config,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_list_model_registration_configs(project_root: Path) -> int:
+    print(
+        json.dumps(
+            list_registration_configs(project_root),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def run_register_model_candidate(
+    project_root: Path,
+    *,
+    registration_id: str,
+    asset_id: str,
+    source_id: str,
+    instance_id: str,
+    retrieval_run_id: str,
+    candidate_rank: int,
+    config_id: str,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    report = register_model_candidate(
+        project_root,
+        registration_id=registration_id,
+        asset_id=asset_id,
+        source_id=source_id,
+        instance_id=instance_id,
+        retrieval_run_id=retrieval_run_id,
+        candidate_rank=candidate_rank,
+        config_id=config_id,
+        engine_resolver=resolve_registration_engine,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_show_model_registration(
+    project_root: Path,
+    *,
+    asset_id: str,
+    source_id: str,
+    instance_id: str,
+    registration_id: str,
+) -> int:
+    report = load_model_registration(
+        project_root,
+        asset_id=asset_id,
+        source_id=source_id,
+        instance_id=instance_id,
+        registration_id=registration_id,
     )
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0

@@ -96,6 +96,7 @@ The second route targets raw FLS scan files. The current implementation provides
 | Phase 15A | CAD 模型库基础 / CAD model library foundation | 已完成 / Done | 不可变模型资产与版本、网格导入、可信身份、幂等操作和哈希链审计。 |
 | Phase 15B-1 | 版本发布与确定性采样 / Version release and deterministic sampling | 已完成 / Done | 模型版本激活、历史查询、受审计回滚及不可变网格表面采样表达。 |
 | Phase 15B-2 | 版本化特征与混合候选检索 / Versioned features and hybrid retrieval | 已完成 / Done | Phase 14/13A 对象输入、生产/Challenger 索引、可解释 Top-K、索引发布回滚和审计恢复。 |
+| Phase 15C | 刚性配准与质量门禁 / Rigid registration and quality gates | 已完成 / Done | 冻结候选证据、FPFH/RANSAC/FGR、多尺度 ICP、三态门禁、不可变工件和审计恢复。 |
 
 ## 技术路线 / Technical Routes
 
@@ -845,3 +846,9 @@ python -m pc_system.cli retrieve-model-candidates `
 ```
 
 检索结果包含类别、文本、厂商型号、尺寸、形状和空间占用等分量解释，以及降级原因和风险。该阶段不执行配准或自动绑定；刚性配准属于 Phase 15C。完整操作、API、恢复和阶段边界见 `docs/phase15b2-hybrid-model-retrieval.md`。
+
+### Phase 15C 刚性配准与质量门禁
+
+Phase 15C 已完成“冻结候选证据 → 有界初始姿态 → Open3D 粗/精配准 → 刚性矩阵验证 → 双向覆盖与残差 → passed/review_required/rejected 三态报告”的闭环。所有自动运行均绑定可信主体、幂等请求、不可变工件和哈希链审计；矩阵始终把模型坐标变换到对象点云坐标。
+
+本阶段不自动建立对象—模型绑定。人工确认、换候选、拒绝和版本化绑定属于 Phase 15D。安装、CLI/API、发布恢复和错误处理见 `docs/phase15c-rigid-registration.md`。

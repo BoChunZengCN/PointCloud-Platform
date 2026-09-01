@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from pc_system.model_feature_index import build_model_feature_index
+import pc_system.model_retrieval as retrieval_module
+
+from pc_system.model_feature_index import build_model_feature_index, read_index_entries
 from pc_system.model_index_release import release_model_feature_index
 from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_retrieval import (
@@ -57,6 +59,11 @@ def _candidate(**overrides):
     value = {
         "model_id": "pump-a",
         "version_id": "v1",
+        "release_id": "release-pump-v1",
+        "representation_id": "cad-sampled-example",
+        "representation_fingerprint": "a" * 64,
+        "feature_id": "model-feature-example",
+        "feature_vector_fingerprint": "b" * 64,
         "category_id": "pump",
         "keyword_terms": ["centrifugal"],
         "tag_terms": ["industrial"],
@@ -121,6 +128,45 @@ def test_weighted_terms_shape_and_occupancy_scores_are_bounded():
     assert 0.0 < result["components"]["terms"]["score"] < 1.0
     assert result["components"]["shape"]["score"] == 0.9
     assert result["components"]["occupancy"]["score"] == 0.75
+
+
+def test_score_candidate_freezes_model_representation_evidence():
+    result = score_candidate(_query(), _candidate(), SCORING_V1)
+
+    assert {
+        key: result[key]
+        for key in (
+            "release_id",
+            "representation_id",
+            "representation_fingerprint",
+            "feature_id",
+            "feature_vector_fingerprint",
+        )
+    } == {
+        "release_id": "release-pump-v1",
+        "representation_id": "cad-sampled-example",
+        "representation_fingerprint": "a" * 64,
+        "feature_id": "model-feature-example",
+        "feature_vector_fingerprint": "b" * 64,
+    }
+
+
+def test_retrieval_contract_version_accepts_legacy_read_only_and_rejects_mismatch():
+    assert hasattr(retrieval_module, "_validate_retrieval_contract_version")
+    validate = retrieval_module._validate_retrieval_contract_version
+
+    assert validate(
+        {"schema_version": "1.0"},
+        {
+            "schema_version": "1.0",
+            "candidates": [{"model_id": "pump-a", "version_id": "v1"}],
+        },
+    ) == "1.0"
+    with pytest.raises(ValueError, match="schema"):
+        validate(
+            {"schema_version": "1.1"},
+            {"schema_version": "1.0", "candidates": []},
+        )
 
 
 def _points():
@@ -253,14 +299,33 @@ def _retrieve(project, *, sequence=1, **overrides):
 
 
 def test_production_retrieval_applies_confirmed_category_filter_and_is_replayable(tmp_path):
-    _prepare_project(tmp_path)
+    prepared, _release = _prepare_project(tmp_path)
 
     report = _retrieve(tmp_path)
 
+    assert report["schema_version"] == "1.1"
     assert report["category_filter"]["applied"] is True
     assert report["category_filter"]["category_id"] == "pump"
     assert report["candidate_counts"] == {"before_filter": 2, "after_filter": 1, "scored": 1, "returned": 1}
     assert report["candidates"][0]["model_id"] == "pump-a"
+    assert report["candidates"][0]["release_id"] == prepared["pump_v2_release"]["release_id"]
+    assert (
+        report["candidates"][0]["representation_id"]
+        == prepared["pump_v2_representation"]["representation_id"]
+    )
+    indexed = next(
+        entry
+        for entry in read_index_entries(tmp_path, report["index_id"])
+        if entry["model_id"] == "pump-a"
+    )
+    for field in (
+        "release_id",
+        "representation_id",
+        "representation_fingerprint",
+        "feature_id",
+        "feature_vector_fingerprint",
+    ):
+        assert report["candidates"][0][field] == indexed[field]
     assert _retrieve(tmp_path) == report
     assert load_model_retrieval(
         tmp_path,
