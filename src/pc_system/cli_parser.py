@@ -472,6 +472,51 @@ def build_parser() -> argparse.ArgumentParser:
     show_retrieval.add_argument("--source-id", required=True)
     show_retrieval.add_argument("--instance-id", required=True)
     show_retrieval.add_argument("--retrieval-run-id", required=True)
+
+    publish_registration_config = subparsers.add_parser(
+        "publish-model-registration-config",
+        help="发布不可变的 Phase 15C 刚性配准配置。",
+    )
+    publish_registration_config.add_argument("--project-root", required=True, type=Path)
+    publish_registration_config.add_argument("--config-id", required=True)
+    publish_registration_config.add_argument("--config", required=True, type=Path)
+    publish_registration_config.add_argument("--actor", required=True)
+    publish_registration_config.add_argument("--operation-id", required=True)
+    publish_registration_config.add_argument("--request-id", required=True)
+    publish_registration_config.add_argument("--idempotency-key", required=True)
+
+    list_registration_configs = subparsers.add_parser(
+        "list-model-registration-configs",
+        help="列出已验证的刚性配准配置。",
+    )
+    list_registration_configs.add_argument("--project-root", required=True, type=Path)
+
+    register_candidate = subparsers.add_parser(
+        "register-model-candidate",
+        help="对检索候选执行可审计的刚性配准。",
+    )
+    register_candidate.add_argument("--project-root", required=True, type=Path)
+    register_candidate.add_argument("--registration-id", required=True)
+    register_candidate.add_argument("--asset-id", required=True)
+    register_candidate.add_argument("--source-id", required=True)
+    register_candidate.add_argument("--instance-id", required=True)
+    register_candidate.add_argument("--retrieval-run-id", required=True)
+    register_candidate.add_argument("--candidate-rank", required=True, type=int)
+    register_candidate.add_argument("--config-id", required=True)
+    register_candidate.add_argument("--actor", required=True)
+    register_candidate.add_argument("--operation-id", required=True)
+    register_candidate.add_argument("--request-id", required=True)
+    register_candidate.add_argument("--idempotency-key", required=True)
+
+    show_registration = subparsers.add_parser(
+        "show-model-registration",
+        help="读取已验证的刚性配准报告。",
+    )
+    show_registration.add_argument("--project-root", required=True, type=Path)
+    show_registration.add_argument("--asset-id", required=True)
+    show_registration.add_argument("--source-id", required=True)
+    show_registration.add_argument("--instance-id", required=True)
+    show_registration.add_argument("--registration-id", required=True)
     return parser
 
 

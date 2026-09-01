@@ -41,6 +41,15 @@ from pc_system.model_release import (
     load_current_model_release,
     release_model_version,
 )
+from pc_system.model_registration import (
+    load_model_registration,
+    register_model_candidate,
+)
+from pc_system.model_registration_config import (
+    list_registration_configs,
+    publish_registration_config,
+)
+from pc_system.model_registration_open3d import resolve_registration_engine
 from pc_system.model_retrieval import (
     load_model_retrieval,
     retrieve_model_candidates,
@@ -214,6 +223,8 @@ _PHASE15_NOT_FOUND = {
     "model_version_not_found",
     "operation_not_found",
     "retrieval_object_not_found",
+    "registration_config_not_found",
+    "model_registration_not_found",
 }
 _PHASE15_CONFLICT = {
     "idempotency_conflict",
@@ -227,6 +238,8 @@ _PHASE15_CONFLICT = {
     "operation_busy",
     "operation_exists",
     "stale_model_release",
+    "object_fingerprint_stale",
+    "artifact_integrity_failed",
 }
 _PHASE15_SERVICE_UNAVAILABLE = {
     "audit_persistence_error",
@@ -238,6 +251,9 @@ _PHASE15_SERVICE_UNAVAILABLE = {
     "model_version_reservation_integrity_error",
     "operation_persistence_failed",
     "publication_recovery_required",
+    "registration_engine_unavailable",
+    "registration_engine_failed",
+    "non_rigid_transform",
 }
 _PHASE15_BAD_REQUEST = {
     "feature_config_invalid",
@@ -257,6 +273,8 @@ _PHASE15_BAD_REQUEST = {
     "model_source_read_error",
     "model_source_too_large",
     "no_candidate_models",
+    "registration_config_invalid",
+    "registration_input_incomplete",
 }
 _REPARSE_POINT = 0x400
 MAX_PHASE15_REQUEST_BODY_BYTES = 1024 * 1024
@@ -606,6 +624,7 @@ def create_app(
     api_key: str | None = None,
     run_mode: str | None = None,
     principal_bindings: dict | None = None,
+    registration_engine_resolver=resolve_registration_engine,
 ) -> FastAPI:
     """创建最小 API 应用。"""
 
@@ -1189,6 +1208,121 @@ def create_app(
             source_id=source_id,
             instance_id=instance_id,
             retrieval_run_id=retrieval_run_id,
+        )
+
+    @app.post(
+        "/model-matching/registration-configs",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_model_registration_config(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/registration-configs",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "config_id",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        captured = _capture_phase15b2_payload(payload, text_fields | {"config"})
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            object_fields={"config"},
+        )
+        return phase15_action(
+            publish_registration_config,
+            project_root,
+            config_id=values["config_id"],
+            config=values["config"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-matching/registration-configs")
+    def get_model_registration_configs(request: Request) -> dict:
+        require_phase15_principal(
+            request,
+            route="GET /model-matching/registration-configs",
+            allowed_roles={"expert", "auditor"},
+        )
+        configs = phase15_action(list_registration_configs, project_root)
+        return {"config_count": len(configs), "configs": configs}
+
+    @app.post("/model-matching/registrations")
+    async def post_model_registration(request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="POST /model-matching/registrations",
+            allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request)
+        text_fields = {
+            "registration_id",
+            "asset_id",
+            "source_id",
+            "instance_id",
+            "retrieval_run_id",
+            "config_id",
+            "operation_id",
+            "request_id",
+            "idempotency_key",
+        }
+        captured = _capture_phase15b2_payload(
+            payload, text_fields | {"candidate_rank"}
+        )
+        values = _require_payload_shape(
+            captured,
+            text_fields=text_fields,
+            integer_fields={"candidate_rank"},
+        )
+        return phase15_action(
+            register_model_candidate,
+            project_root,
+            registration_id=values["registration_id"],
+            asset_id=values["asset_id"],
+            source_id=values["source_id"],
+            instance_id=values["instance_id"],
+            retrieval_run_id=values["retrieval_run_id"],
+            candidate_rank=values["candidate_rank"],
+            config_id=values["config_id"],
+            engine_resolver=registration_engine_resolver,
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+            idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get(
+        "/model-matching/registrations/{asset_id}/{source_id}/{instance_id}/{registration_id}"
+    )
+    def get_model_registration(
+        asset_id: str,
+        source_id: str,
+        instance_id: str,
+        registration_id: str,
+        request: Request,
+    ) -> dict:
+        require_phase15_principal(
+            request,
+            route=(
+                "GET /model-matching/registrations/"
+                "{asset_id}/{source_id}/{instance_id}/{registration_id}"
+            ),
+            allowed_roles={"expert", "auditor"},
+        )
+        return phase15_action(
+            load_model_registration,
+            project_root,
+            asset_id=asset_id,
+            source_id=source_id,
+            instance_id=instance_id,
+            registration_id=registration_id,
         )
 
     @app.get("/audit/operations/{operation_id}")

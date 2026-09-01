@@ -222,7 +222,7 @@ LAS/LAZ or FLS source
 | P15-M2.6 特征索引与发布 / Feature index and release | 已完成 / Done | 构建不可变生产/Challenger 索引，自动采样、覆盖率门禁、激活、历史、陈旧检测和回滚。 | index manifest, release history |
 | P15-M2.7 可解释 Top-K 检索 / Explainable Top-K retrieval | 已完成 / Done | 混合类别、文本、厂商型号、尺寸、形状和占用评分，输出降级原因与风险。 | candidates, retrieval report |
 | P15-M2.8 公共入口与恢复 / Public surfaces and recovery | 已完成 / Done | 七个 CLI、八个 API、可信身份、幂等重放、哈希链审计和端到端恢复。 | CLI, API, audit events |
-| Phase 15C 刚性配准 / Rigid registration | 已规划 / Planned | FPFH/RANSAC/FGR、ICP 和残差质量门禁。 | rigid transform, quality gate |
+| Phase 15C 刚性配准 / Rigid registration | 已完成 / Done | 候选证据冻结、FPFH/RANSAC/FGR、多尺度 ICP、双向指标、三态门禁和审计恢复；不自动绑定。 | rigid transform, quality gate, registration report |
 | Phase 15D 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
 | Phase 15E 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
 | Phase 15F 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
@@ -286,9 +286,8 @@ python -m pc_system.cli show-model-retrieval --project-root .\workspace --asset-
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. Phase 15B-2：本地开发与门禁完成后统一推送、创建 PR 和合并。
-2. Phase 15C：实现刚性粗配准、多尺度 ICP 和残差门禁。
-3. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
+1. Phase 15C：完成最终门禁后统一推送、创建 PR 和合并。
+2. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
 4. Phase 15E：接入受验证的实物参考点云模板。
 5. Phase 15F：实现受控参数优化、审批、推广和回滚。
 

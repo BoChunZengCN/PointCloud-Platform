@@ -50,12 +50,16 @@ from pc_system.commands.phase15 import (
     run_list_model_feature_index_releases,
     run_list_model_feature_indexes,
     run_list_model_representations,
+    run_list_model_registration_configs,
     run_list_model_releases,
     run_release_model_feature_index,
     run_release_model_version,
     run_retrieve_model_candidates,
+    run_publish_model_registration_config,
+    run_register_model_candidate,
     run_sample_model_version,
     run_show_model_retrieval,
+    run_show_model_registration,
 )
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
@@ -465,6 +469,41 @@ def main(
                 source_id=args.source_id,
                 instance_id=args.instance_id,
                 retrieval_run_id=args.retrieval_run_id,
+            )
+        if args.command == "publish-model-registration-config":
+            return run_publish_model_registration_config(
+                args.project_root,
+                config_id=args.config_id,
+                config_path=args.config,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "list-model-registration-configs":
+            return run_list_model_registration_configs(args.project_root)
+        if args.command == "register-model-candidate":
+            return run_register_model_candidate(
+                args.project_root,
+                registration_id=args.registration_id,
+                asset_id=args.asset_id,
+                source_id=args.source_id,
+                instance_id=args.instance_id,
+                retrieval_run_id=args.retrieval_run_id,
+                candidate_rank=args.candidate_rank,
+                config_id=args.config_id,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "show-model-registration":
+            return run_show_model_registration(
+                args.project_root,
+                asset_id=args.asset_id,
+                source_id=args.source_id,
+                instance_id=args.instance_id,
+                registration_id=args.registration_id,
             )
         raise ValueError(f"Unsupported command: {args.command}")
     except ModelMatchingError as exc:
