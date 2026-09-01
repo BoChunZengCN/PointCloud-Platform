@@ -12,6 +12,7 @@ pc-system = "pc_system.cli:main"
 las = ["laspy"]
 api = ["fastapi", "uvicorn"]
 models = ["trimesh>=4,<5"]
+registration = ["open3d>=0.19,<1"]
 test = [
   "pytest>=8,<9",
   "fastapi>=0.115,<1",
