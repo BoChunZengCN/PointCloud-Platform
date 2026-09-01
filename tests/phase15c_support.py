@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import copy
+import numpy as np
+
 from phase15b2_support import AUDITOR, EXPERT
 
 
@@ -108,12 +111,125 @@ def prepare_schema_1_1_retrieval(project_root: Path) -> dict:
     return _retrieve(project_root)
 
 
+class DeterministicRegistrationEngine:
+    def __init__(self, mode: str = "passed"):
+        self.mode = mode
+        self.calls = {
+            "preprocess": 0,
+            "coarse_register": 0,
+            "fine_register": 0,
+            "nearest_neighbor_evidence": 0,
+        }
+
+    def describe(self):
+        from pc_system.model_registration_engine import EngineDescription
+
+        return EngineDescription("deterministic-test", "1.0", False)
+
+    def preprocess(self, model_points, object_points, config):
+        self.calls["preprocess"] += 1
+        return {
+            "model_points": np.asarray(model_points, dtype=np.float64),
+            "object_points": np.asarray(object_points, dtype=np.float64),
+        }
+
+    def coarse_register(self, prepared, hypotheses, config):
+        self.calls["coarse_register"] += 1
+        if self.mode == "coarse_failed":
+            return []
+        return [
+            {
+                "hypothesis_id": hypotheses[0]["hypothesis_id"],
+                "source": hypotheses[0]["source"],
+                "matrix": self._matrix(),
+                "score": 0.90,
+                "coarse_metrics": {"rmse_m": 0.018, "fitness": 0.90},
+            }
+        ]
+
+    def fine_register(self, prepared, coarse_results, config):
+        self.calls["fine_register"] += 1
+        if self.mode == "fine_failed":
+            return []
+        coarse = coarse_results[0]
+        return [
+            {
+                **coarse,
+                "matrix": self._matrix(),
+                "score": 0.95,
+                "fine_metrics": {"rmse_m": 0.014, "fitness": 0.95},
+                "symmetry_equivalent": False,
+            }
+        ]
+
+    def nearest_neighbor_evidence(self, prepared, transform, config):
+        self.calls["nearest_neighbor_evidence"] += 1
+        observed_count = len(prepared["object_points"])
+        model_count = len(prepared["model_points"])
+        if self.mode == "rejected":
+            observed = [0.10] * observed_count
+            model = [0.10] * model_count
+        elif self.mode == "review_required":
+            observed = [0.01] * observed_count
+            split = max(1, model_count // 2)
+            model = [0.01] * split + [0.05] * (model_count - split)
+        else:
+            observed = [0.01] * observed_count
+            model = [0.01] * model_count
+        return {
+            "observed_to_model_distances_m": observed,
+            "model_to_observed_distances_m": model,
+            "normal_cosines": None,
+        }
+
+    def _matrix(self):
+        if self.mode == "non_rigid":
+            return [
+                [2.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 2.0],
+                [0.0, 0.0, 1.0, 3.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        return [
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 2.0],
+            [0.0, 0.0, 1.0, 3.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+
+
+def prepare_phase15c_case(project_root: Path) -> dict:
+    from pc_system.model_registration_config import publish_registration_config
+
+    retrieval = prepare_schema_1_1_retrieval(project_root)
+    config = copy.deepcopy(REGISTRATION_V1)
+    config["quality_gates"]["maximum_dimension_relative_error"] = 1.0
+    published = publish_registration_config(
+        project_root,
+        config_id="registration-v1",
+        config=config,
+        principal=EXPERT,
+        operation_id="op-registration-config-v1",
+        request_id="req-registration-config-v1",
+        idempotency_key="idem-registration-config-v1",
+    )
+    return {
+        "asset_id": retrieval["asset_id"],
+        "source_id": retrieval["source_id"],
+        "instance_id": retrieval["instance_id"],
+        "retrieval_run_id": retrieval["retrieval_run_id"],
+        "config_id": published["config_id"],
+    }
+
+
 __all__ = [
     "AUDITOR",
+    "DeterministicRegistrationEngine",
     "EXPERT",
     "IDENTITY_TRANSFORM",
     "MODEL_POINTS",
     "OBJECT_POINTS",
     "REGISTRATION_V1",
     "prepare_schema_1_1_retrieval",
+    "prepare_phase15c_case",
 ]
