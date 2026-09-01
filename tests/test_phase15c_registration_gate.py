@@ -84,7 +84,7 @@ def test_hard_quality_failures_are_rejected(metrics, reason):
 @pytest.mark.parametrize(
     "symmetry_equivalent,reason",
     [
-        (False, "ambiguous_pose"),
+        (False, "ambiguous_symmetric_pose"),
         (True, "equivalent_symmetric_pose"),
     ],
 )

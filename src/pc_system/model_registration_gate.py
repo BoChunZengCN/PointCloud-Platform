@@ -130,7 +130,9 @@ def evaluate_registration_gate(
             )
         if pose_score_margin < _number(policy, "minimum_pose_score_margin"):
             review_reasons.add(
-                "equivalent_symmetric_pose" if symmetry_equivalent else "ambiguous_pose"
+                "equivalent_symmetric_pose"
+                if symmetry_equivalent
+                else "ambiguous_symmetric_pose"
             )
 
     if reject_reasons:
