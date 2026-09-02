@@ -107,3 +107,55 @@ def test_api_duplicate_fields_are_rejected_before_domain_lookup(tmp_path):
     body = json.dumps(values)[:-1] + ', "decision":"no_match"}'
     response = client_for(tmp_path).post("/model-matching/decisions", content=body, headers=headers())
     assert response.status_code == 400 and response.json()["detail"]["code"] == "invalid_request_body"
+
+
+def cli_call(root, capsys, command, *, expert=False, **fields):
+    arguments = [command, "--project-root", str(root), "--actor", "cli-user"]
+    if expert:
+        arguments.append("--expert")
+    for key, value in fields.items():
+        if value is not None and value is not False:
+            arguments.append("--" + key.replace("_", "-"))
+            if value is not True:
+                arguments.append(str(value))
+    result = main(arguments)
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    return json.loads(captured.out)
+
+
+def test_cli_six_commands_use_the_same_immutable_chain(tmp_path, capsys):
+    case = prepare_decision_case(tmp_path)
+    page = cli_call(tmp_path, capsys, "list-model-decision-items", status="pending")
+    assert page["counts"]["pending"] == 1
+    first = cli_call(tmp_path, capsys, "decide-model-match", **payload(case))
+    assert first["binding"]["binding_id"] == "binding-1"
+    assert "rigid_transform_4x4" not in first["binding"]
+    publish_registration(tmp_path, sequence=2)
+    item = cli_call(tmp_path, capsys, "show-model-decision-item", case_id=case.request_fields["case_id"], expert=True)
+    common = dict(**case.identity, decision_reason="命令行专家复核", verification_scope="expert_pose")
+    second = cli_call(tmp_path, capsys, "supersede-model-binding", **common,
+        current_binding_id="binding-1", registration_id="registration-2", candidate_rank=1,
+        decision_id="decision-2", binding_id="binding-2", expected_case_revision=item["case_revision"],
+        operation_id="op-cli-replace", request_id="req-cli-replace", idempotency_key="idem-cli-replace")
+    assert second["binding"]["supersedes_binding_id"] == "binding-1"
+    item = cli_call(tmp_path, capsys, "show-model-decision-item", case_id=item["case_id"])
+    third = cli_call(tmp_path, capsys, "restore-model-binding", **common, current_binding_id="binding-2",
+        restores_binding_id="binding-1", decision_id="decision-3", binding_id="binding-3",
+        expected_case_revision=item["case_revision"], operation_id="op-cli-restore",
+        request_id="req-cli-restore", idempotency_key="idem-cli-restore")
+    assert third["binding"]["restores_binding_id"] == "binding-1"
+    bindings = cli_call(tmp_path, capsys, "list-model-bindings", history=True,
+                         **{key: case.identity[key] for key in ("asset_id", "source_id", "instance_id")})
+    assert [b["binding_id"] for b in bindings["history"]] == ["binding-3", "binding-2", "binding-1"]
+
+
+def test_cli_operator_cannot_use_expert_scope(tmp_path, capsys):
+    case = prepare_decision_case(tmp_path, mode="review_required")
+    values = payload(case, verification_scope="expert_pose")
+    arguments = ["decide-model-match", "--project-root", str(tmp_path), "--actor", "cli-user"]
+    for key, value in values.items():
+        if value is not None:
+            arguments.extend(["--" + key.replace("_", "-"), str(value)])
+    assert main(arguments) == 2
+    assert "decision_not_allowed" in capsys.readouterr().err

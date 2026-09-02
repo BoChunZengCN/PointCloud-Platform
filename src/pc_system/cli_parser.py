@@ -517,6 +517,48 @@ def build_parser() -> argparse.ArgumentParser:
     show_registration.add_argument("--source-id", required=True)
     show_registration.add_argument("--instance-id", required=True)
     show_registration.add_argument("--registration-id", required=True)
+    decision_commands = {
+        "list-model-decision-items": "查询待处理、已处理和陈旧的模型决定事项。",
+        "show-model-decision-item": "查看模型决定事项及可用操作。",
+        "decide-model-match": "确认、拒绝候选或声明无匹配。",
+        "list-model-bindings": "查看当前模型绑定和不可变历史。",
+        "supersede-model-binding": "专家替换当前模型绑定。",
+        "restore-model-binding": "专家从历史恢复为新的绑定版本。",
+    }
+    for name, description in decision_commands.items():
+        command = subparsers.add_parser(name, help=description)
+        command.add_argument("--project-root", required=True, type=Path)
+        command.add_argument("--actor", required=True)
+        transition = name in {"supersede-model-binding", "restore-model-binding"}
+        if not transition:
+            command.add_argument("--expert", action="store_true", help="以本地可信专家身份执行。")
+        if name == "list-model-decision-items":
+            command.add_argument("--status", choices=["all", "pending", "processed", "stale"], default="all")
+            command.add_argument("--limit", type=int, default=50)
+            for field in ("asset-id", "class-id", "gate-status", "decided-by", "started-at", "ended-at", "cursor"):
+                command.add_argument("--" + field)
+        if name in {"show-model-decision-item", "decide-model-match"}:
+            command.add_argument("--case-id", required=True)
+        if transition or name == "list-model-bindings":
+            for field in ("asset-id", "source-id", "instance-id"):
+                command.add_argument("--" + field, required=True)
+        if name == "list-model-bindings":
+            command.add_argument("--history", dest="include_history", action="store_true")
+        if transition or name == "decide-model-match":
+            for field in ("decision-id", "decision-reason", "expected-case-revision", "operation-id", "request-id", "idempotency-key"):
+                command.add_argument("--" + field, required=True)
+            command.add_argument("--verification-scope", required=True, choices=["identity", "operational_pose", "expert_pose"])
+            command.add_argument("--binding-id", required=transition)
+        if name == "decide-model-match":
+            command.add_argument("--decision", required=True, choices=["confirmed", "rejected", "no_match"])
+        if transition:
+            command.add_argument("--current-binding-id", required=True)
+            command.add_argument("--retrieval-run-id", required=True)
+        if name in {"decide-model-match", "supersede-model-binding"}:
+            command.add_argument("--registration-id", required=transition)
+            command.add_argument("--candidate-rank", type=int, required=transition)
+        if name == "restore-model-binding":
+            command.add_argument("--restores-binding-id", required=True)
     return parser
 
 
