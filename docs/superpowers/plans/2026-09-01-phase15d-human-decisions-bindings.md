@@ -1,14 +1,26 @@
 # Phase 15D 人工决策、不可变模型绑定与双界面实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **执行要求：** 用户已选择方式 2，在当前会话使用 `superpowers:executing-plans` 按任务推进，不启动子代理。步骤以复选框（`- [ ]`）跟踪。
 
 **目标：** 从 Phase 15C 有效配准报告自动投影人工待办，提供不可变确认/拒绝/无匹配决定、模型绑定替换与恢复，以及业务和专业双页面。
 
 **架构：** 继续使用当前文件持久化、内核资源锁和哈希链审计。`model_match_decision` 负责不可变提交包与写编排，`model_binding` 负责绑定结构和历史链，`model_decision_queue` 负责从 Phase 14/15B-2/15C/15D 权威工件动态投影清单；决定与可选绑定同目录发布，`commit.json` 最后决定可见性。
 
-**技术栈：** Python 3.11+、FastAPI、pytest、现有规范 JSON/no-replace 文件原语、原生 HTML/CSS/JavaScript、Node.js 行为探针。
+**技术栈：** Python 3.11+、FastAPI、pytest、现有规范 JSON/no-replace 文件原语、原生 HTML/CSS/JavaScript、Node.js 行为探针、Playwright Python/Chromium 真实浏览器验收。
 
 **规格：** `docs/superpowers/specs/2026-09-01-phase15d-human-decisions-bindings-design.md`
+
+**修订状态：** 2026-09-02 根据复审意见定向修订；本次仅编辑本计划与上述规格，尚未实施生产代码、依赖或 CI 变更。
+
+## 本次复审问题与验收对应
+
+| 问题 | 实施落点 | 必须补充的证据 |
+| --- | --- | --- |
+| 锁外审计完成与崩溃后绕过 | 任务 3、4 | commit 后暂停并发测试、owner 后进程退出恢复测试 |
+| 重放被最新修订拒绝 | 任务 4 | 完成重放、失败重放、冻结快照恢复 |
+| 普通确认新建第二条根链 | 任务 2、4、5 | 跨事项/检索运行、重新待办和陈旧绑定测试 |
+| 仅有 case_id 无法选择对象锁 | 任务 3、4、6、7 | 历史事项定位与锁内身份复验 |
+| 页面验收缺少真实浏览器 | 任务 8、9、10 | Chromium 实际页面/API 闭环、独立 CI 门禁 |
 
 ## 全局约束
 
@@ -20,9 +32,13 @@
 - 决定、绑定、owner 和提交清单使用规范 JSON 原始字节与 SHA-256；`commit.json` 最后发布。
 - 没有有效提交清单和已完成审计快照的提交包不公开。
 - 同一对象写入必须在 `model_resource_lock(project_root, "model-decision", asset_id, source_id, instance_id)` 内重新验证事项修订。
+- 对象锁覆盖 owner、决定、绑定、业务事件、commit、审计完成和公开读取验证；扫描包括该对象所有检索运行及未完成提交。别的操作有未完成 owner 时返回 `publication_recovery_required`，不得绕过。
+- 已完成重放先返回原结果；有 owner 的未完成操作按冻结历史快照恢复，不重新比较当前证据修订；恢复不能越过非法后继。此锁不提供 Phase 14/15C 跨阶段事务，冻结后上游变化由 `stale`/`pending` 反映。
+- 普通确认只有在对象完全没有绑定头时才能 create；有效头返回 `binding_exists`，陈旧头返回 `binding_stale`。替换/恢复接续原链，不新建根链。
 - 不创建可修改队列文件或 `current.json`；当前状态从不可变提交投影。
 - 不自动删除、移动、隔离或递归清理异常路径。
 - 核心测试使用 Phase 15C 确定性引擎，不要求安装 Open3D。
+- 浏览器测试使用独立 `browser-test` 依赖组；阶段和 CI 浏览器门禁不得因依赖/Chromium 缺失而 skip。
 - 页面采用现有原生前端风格，不引入构建框架；后端权限不能依赖按钮隐藏。
 - 项目资料和用户文案以中文为主，稳定错误码、API、CLI 和代码标识符保留英文。
 - 按 TDD 运行新增测试、聚焦模块测试，最终就绪时运行一次全仓测试。
@@ -49,6 +65,9 @@
 - `src/pc_system/commands/phase15.py`：Phase 15D CLI 适配器。
 - `frontend/index.html`：增加两个工作台入口。
 - `README.md`、`docs/current-development-inventory.md`、`docs/system-function-module-inventory.md`：阶段完成状态与后续目标。
+- `pyproject.toml`：新增 `browser-test` 可选依赖组（`pytest-playwright`、`uvicorn`），不改变生产依赖。
+- `.github/workflows/test.yml`：增加真实浏览器验收作业，保留现有后端测试。
+- `.gitignore`：忽略 `test-results/` 浏览器失败产物，不忽略测试源文件。
 
 ### 新增测试文件
 
@@ -62,6 +81,8 @@
 - `tests/test_phase15d_frontend.py`
 - `tests/test_phase15d_e2e.py`
 - `tests/test_phase15d_docs.py`
+- `tests/browser/conftest.py`：真实同源 HTTP 服务、临时数据及可信测试主体夹具。
+- `tests/browser/test_phase15d_workbenches.py`：业务/专业页面真实浏览器闭环。
 
 ---
 
@@ -90,6 +111,7 @@
 
 ```python
 from pc_system.model_matching_identity import Principal
+from pc_system.model_registration import register_model_candidate
 from phase15c_support import DeterministicRegistrationEngine, prepare_phase15c_case
 
 OPERATOR = Principal("operator-a", frozenset({"operator"}), "cli")
@@ -234,6 +256,8 @@ def test_create_binding_copies_only_authoritative_registration_fields():
 
 同时覆盖非刚性矩阵、跨对象引用、`create` 携带前驱、`supersede` 缺少当前绑定、`restore` 缺少历史目标、循环、分叉和两个当前头。
 
+新增断言：绑定头从对象全部提交投影，不因换检索运行或对象指纹变化而丢失；陈旧头仍是链头，只能由专家显式接续，不能再 create。
+
 - [ ] **Step 2：运行红灯测试**
 
 ```powershell
@@ -280,6 +304,7 @@ git commit -m "feat: add immutable model binding chains"
 
 - Modify: `src/pc_system/model_match_decision.py`
 - Create: `tests/test_phase15d_decision_store.py`
+- Modify: `tests/phase15d_support.py`
 
 **接口：**
 
@@ -288,7 +313,12 @@ git commit -m "feat: add immutable model binding chains"
   - `load_decision_bundle(project_root: Path, *, asset_id: str, source_id: str, instance_id: str, decision_id: str) -> dict`
   - `list_decision_bundles(project_root: Path, *, asset_id: str | None = None, source_id: str | None = None, instance_id: str | None = None) -> list[dict]`
   - `load_decision_context(project_root: Path, *, asset_id: str, source_id: str, instance_id: str, retrieval_run_id: str) -> dict`
-  - 私有 `_publish_decision_bundle_locked(project_root: Path, *, operation: dict, decision: dict, binding: dict | None, audit_events: list[dict]) -> dict`，仅供同模块对象锁事务调用。
+  - `resolve_decision_case_identity(project_root: Path, case_id: str) -> dict`：返回对象三标识、对象指纹、检索编号；历史工件参与定位。
+  - `load_operation_decision_result(project_root: Path, operation: dict) -> dict`：通过已验证 owner/commit 定位操作原提交，不依赖当前事项投影。
+  - 私有 `_inspect_object_decision_writes_locked(project_root: Path, *, identity: dict, operation: dict) -> dict | None`：扫描整个对象，返回本操作未完成 owner；其他操作有 owner 则阻断，异常工件失败关闭。
+  - 私有 `_prepare_decision_owner_locked(project_root: Path, *, request: dict, context: dict, operation: dict, principal: Principal, transition: str | None, restores_binding: dict | None) -> dict`：冻结规格 9.1 的输入快照并 no-replace 发布 owner。
+  - 私有 `_load_frozen_decision_context_locked(project_root: Path, *, owner: dict, operation: dict) -> dict`：复验请求指纹、历史证据和前驱，重建冻结上下文，不要求最新上游指纹等于旧快照。
+  - 私有 `_publish_decision_bundle_locked(project_root: Path, *, owner: dict, operation: dict, decision: dict, binding: dict | None) -> dict`：依次发布决定/可选绑定、幂等业务事件、最后 commit；仅供同模块对象锁事务调用。
 
 - [ ] **Step 1：编写提交清单红灯测试**
 
@@ -304,6 +334,8 @@ reports/model_match_decisions/<asset>/<source>/<instance>/<decision>/
 
 断言：没有 `commit.json` 不枚举；确认缺少 `binding.json` 不公开；拒绝/无匹配出现额外绑定文件失败；owner、原始字节哈希或审计引用篡改返回 `artifact_integrity_failed`；符号链接、junction、文件代替目录被拒绝。
 
+另测公开读取与写入检查不同：未公开的 owner 必须仍阻断不同 `decision_id`/检索运行的写入；空目录不阻断但不清理；工件无 owner、失败审计有 owner、多个未完成 owner 均失败关闭。定位测试覆盖事项不再 pending、对象已更新以及伪造 case_id。`case_id` 是 SHA-256，不允许切割字符串反解标识。
+
 - [ ] **Step 2：运行红灯测试**
 
 ```powershell
@@ -315,6 +347,8 @@ Expected: FAIL，读取/发布接口不存在。
 - [ ] **Step 3：实现严格读取和规范提交包**
 
 固定发布顺序：
+
+下列第一步在 `_prepare_decision_owner_locked` 执行；其余步骤在 `_publish_decision_bundle_locked` 执行。所有步骤及之后的审计完成均在同一对象锁内。owner 的精确字段见规格 9.1；请求哈希与审计一致，冻结证据及前驱重算后须等于请求修订。不得仅从 owner 复制未经验证的矩阵或主体。
 
 ```python
 _publish_exact_json(
@@ -333,6 +367,8 @@ if binding is not None:
         conflict_code="artifact_integrity_failed",
         conflict_message="Binding artifact conflicts.",
     )
+# 依据决定/绑定动作调用 ensure_operation_event；事件均绑定 owner_sha256。
+# 收集返回事件的哈希后，构造包含这些哈希及工件摘要的 commit。
 _publish_exact_json(
     directory / "commit.json", commit,
     conflict_code="artifact_integrity_failed",
@@ -340,9 +376,31 @@ _publish_exact_json(
 )
 ```
 
-`commit` 必须绑定 `decision_sha256`、可空 `binding_sha256`、`case_id`、`object_fingerprint`、`evidence_fingerprint`、`operation_id`、业务审计事件哈希和 `result_fingerprint`。读取使用 `lstat`/`fstat` 或现有严格原语验证普通文件、路径身份、重复键和规范原始字节。
+`commit` 必须绑定 `owner_sha256`、`decision_sha256`、可空 `binding_sha256`、`case_id`、`object_fingerprint`、`evidence_fingerprint`、`operation_id`、业务审计事件哈希和 `result_fingerprint`。读取使用 `lstat`/`fstat` 或现有严格原语验证普通文件、路径身份、重复键和规范原始字节。
 
 `load_decision_context` 聚合当前对象指纹、同一检索运行的有效 Phase 15C 配准、有效决定提交包和绑定链，返回 `case_id`、`evidence_fingerprint`、两个头指纹及 `case_revision`。它不执行分页或角色字段裁剪，供 Task 4 锁内重检和 Task 5 队列投影共同复用。
+
+其中 `current_binding` 和 `binding_status` 来自该对象全部事项的绑定链，状态为 `active`、`stale` 或空；`decision_head_id` 来自当前事项。定位器只提供加锁身份，`load_decision_context` 必须在锁内确认该身份重新计算得到请求的 `case_id`，不一致即拒绝。
+
+在本任务加入后续业务测试共用的实际夹具，避免任务 4 引用未定义帮助函数：
+
+```python
+from types import SimpleNamespace
+from pc_system.model_match_decision import load_decision_context
+
+def prepare_decision_case(project_root, *, mode="passed"):
+    report = publish_registration(project_root, mode=mode)
+    identity = {key: report[key] for key in (
+        "asset_id", "source_id", "instance_id", "retrieval_run_id"
+    )}
+    context = load_decision_context(project_root, **identity)
+    return SimpleNamespace(identity=identity, request_fields={
+        "case_id": context["case_id"],
+        "registration_id": report["registration_id"],
+        "candidate_rank": report["candidate_rank"],
+        "expected_case_revision": context["case_revision"],
+    })
+```
 
 - [ ] **Step 4：实现审计完成绑定**
 
@@ -366,7 +424,7 @@ Expected: PASS。
 - [ ] **Step 6：提交**
 
 ```powershell
-git add -- src/pc_system/model_match_decision.py tests/test_phase15d_decision_store.py
+git add -- src/pc_system/model_match_decision.py tests/test_phase15d_decision_store.py tests/phase15d_support.py
 git commit -m "feat: publish immutable decision bundles"
 ```
 
@@ -418,6 +476,12 @@ def test_confirm_passed_creates_one_audited_decision_and_binding(tmp_path):
 
 使用两个线程基于同一 `expected_case_revision` 提交不同决定，断言一个成功、一个 `decision_conflict`。对 owner、decision、binding、业务事件、commit、complete 六个边界注入一次异常：相同请求重试原位完成，事件不重复；不同操作不得接管。
 
+使用事件屏障暂停在 commit 已落盘而 complete 尚未执行的间隙：第二线程此时不能成功；第一线程完成释放锁后第二线程得到 `decision_conflict`。若锁等待超时，可先返回既有锁忙错误，但再次提交必须冲突。另用子进程在 owner/commit 发布后退出，证明内核锁释放后不同决定编号仍得到 `publication_recovery_required`；不得用 sleep 随机碰竞态。
+
+重放矩阵：成功但响应丢失返回同一结果指纹；已失败返回原错误；运行中无 owner 重新校验；有 owner 时即使新增 Phase 15C 证据也按旧快照恢复，再投影 pending；出现非法后继失败关闭；同请求并发须在锁内重读状态，不产生第二提交。
+
+绑定保护矩阵：首次确认成功；重新待办、新检索运行、更换 binding_id 均不能另建根链；有效头返回 `binding_exists`，陈旧头返回 `binding_stale`，专家显式替换才能接续。
+
 - [ ] **Step 3：运行红灯测试**
 
 ```powershell
@@ -428,111 +492,108 @@ Expected: FAIL，业务编排函数不存在。
 
 - [ ] **Step 4：实现对象锁内检查与提交**
 
-`decide_model_match` 固定执行：
+先用任务 1 的 `normalize_decision_request` 构造 `request`，令 `root = Path(project_root)`。统一定位器从 case_id 取得对象身份，不新增调用方可覆盖的对象字段。分支顺序固定如下：
 
 ```python
 operation, replayed = start_operation(
-    root,
-    operation_id=operation_id,
-    operation_type="model_match.decision",
-    principal=principal,
-    request_id=request_id,
-    idempotency_key=idempotency_key,
-    request_payload=request,
+    root, operation_id=operation_id, operation_type="model_match.decision",
+    principal=principal, request_id=request_id,
+    idempotency_key=idempotency_key, request_payload=request,
 )
-snapshot = read_verified_operation_snapshot(root, operation_id)
-operation_context = {
-    **operation,
-    "started_event_at": snapshot["events"][0]["timestamp"],
-}
+if operation["status"] == "completed":
+    return load_operation_decision_result(root, operation)
+if operation["status"] == "failed":
+    error = operation["error"]
+    raise ModelMatchingError(error["code"], error["message"])
+identity = resolve_decision_case_identity(root, case_id)
+asset_id, source_id, instance_id = (
+    identity["asset_id"], identity["source_id"], identity["instance_id"]
+)
 with model_resource_lock(root, "model-decision", asset_id, source_id, instance_id):
-    current = load_decision_context(
-        root,
-        asset_id=asset_id,
-        source_id=source_id,
-        instance_id=instance_id,
-        retrieval_run_id=retrieval_run_id,
+    snapshot = read_verified_operation_snapshot(root, operation_id)
+    operation = snapshot["operation"]
+    if operation["status"] == "completed":
+        return load_operation_decision_result(root, operation)
+    if operation["status"] == "failed":
+        error = operation["error"]
+        raise ModelMatchingError(error["code"], error["message"])
+    operation_context = {
+        **operation, "started_event_at": snapshot["events"][0]["timestamp"],
+    }
+    owner = _inspect_object_decision_writes_locked(
+        root, identity=identity, operation=operation_context,
     )
-    if current["case_revision"] != expected_case_revision:
-        raise ModelMatchingError("decision_conflict", "Decision item changed; refresh required.")
-    registration = (
-        None if decision == "no_match"
-        else current["registrations_by_id"].get(registration_id)
-    )
-    if decision != "no_match" and registration is None:
-        raise ModelMatchingError("registration_not_eligible", "Registration is not eligible.")
-    require_decision_allowed(
-        principal,
-        decision=decision,
-        gate_status=None if registration is None else registration["gate_status"],
-        verification_scope=verification_scope,
-    )
-    if decision == "confirmed" and binding_id is None:
-        raise ModelMatchingError("decision_not_allowed", "Confirmed decision requires a binding ID.")
-    decision_payload = build_match_decision(
-        request=request,
-        context=current,
-        operation=operation_context,
-        principal=principal,
-        previous_decision_id=current["decision_head_id"],
-    )
-    binding_payload = (
-        build_model_binding(
-            binding_id=binding_id,
-            decision=decision_payload,
-            registration=registration,
-            transition="create",
-            current_binding=None,
+    if owner is None:
+        current = load_decision_context(
+            root, asset_id=asset_id, source_id=source_id, instance_id=instance_id,
+            retrieval_run_id=identity["retrieval_run_id"],
+        )
+        if current["case_id"] != case_id or current["case_revision"] != expected_case_revision:
+            raise ModelMatchingError("decision_conflict", "Decision item changed; refresh required.")
+        registration = (
+            None if decision == "no_match"
+            else current["registrations_by_id"].get(registration_id)
+        )
+        if decision != "no_match" and registration is None:
+            raise ModelMatchingError("registration_not_eligible", "Registration is not eligible.")
+        require_decision_allowed(
+            principal, decision=decision, verification_scope=verification_scope,
+            gate_status=None if registration is None else registration["gate_status"],
+        )
+        if decision == "confirmed" and binding_id is None:
+            raise ModelMatchingError("decision_not_allowed", "Confirmed decision requires a binding ID.")
+        if decision == "confirmed" and current["current_binding"] is not None:
+            code = "binding_stale" if current["binding_status"] == "stale" else "binding_exists"
+            raise ModelMatchingError(code, "Existing binding requires an explicit expert transition.")
+        owner = _prepare_decision_owner_locked(
+            root, request=request, context=current, operation=operation_context,
+            principal=principal, transition="create" if decision == "confirmed" else None,
             restores_binding=None,
         )
-        if decision == "confirmed" else None
+    return _resume_decision_locked(
+        root, owner=owner, operation=operation_context, principal=principal,
     )
-    decision_event = ensure_operation_event(
-        root,
-        operation_id,
-        {
-            "confirmed": "match.decision_confirmed",
-            "rejected": "match.decision_rejected",
-            "no_match": "match.decision_no_match",
-        }[decision],
-        {
-            "case_id": current["case_id"],
-            "decision_id": decision_id,
-            "evidence_fingerprint": current["evidence_fingerprint"],
-        },
+```
+
+定义私有 `_resume_decision_locked(project_root: Path, *, owner: dict, operation: dict, principal: Principal) -> dict`，只允许持对象锁调用。冻结上下文必须返回 `request`、`registrations_by_id`、`decision_head_id`、`current_binding` 和 `restores_binding`；复验本次主体与原审计主体一致，使用原开始时间。核心实现：
+
+```python
+root = Path(project_root)
+context = _load_frozen_decision_context_locked(root, owner=owner, operation=operation)
+request = context["request"]
+decision_payload = build_match_decision(
+    request=request, context=context, operation=operation, principal=principal,
+    previous_decision_id=context["decision_head_id"],
+)
+binding_payload = None
+if request["decision"] == "confirmed":
+    binding_payload = build_model_binding(
+        binding_id=request["binding_id"], decision=decision_payload,
+        registration=context["registrations_by_id"][request["registration_id"]],
+        transition=owner["transition"], current_binding=context["current_binding"],
+        restores_binding=context["restores_binding"],
     )
-    audit_events = [decision_event]
-    if binding_payload is not None:
-        audit_events.append(
-            ensure_operation_event(
-                root,
-                operation_id,
-                "model_binding.created",
-                {"binding_id": binding_id, "decision_id": decision_id},
-            )
-        )
-    committed = _publish_decision_bundle_locked(
-        root,
-        operation=operation_context,
-        decision=decision_payload,
-        binding=binding_payload,
-        audit_events=audit_events,
-    )
-complete_operation(root, operation_id, {"result_fingerprint": committed["result_fingerprint"]})
+committed = _publish_decision_bundle_locked(
+    root, owner=owner, operation=operation,
+    decision=decision_payload, binding=binding_payload,
+)
+complete_operation(root, operation["operation_id"], {
+    "result_fingerprint": committed["result_fingerprint"],
+})
 return load_decision_bundle(
-    root,
-    asset_id=asset_id,
-    source_id=source_id,
-    instance_id=instance_id,
-    decision_id=decision_id,
+    root, asset_id=decision_payload["asset_id"],
+    source_id=decision_payload["source_id"], instance_id=decision_payload["instance_id"],
+    decision_id=decision_payload["decision_id"],
 )
 ```
 
-任何 `operation_busy` 或 `publication_recovery_required` 保持操作可恢复；其他领域失败使用 `fail_operation` 固化稳定错误。耐久化 `commit.json` 优先于调用栈异常。
+异常处理以 owner 是否实际存在为分界：`operation_busy`、恢复阻断保持运行状态；确定尚无 owner 的领域拒绝使用 `fail_operation` 固化错误；owner 已发布后任何失败都不得终结为普通 failed。落盘结果不确定时在锁内检查 owner/commit 后分流；完整性错误立即停止，不自动修复损坏输入。审计已完成但响应丢失以原提交结果为准。
 
 - [ ] **Step 5：实现替换与恢复**
 
 两个函数都只允许 `expert`，在同一对象锁内重新加载当前绑定链。`supersede` 要求 `current_binding_id` 等于当前头；`restore` 还要求 `restores_binding_id` 是同一历史链成员。两者均创建新的 `confirmed` 决定和绑定，不修改旧文件。
+
+两者复用相同的操作状态分支、对象未完成提交检查和 `_resume_decision_locked`，不得另写锁外 complete 路径。owner 的 `transition` 分别为 `supersede`/`restore`；恢复沿用历史目标的配准及检索运行，须匹配请求检索运行和当前对象指纹，否则返回 `registration_not_eligible`。目标及实际配准冻结后不得随当前头变化重新选择。
 
 - [ ] **Step 6：运行绿灯和审计/锁聚焦集**
 
@@ -662,6 +723,7 @@ client = TestClient(
     create_app(
         tmp_path,
         run_mode="production",
+        api_key="phase15d-test-service-key",
         principal_bindings={
             "operator-token": {"actor_id": "operator-a", "roles": ["operator"]},
             "expert-token": {"actor_id": "expert-a", "roles": ["expert"]},
@@ -854,7 +916,9 @@ Expected: FAIL，页面和共享模块不存在。
 
 - [ ] **Step 4：实现业务页面**
 
-页面读取 URL 参数中的 API 地址和开发主体，调用列表/详情/决定 API。提交携带当前 `case_revision`；收到 `decision_conflict` 时禁用旧按钮、显示“记录已被其他用户处理，请刷新”，并提供刷新按钮。
+页面 API 地址默认使用当前同源地址，也可读取 URL 参数中的显式 API 地址；开发主体仅用于开发模式。页面调用列表/详情/决定 API，提交携带当前 `case_revision`；收到 `decision_conflict` 时禁用旧按钮、显示“记录已被其他用户处理，请刷新”，并提供刷新按钮。
+
+生产模式不使用 URL 中的开发主体授权；认证凭据随请求头发送，不放进 URL。为浏览器验收固定可访问名称和 `data-testid`：`decision-row`、`case-status`、`decision-reason`、`binding-id`；操作按钮使用中文名称“确认”“拒绝”“无匹配”“刷新”。任务 10 的浏览器夹具提供独立主体上下文，不在页面源码写死测试凭据。
 
 候选级拒绝后保持当前事项并重新加载；确认或无匹配成功后切换到已处理详情。业务页不渲染完整矩阵和原始审计事件。
 
@@ -943,6 +1007,11 @@ git commit -m "feat: add professional model matching lab"
 - Modify: `README.md`
 - Modify: `docs/current-development-inventory.md`
 - Modify: `docs/system-function-module-inventory.md`
+- Create: `tests/browser/conftest.py`
+- Create: `tests/browser/test_phase15d_workbenches.py`
+- Modify: `pyproject.toml`
+- Modify: `.github/workflows/test.yml`
+- Modify: `.gitignore`
 
 **接口：**
 
@@ -951,19 +1020,78 @@ git commit -m "feat: add professional model matching lab"
 
 - [ ] **Step 1：编写端到端红灯测试**
 
-通过真实领域服务/API 和确定性配准引擎构造：
+复用任务 3 已定义的 `prepare_decision_case`，测试文件显式导入 `OPERATOR`、`decide_model_match` 和 `load_model_decision_item`。
+
+通过真实领域服务/API 和确定性配准引擎构造确认及重放闭环：
 
 ```python
-def test_phase15d_e2e_confirm_replace_restore_and_stale(tmp_path):
-    # Phase 14 已发布对象 -> 检索 -> passed 配准 -> pending
-    # operator 确认 -> processed + active binding
-    # expert 新配准并 supersede -> 新 active、旧 superseded
-    # expert restore 历史绑定 -> 再创建新 active 版本
-    # 对象指纹变化 -> 当前绑定投影 stale
-    # 所有提交均能读取已验证审计快照
+def test_phase15d_e2e_confirm_and_replay(tmp_path):
+    case = prepare_decision_case(tmp_path)
+    request = dict(
+        case.request_fields,
+        decision_id="decision-e2e", binding_id="binding-e2e",
+        decision="confirmed", decision_reason="现场身份核对一致",
+        verification_scope="operational_pose", principal=OPERATOR,
+        operation_id="op-e2e", request_id="req-e2e", idempotency_key="idem-e2e",
+    )
+    first = decide_model_match(tmp_path, **request)
+    second = decide_model_match(tmp_path, **request)
+    assert second == first
+    item = load_model_decision_item(tmp_path, case_id=case.request_fields["case_id"], principal=OPERATOR)
+    assert item["status"] == "processed"
+    assert first["binding"]["binding_id"] == "binding-e2e"
 ```
 
-另测 `review_required` 只能专家确认、候选拒绝仍 pending、无匹配不创建绑定、并发冲突和页面 API 基本流程。
+另测专家新配准并替换后旧绑定被接续、恢复生成第三个版本、对象更新后当前头 stale；`review_required` 只能专家确认、候选拒绝仍 pending、无匹配不创建绑定、并发冲突。各提交均读取已验证审计快照；页面测试见下节，不以 TestClient 代替浏览器。
+
+#### 真实浏览器验收的固定实施步骤
+
+在 `pyproject.toml` 的可选依赖中增加 `browser-test = ["pytest-playwright", "uvicorn"]`。`tests/browser/conftest.py` 提供函数级 `browser_server` 夹具：
+
+1. 在 pytest 临时项目使用 `prepare_decision_case` 创建数据；调用真实 `create_app`，传入 `run_mode="production"`、测试 `api_key`、operator/expert/auditor 的 `principal_bindings` 和确定性 `registration_engine_resolver`。
+2. 将仓库 `frontend` 用 FastAPI `StaticFiles` 挂载到 `/workbench`；该挂载只属于测试夹具，不改变生产 API 架构。
+3. 用预先绑定 `127.0.0.1:0` 的 socket 和 `uvicorn.Server` 在线程中运行 HTTP 服务，最多 10 秒检查启动就绪；yield 包含 `url`、`project_root` 和 `case_id` 的字典。finally 请求退出、限时 join 并关闭 socket，停止失败必须报错。
+4. 每项测试用 `browser.new_context(extra_http_headers={"Authorization": "Bearer operator-token"})` 或相应专家/审计员 token 创建独立上下文。真实请求到上述服务，不拦截/伪造业务 API 响应；测试 token 不用于真实环境。
+
+最小页面闭环代码放入 `tests/browser/test_phase15d_workbenches.py`：
+
+```python
+from playwright.sync_api import expect
+
+def test_operator_confirms_from_real_page(browser, browser_server):
+    context = browser.new_context(extra_http_headers={"Authorization": "Bearer operator-token"})
+    try:
+        page = context.new_page()
+        page.goto(browser_server["url"] + "/workbench/model-decisions.html")
+        page.get_by_test_id("decision-row").first.click()
+        page.get_by_test_id("decision-reason").fill("现场核验一致")
+        with page.expect_response(lambda r: r.url.endswith("/model-matching/decisions") and r.request.method == "POST") as pending:
+            page.get_by_role("button", name="确认", exact=True).click()
+        assert pending.value.status == 201
+        expect(page.get_by_test_id("case-status")).to_have_text("已处理")
+        expect(page.get_by_test_id("binding-id")).not_to_be_empty()
+    finally:
+        context.close()
+```
+
+必须补齐：业务三个页签/筛选/拒绝仍待办/无匹配；专家 review_required 确认、真实重新配准、替换、历史恢复；审计员只读；两个独立上下文先读同一修订，先提交成功、后提交收到 409 并显示刷新提示；空列表、加载及服务失败状态。断言 `pageerror` 为空，校验页面展示与后端工件/绑定链一致，不只检查元素存在。
+
+Windows 本地命令：
+
+```powershell
+uv run --extra test --extra browser-test playwright install chromium
+uv run --extra test --extra browser-test pytest -q tests/browser --browser chromium --tracing retain-on-failure --screenshot only-on-failure --output "$env:TEMP\pc-phase15d-browser-results" -p no:cacheprovider
+```
+
+在 `.github/workflows/test.yml` 保留原后端作业，但将其测试命令改为 `python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider`；新增 `browser` 作业，复用现有 checkout/setup-python 版本，执行：
+
+```yaml
+- run: python -m pip install -e ".[test,browser-test]"
+- run: python -m playwright install --with-deps chromium
+- run: python -m pytest tests/browser -q --browser chromium --tracing retain-on-failure --screenshot only-on-failure --output test-results -p no:cacheprovider
+```
+
+失败时上传 `test-results/`，产物目录加入 `.gitignore`。不使用 `continue-on-error`、`importorskip` 或捕获浏览器启动异常后跳过；缺少依赖/浏览器即本门禁失败。日常后端聚焦测试不触发浏览器安装，阶段完成必须有 Chromium 运行证据。安装与 CI 命令依据 [Playwright Python 安装说明](https://playwright.dev/python/docs/intro) 和 [CI 说明](https://playwright.dev/python/docs/ci)；这里只采用测试能力，不引入前端框架。
 
 - [ ] **Step 2：运行端到端红灯测试**
 
@@ -1004,7 +1132,7 @@ Expected: PASS。
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_docs.py --basetemp "$env:TEMP\pc-phase15d-docs" -p no:cacheprovider
 .venv\Scripts\python.exe -m compileall -q src tests
-uv run --extra test pytest -q --basetemp "$env:TEMP\pc-phase15d-full" -p no:cacheprovider
+uv run --extra test --extra browser-test pytest -q --browser chromium --tracing retain-on-failure --output "$env:TEMP\pc-phase15d-full-browser-results" --basetemp "$env:TEMP\pc-phase15d-full" -p no:cacheprovider
 ```
 
 Expected: 资料测试 PASS、compileall exit 0、全仓 0 failures。Open3D 未安装时只允许既有可选真实引擎测试 skip；既有 Starlette/httpx 弃用提示可记录但不得扩大本阶段修复范围。
@@ -1014,7 +1142,7 @@ Expected: 资料测试 PASS、compileall exit 0、全仓 0 failures。Open3D 未
 ```powershell
 git diff --check
 git status --short
-git add -- tests/test_phase15d_e2e.py tests/test_phase15d_docs.py docs/phase15d-human-decisions-bindings.md README.md docs/current-development-inventory.md docs/system-function-module-inventory.md
+git add -- tests/phase15d_support.py tests/test_phase15d_e2e.py tests/test_phase15d_docs.py tests/browser/conftest.py tests/browser/test_phase15d_workbenches.py pyproject.toml .github/workflows/test.yml .gitignore docs/phase15d-human-decisions-bindings.md README.md docs/current-development-inventory.md docs/system-function-module-inventory.md
 git commit -m "feat: complete Phase 15D decisions and bindings"
 ```
 
