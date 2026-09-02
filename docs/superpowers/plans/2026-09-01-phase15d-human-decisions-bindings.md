@@ -10,7 +10,33 @@
 
 **规格：** `docs/superpowers/specs/2026-09-01-phase15d-human-decisions-bindings-design.md`
 
-**修订状态：** 2026-09-02 根据复审意见定向修订；本次仅编辑本计划与上述规格，尚未实施生产代码、依赖或 CI 变更。
+**实施状态：** 2026-09-02 已完成任务 1–10 的本地实施、验证与复审，尚未推送、合并或发布。
+
+## 实施记录与验收证据
+
+| 任务 | 产出 | 本地提交 |
+| --- | --- | --- |
+| 1 | 决策身份、指纹与权限契约 | `6de237c` |
+| 2 | 不可变绑定与历史链 | `3c04792` |
+| 3 | 提交包、冻结上下文与可见性 | `7497f21` |
+| 4 | 审计编排、决定、替换与恢复 | `f6c72a6` |
+| 5 | 自动清单、筛选、分页与角色裁剪 | `b3302fe` |
+| 6 | 查询与写入 API | `e10bf7d` |
+| 7 | 六个 CLI 命令 | `b31a003` |
+| 8 | 业务决策工作台与共享状态模块 | `75fb30d` |
+| 9 | 专业工作台、技术详情与版本操作 | `8bc8965` |
+| 10 | 浏览器/端到端验收、中文资料、CI 与最终复审修订 | 见本文件所在阶段完成提交 |
+
+验证按比例执行：阶段全仓门禁一次，结果为 **1153 passed、1 skipped、1 warning**（367.36 秒，包含浏览器）。全仓运行后对事项定位失败的恢复规则进一步收紧，最终受影响的决定服务、提交包和 API/CLI 集共 **41 passed**（109.27 秒）；没有重复运行无关全仓测试。先前 Phase 15D 聚焦集为 118 passed；另外补充了失败锁边界和上游对象快照变化回归。
+
+真实页面场景 **6 passed**（53.37 秒）：确认并核对服务端绑定、候选拒绝/无匹配/筛选、专家复核/重新配准/替换/恢复/审计员只读、两个独立用户页面冲突与刷新、空列表/网络失败、加载期间控件禁用。没有伪造业务 API 响应；截图已做视觉核验。
+
+本地新下载 Chromium 启动出现 `spawn UNKNOWN`，验收使用已有 Google Chrome 的独立无界面上下文（`--browser chromium --browser-channel chrome`）；CI 采用 Linux 标准 Chromium，远端执行结果待后续推送验证。编译检查和 `git diff --check` 通过。既有 Starlette/httpx 弃用提示未扩大到本阶段修复。
+
+复审结论：已修复确认的重要问题——加载期间控件可点击但请求被忽略，以及失败终结未完全受 owner/对象锁边界约束。按下节统一不变量收敛恢复语义，未增加数据库、清理事务或新的绑定分支机制。角色、不可变提交、单链接续、重放、崩溃恢复和页面闭环均有测试证据。对象变化测试在上游权威快照读取边界注入新指纹，不把篡改历史文件当作正常更新。
+
+后续事项：Phase 15E 实物参考点云模板；大型项目的清单扫描成本需要真实数据基准评估；跨浏览器会话恢复收件箱未纳入本阶段；不在此阶段实现自动训练、自动推广或统一三维查看器。
+
 
 ## 本次复审问题与验收对应
 
@@ -23,6 +49,12 @@
 | 页面验收缺少真实浏览器 | 任务 8、9、10 | Chromium 实际页面/API 闭环、独立 CI 门禁 |
 
 ## 全局约束
+
+### 失败终结边界复核（2026-09-02）
+
+最终复审将失败终结统一为一个不变量：**只有已定位对象、持有对象锁且确认本操作没有 owner 时，才允许写入 failed。** 事项定位失败时，不能把“尚未找到 owner”当作“不存在 owner”；只返回稳定错误并保留 running，待权威证据恢复后使用同一请求重试。owner 已存在的操作只能原位恢复或保持阻断。
+
+该规则沿用已批准的不可变提交包和对象锁，不改变数据结构、权限、绑定链或正常用户流程；它同时覆盖锁外失败终结与重试时定位依赖不可用两个入口。验收由锁持有断言、已有 owner 下定位失败后仍可恢复、原有崩溃/并发/幂等测试共同证明。
 
 - 系统不得自动确认或自动建立生产绑定。
 - `operator` 只能确认 `passed`，`expert` 才能确认 `review_required`、重新配准、替换和恢复；`auditor` 只读。
@@ -105,7 +137,7 @@
   - `require_decision_allowed(principal: Principal, *, decision: str, gate_status: str | None, verification_scope: str) -> None`
   - `build_match_decision(*, request: dict, context: dict, operation: dict, principal: Principal, previous_decision_id: str | None) -> dict`
 
-- [ ] **Step 1：建立 Phase 15D 测试夹具**
+- [x] **Step 1：建立 Phase 15D 测试夹具**
 
 在 `tests/phase15d_support.py` 中复用 `phase15c_support.prepare_phase15c_case`，定义：
 
@@ -133,7 +165,7 @@ def publish_registration(project_root, *, sequence=1, mode="passed") -> dict:
     )
 ```
 
-- [ ] **Step 2：编写失败的身份、确定性和权限测试**
+- [x] **Step 2：编写失败的身份、确定性和权限测试**
 
 在 `tests/test_phase15d_decision_contracts.py` 覆盖：
 
@@ -156,7 +188,7 @@ def test_operator_cannot_confirm_review_required():
 
 同时断言：`operator` 可确认 `passed`；`expert` 可确认 `review_required` 和 `expert_pose`；任何角色不能确认 `rejected`/`failed`；`auditor` 不能写；`no_match` 不得携带配准；原因超过 1000 个 Unicode 码点或含 NUL 时返回 `decision_reason_invalid`；未知字段、非精确字符串、无效 ID 被拒绝。
 
-- [ ] **Step 3：运行红灯测试**
+- [x] **Step 3：运行红灯测试**
 
 Run:
 
@@ -166,7 +198,7 @@ uv run --extra test pytest -q tests/test_phase15d_decision_contracts.py --basete
 
 Expected: FAIL，缺少 `model_match_decision` 及上述公共函数。
 
-- [ ] **Step 4：实现最小纯契约**
+- [x] **Step 4：实现最小纯契约**
 
 使用规范 JSON 字节计算 SHA-256；候选按 `(candidate_rank, registration_id, report_fingerprint)` 排序后计算证据指纹。`normalize_decision_request` 只返回固定字段：
 
@@ -200,7 +232,7 @@ elif decision in {"rejected", "no_match"}:
 
 `build_match_decision` 从 `context` 复制 `case_id`、对象/证据指纹、检索运行、候选排名和两个当前头，从 `operation["started_event_at"]` 取得 `decided_at`，从可信 `Principal` 取得 `decided_by`/排序后的 `decider_roles`。它设置 `previous_decision_id` 和 `previous_decision_head_fingerprint`，不得接受调用方覆盖这些字段。
 
-- [ ] **Step 5：运行绿灯和既有身份测试**
+- [x] **Step 5：运行绿灯和既有身份测试**
 
 Run:
 
@@ -210,7 +242,7 @@ uv run --extra test pytest -q tests/test_phase15d_decision_contracts.py tests/te
 
 Expected: PASS。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- src/pc_system/model_match_decision.py tests/phase15d_support.py tests/test_phase15d_decision_contracts.py
@@ -235,7 +267,7 @@ git commit -m "feat: define Phase 15D decision contracts"
   - `project_binding_chain(bindings: list[dict], *, current_object_fingerprint: str) -> dict`
   - `binding_head_fingerprint(projection: dict) -> str | None`
 
-- [ ] **Step 1：编写失败的绑定结构测试**
+- [x] **Step 1：编写失败的绑定结构测试**
 
 覆盖首次绑定复制模型、表达、配准、矩阵和验证范围：
 
@@ -258,7 +290,7 @@ def test_create_binding_copies_only_authoritative_registration_fields():
 
 新增断言：绑定头从对象全部提交投影，不因换检索运行或对象指纹变化而丢失；陈旧头仍是链头，只能由专家显式接续，不能再 create。
 
-- [ ] **Step 2：运行红灯测试**
+- [x] **Step 2：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_binding.py --basetemp "$env:TEMP\pc-phase15d-binding" -p no:cacheprovider
@@ -266,7 +298,7 @@ uv run --extra test pytest -q tests/test_phase15d_binding.py --basetemp "$env:TE
 
 Expected: FAIL，模块不存在。
 
-- [ ] **Step 3：实现绑定构造与链投影**
+- [x] **Step 3：实现绑定构造与链投影**
 
 `project_binding_chain` 必须：
 
@@ -281,7 +313,7 @@ Expected: FAIL，模块不存在。
 
 验证每个 `supersedes_binding_id` 只被一个后继引用；`restore` 同时验证 `restores_binding_id` 属于同一链，但新头仍只通过 `supersedes_binding_id` 连接当前头。对象指纹不等于当前指纹时只投影 `stale`，不修改旧绑定。
 
-- [ ] **Step 4：运行绿灯和矩阵回归测试**
+- [x] **Step 4：运行绿灯和矩阵回归测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_binding.py tests/test_phase15c_registration_transform.py --basetemp "$env:TEMP\pc-phase15d-binding-green" -p no:cacheprovider
@@ -289,7 +321,7 @@ uv run --extra test pytest -q tests/test_phase15d_binding.py tests/test_phase15c
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```powershell
 git add -- src/pc_system/model_binding.py src/pc_system/model_match_decision.py tests/test_phase15d_binding.py
@@ -320,7 +352,7 @@ git commit -m "feat: add immutable model binding chains"
   - 私有 `_load_frozen_decision_context_locked(project_root: Path, *, owner: dict, operation: dict) -> dict`：复验请求指纹、历史证据和前驱，重建冻结上下文，不要求最新上游指纹等于旧快照。
   - 私有 `_publish_decision_bundle_locked(project_root: Path, *, owner: dict, operation: dict, decision: dict, binding: dict | None) -> dict`：依次发布决定/可选绑定、幂等业务事件、最后 commit；仅供同模块对象锁事务调用。
 
-- [ ] **Step 1：编写提交清单红灯测试**
+- [x] **Step 1：编写提交清单红灯测试**
 
 测试提交目录固定为：
 
@@ -336,7 +368,7 @@ reports/model_match_decisions/<asset>/<source>/<instance>/<decision>/
 
 另测公开读取与写入检查不同：未公开的 owner 必须仍阻断不同 `decision_id`/检索运行的写入；空目录不阻断但不清理；工件无 owner、失败审计有 owner、多个未完成 owner 均失败关闭。定位测试覆盖事项不再 pending、对象已更新以及伪造 case_id。`case_id` 是 SHA-256，不允许切割字符串反解标识。
 
-- [ ] **Step 2：运行红灯测试**
+- [x] **Step 2：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_decision_store.py --basetemp "$env:TEMP\pc-phase15d-store" -p no:cacheprovider
@@ -344,7 +376,7 @@ uv run --extra test pytest -q tests/test_phase15d_decision_store.py --basetemp "
 
 Expected: FAIL，读取/发布接口不存在。
 
-- [ ] **Step 3：实现严格读取和规范提交包**
+- [x] **Step 3：实现严格读取和规范提交包**
 
 固定发布顺序：
 
@@ -402,7 +434,7 @@ def prepare_decision_case(project_root, *, mode="passed"):
     })
 ```
 
-- [ ] **Step 4：实现审计完成绑定**
+- [x] **Step 4：实现审计完成绑定**
 
 公开读取调用 `read_verified_operation_snapshot`，要求：
 
@@ -413,7 +445,7 @@ snapshot["operation"]["result"]["result_fingerprint"] == commit["result_fingerpr
 
 且提交清单中业务事件哈希能在已验证事件链中精确找到。
 
-- [ ] **Step 5：运行绿灯和 Phase 15C 工件回归**
+- [x] **Step 5：运行绿灯和 Phase 15C 工件回归**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_decision_store.py tests/test_phase15c_registration.py -k "published or bundle or audited or integrity" --basetemp "$env:TEMP\pc-phase15d-store-green" -p no:cacheprovider
@@ -421,7 +453,7 @@ uv run --extra test pytest -q tests/test_phase15d_decision_store.py tests/test_p
 
 Expected: PASS。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- src/pc_system/model_match_decision.py tests/test_phase15d_decision_store.py tests/phase15d_support.py
@@ -446,7 +478,7 @@ git commit -m "feat: publish immutable decision bundles"
   - `supersede_model_binding(project_root: Path, *, asset_id: str, source_id: str, instance_id: str, retrieval_run_id: str, current_binding_id: str, registration_id: str, candidate_rank: int, decision_id: str, binding_id: str, decision_reason: str, verification_scope: str, expected_case_revision: str, principal: Principal, operation_id: str, request_id: str, idempotency_key: str) -> dict`
   - `restore_model_binding(project_root: Path, *, asset_id: str, source_id: str, instance_id: str, retrieval_run_id: str, current_binding_id: str, restores_binding_id: str, decision_id: str, binding_id: str, decision_reason: str, verification_scope: str, expected_case_revision: str, principal: Principal, operation_id: str, request_id: str, idempotency_key: str) -> dict`
 
-- [ ] **Step 1：编写决定与审计红灯测试**
+- [x] **Step 1：编写决定与审计红灯测试**
 
 核心成功测试：
 
@@ -472,7 +504,7 @@ def test_confirm_passed_creates_one_audited_decision_and_binding(tmp_path):
 
 覆盖 `review_required` 专家确认、候选拒绝仍待办、无匹配无绑定、`rejected` 禁止确认、对象/模型/配准陈旧、同幂等重放、不同请求冲突、事件结构和完成结果。
 
-- [ ] **Step 2：编写并发和故障注入红灯测试**
+- [x] **Step 2：编写并发和故障注入红灯测试**
 
 使用两个线程基于同一 `expected_case_revision` 提交不同决定，断言一个成功、一个 `decision_conflict`。对 owner、decision、binding、业务事件、commit、complete 六个边界注入一次异常：相同请求重试原位完成，事件不重复；不同操作不得接管。
 
@@ -482,7 +514,7 @@ def test_confirm_passed_creates_one_audited_decision_and_binding(tmp_path):
 
 绑定保护矩阵：首次确认成功；重新待办、新检索运行、更换 binding_id 均不能另建根链；有效头返回 `binding_exists`，陈旧头返回 `binding_stale`，专家显式替换才能接续。
 
-- [ ] **Step 3：运行红灯测试**
+- [x] **Step 3：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_decisions.py --basetemp "$env:TEMP\pc-phase15d-decisions" -p no:cacheprovider
@@ -490,7 +522,7 @@ uv run --extra test pytest -q tests/test_phase15d_decisions.py --basetemp "$env:
 
 Expected: FAIL，业务编排函数不存在。
 
-- [ ] **Step 4：实现对象锁内检查与提交**
+- [x] **Step 4：实现对象锁内检查与提交**
 
 先用任务 1 的 `normalize_decision_request` 构造 `request`，令 `root = Path(project_root)`。统一定位器从 case_id 取得对象身份，不新增调用方可覆盖的对象字段。分支顺序固定如下：
 
@@ -589,13 +621,13 @@ return load_decision_bundle(
 
 异常处理以 owner 是否实际存在为分界：`operation_busy`、恢复阻断保持运行状态；确定尚无 owner 的领域拒绝使用 `fail_operation` 固化错误；owner 已发布后任何失败都不得终结为普通 failed。落盘结果不确定时在锁内检查 owner/commit 后分流；完整性错误立即停止，不自动修复损坏输入。审计已完成但响应丢失以原提交结果为准。
 
-- [ ] **Step 5：实现替换与恢复**
+- [x] **Step 5：实现替换与恢复**
 
 两个函数都只允许 `expert`，在同一对象锁内重新加载当前绑定链。`supersede` 要求 `current_binding_id` 等于当前头；`restore` 还要求 `restores_binding_id` 是同一历史链成员。两者均创建新的 `confirmed` 决定和绑定，不修改旧文件。
 
 两者复用相同的操作状态分支、对象未完成提交检查和 `_resume_decision_locked`，不得另写锁外 complete 路径。owner 的 `transition` 分别为 `supersede`/`restore`；恢复沿用历史目标的配准及检索运行，须匹配请求检索运行和当前对象指纹，否则返回 `registration_not_eligible`。目标及实际配准冻结后不得随当前头变化重新选择。
 
-- [ ] **Step 6：运行绿灯和审计/锁聚焦集**
+- [x] **Step 6：运行绿灯和审计/锁聚焦集**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_decisions.py tests/test_phase15a_audit.py tests/test_phase15b1_resource_lock.py --basetemp "$env:TEMP\pc-phase15d-decisions-green" -p no:cacheprovider
@@ -603,7 +635,7 @@ uv run --extra test pytest -q tests/test_phase15d_decisions.py tests/test_phase1
 
 Expected: PASS。
 
-- [ ] **Step 7：提交**
+- [x] **Step 7：提交**
 
 ```powershell
 git add -- src/pc_system/model_match_decision.py src/pc_system/model_binding.py tests/test_phase15d_decisions.py
@@ -628,7 +660,7 @@ git commit -m "feat: orchestrate audited model decisions"
   - `load_model_decision_item(project_root: Path, *, case_id: str, principal: Principal) -> dict`
   - `project_current_decision_state(project_root: Path, *, asset_id: str, source_id: str, instance_id: str, retrieval_run_id: str, principal: Principal) -> dict`
 
-- [ ] **Step 1：编写队列红灯测试**
+- [x] **Step 1：编写队列红灯测试**
 
 覆盖：
 
@@ -641,7 +673,7 @@ assert mutate_object_release_then_list()["items"][0]["status"] == "stale"
 
 还要覆盖候选级拒绝保持 `pending`、全部门禁 `rejected` 只允许 `rerun/no_match`、稳定排序、1–100 `limit`、不透明游标、篡改失败关闭和角色字段裁剪。
 
-- [ ] **Step 2：运行红灯测试**
+- [x] **Step 2：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_queue.py --basetemp "$env:TEMP\pc-phase15d-queue" -p no:cacheprovider
@@ -649,7 +681,7 @@ uv run --extra test pytest -q tests/test_phase15d_queue.py --basetemp "$env:TEMP
 
 Expected: FAIL，队列模块不存在。
 
-- [ ] **Step 3：实现事项聚合与修订**
+- [x] **Step 3：实现事项聚合与修订**
 
 按 `(asset_id, source_id, instance_id, object_fingerprint, retrieval_run_id)` 分组 Phase 15C 报告；只接受 `status=completed` 和三态门禁报告。候选证据指纹使用 Task 1 函数；当前决定/绑定头来自有效提交包；事项修订组合四类指纹。
 
@@ -681,11 +713,11 @@ Expected: FAIL，队列模块不存在。
 
 `expert`/`auditor` 详情增加 `technical`，`operator` 响应不得包含完整矩阵和原始审计事件。
 
-- [ ] **Step 4：实现游标与筛选**
+- [x] **Step 4：实现游标与筛选**
 
 游标编码最后一项的规范排序键和筛选指纹；不同筛选复用游标返回 `decision_conflict` 或稳定无效请求错误。先过滤再截断，`next_cursor` 只在仍有更多结果时返回。
 
-- [ ] **Step 5：运行绿灯和 Phase 15C 聚焦集**
+- [x] **Step 5：运行绿灯和 Phase 15C 聚焦集**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_queue.py tests/test_phase15c_registration.py tests/test_phase15c_e2e.py --basetemp "$env:TEMP\pc-phase15d-queue-green" -p no:cacheprovider
@@ -693,7 +725,7 @@ uv run --extra test pytest -q tests/test_phase15d_queue.py tests/test_phase15c_r
 
 Expected: PASS。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- src/pc_system/model_decision_queue.py tests/phase15d_support.py tests/test_phase15d_queue.py
@@ -714,7 +746,7 @@ git commit -m "feat: project model decision queues"
 - Consumes: Tasks 4/5 公共领域函数和既有 `_phase15_json_object`、`_require_payload_shape`、可信主体解析。
 - Produces: 规格第 14 节全部 API。
 
-- [ ] **Step 1：编写 API 红灯测试**
+- [x] **Step 1：编写 API 红灯测试**
 
 使用以下应用注册 operator/expert/auditor token：
 
@@ -743,7 +775,7 @@ assert client.post(f"/model-matching/bindings/{binding_id}/restore", json=restor
 
 证明写路由在读取请求体前完成授权：无权 token 搭配超限或无效 JSON 仍返回 `permission_denied`。
 
-- [ ] **Step 2：运行 API 红灯测试**
+- [x] **Step 2：运行 API 红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_cli_api.py -k "api" --basetemp "$env:TEMP\pc-phase15d-api" -p no:cacheprovider
@@ -751,7 +783,7 @@ uv run --extra test pytest -q tests/test_phase15d_cli_api.py -k "api" --basetemp
 
 Expected: FAIL，路由不存在。
 
-- [ ] **Step 3：实现查询路由**
+- [x] **Step 3：实现查询路由**
 
 新增：
 
@@ -764,7 +796,7 @@ GET /model-matching/bindings/{asset_id}/{source_id}/{instance_id}/history
 
 允许 `operator`、`expert`、`auditor`，把可信 `Principal` 传入领域层进行字段裁剪。
 
-- [ ] **Step 4：实现写路由**
+- [x] **Step 4：实现写路由**
 
 新增：
 
@@ -776,7 +808,7 @@ POST /model-matching/bindings/{binding_id}/restore
 
 决定允许 `operator`/`expert`，替换和恢复仅 `expert`。请求体使用精确字段集合；可空 `registration_id`、`binding_id` 仍需精确类型检查。
 
-- [ ] **Step 5：加入稳定错误映射并运行绿灯**
+- [x] **Step 5：加入稳定错误映射并运行绿灯**
 
 映射：权限 403；not found 404；`decision_conflict`、`binding_exists`、`binding_stale`、`object_fingerprint_stale`、`artifact_integrity_failed` 为 409；输入和资格错误 400；审计/发布恢复 503。
 
@@ -786,7 +818,7 @@ uv run --extra test pytest -q tests/test_phase15d_cli_api.py -k "api" tests/test
 
 Expected: PASS。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- src/pc_system/api.py tests/test_phase15d_cli_api.py
@@ -809,7 +841,7 @@ git commit -m "feat: expose Phase 15D decision APIs"
 - Consumes: Tasks 4/5 公共领域函数。
 - Produces: 规格第 15 节六个 CLI 命令。
 
-- [ ] **Step 1：编写 CLI 红灯测试**
+- [x] **Step 1：编写 CLI 红灯测试**
 
 分别调用 `main(arguments)` 并解析 stdout JSON；例如清单命令使用：
 
@@ -836,7 +868,7 @@ restore-model-binding
 
 `decide-model-match` 必须通过 `--decision confirmed|rejected|no_match`、`--verification-scope`、`--expected-case-revision`、可选 `--registration-id`/`--candidate-rank`/`--binding-id` 和审计参数表达完整请求。
 
-- [ ] **Step 2：运行 CLI 红灯测试**
+- [x] **Step 2：运行 CLI 红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_cli_api.py -k "cli" --basetemp "$env:TEMP\pc-phase15d-cli" -p no:cacheprovider
@@ -844,7 +876,7 @@ uv run --extra test pytest -q tests/test_phase15d_cli_api.py -k "cli" --basetemp
 
 Expected: FAIL，解析器不识别命令。
 
-- [ ] **Step 3：实现解析器、命令适配器和分派**
+- [x] **Step 3：实现解析器、命令适配器和分派**
 
 CLI 写命令构造：
 
@@ -854,7 +886,7 @@ Principal(actor, frozenset({"operator"}), "cli")
 
 `decide-model-match` 默认业务角色为 `operator`，增加 `--expert` 时改为 `expert`；替换和恢复始终构造 `expert`。不得从输入 JSON 接受角色集合。
 
-- [ ] **Step 4：运行绿灯和旧 Phase 15 CLI 回归**
+- [x] **Step 4：运行绿灯和旧 Phase 15 CLI 回归**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_cli_api.py tests/test_phase15c_cli_api.py tests/test_phase15b2_cli_api.py --basetemp "$env:TEMP\pc-phase15d-cli-green" -p no:cacheprovider
@@ -862,7 +894,7 @@ uv run --extra test pytest -q tests/test_phase15d_cli_api.py tests/test_phase15c
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```powershell
 git add -- src/pc_system/cli_parser.py src/pc_system/cli.py src/pc_system/commands/phase15.py tests/test_phase15d_cli_api.py
@@ -891,7 +923,7 @@ git commit -m "feat: add Phase 15D decision CLI"
   - `buildDecisionPayload(item, form) -> object`
   - `statusLabel(status) -> string`
 
-- [ ] **Step 1：编写 HTML 与 Node 红灯测试**
+- [x] **Step 1：编写 HTML 与 Node 红灯测试**
 
 断言业务页包含：`pending`、`processed`、`all` 页签，筛选区，列表区，候选区，原因输入，确认/拒绝/无匹配按钮，加载/空/错误/冲突提示容器。Node 探针：
 
@@ -902,7 +934,7 @@ console.log(JSON.stringify(m.availableActions(item, "operator")));
 
 期望包含 `confirm`、`reject`、`no_match`，不包含 `rerun`、`supersede`、`restore`。
 
-- [ ] **Step 2：运行红灯测试**
+- [x] **Step 2：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "business or shared" --basetemp "$env:TEMP\pc-phase15d-frontend-business" -p no:cacheprovider
@@ -910,11 +942,11 @@ uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "business or sh
 
 Expected: FAIL，页面和共享模块不存在。
 
-- [ ] **Step 3：实现共享纯函数**
+- [x] **Step 3：实现共享纯函数**
 
 使用 UMD 风格导出，所有用户文本通过 `textContent` 或转义函数插入。动作矩阵必须以服务端 `available_actions` 为上限，再叠加角色 UI 限制；不得仅根据 `gate_status` 扩大权限。
 
-- [ ] **Step 4：实现业务页面**
+- [x] **Step 4：实现业务页面**
 
 页面 API 地址默认使用当前同源地址，也可读取 URL 参数中的显式 API 地址；开发主体仅用于开发模式。页面调用列表/详情/决定 API，提交携带当前 `case_revision`；收到 `decision_conflict` 时禁用旧按钮、显示“记录已被其他用户处理，请刷新”，并提供刷新按钮。
 
@@ -922,7 +954,7 @@ Expected: FAIL，页面和共享模块不存在。
 
 候选级拒绝后保持当前事项并重新加载；确认或无匹配成功后切换到已处理详情。业务页不渲染完整矩阵和原始审计事件。
 
-- [ ] **Step 5：运行绿灯和 Phase 14 前端回归**
+- [x] **Step 5：运行绿灯和 Phase 14 前端回归**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "business or shared" tests/test_phase14_correction_frontend.py --basetemp "$env:TEMP\pc-phase15d-frontend-business-green" -p no:cacheprovider
@@ -930,7 +962,7 @@ uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "business or sh
 
 Expected: PASS；Node 不可用时仅相关行为探针 skip。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- frontend/model-matching-workbench.js frontend/model-decisions.html frontend/model-decisions.js frontend/model-decisions.css frontend/index.html tests/test_phase15d_frontend.py
@@ -955,13 +987,13 @@ git commit -m "feat: add model decision workbench"
 - Consumes: Task 6 API、Task 8 共享模块、Phase 15C 注册 API。
 - Produces: 专家/审计员专业详情、重新配准、替换和恢复页面流程。
 
-- [ ] **Step 1：编写专业页面红灯测试**
+- [x] **Step 1：编写专业页面红灯测试**
 
 HTML 必须包含候选解释、配准配置、引擎、矩阵、覆盖率、残差、尺寸、门禁原因、决策历史、绑定链和审计区域，以及重新配准、替换、恢复控件。
 
 Node 探针断言：`expert` 在服务端允许时看到 `rerun/supersede/restore`；`auditor` 的动作数组为空；矩阵只接受 4×4 有限数字结构后进入视图模型。
 
-- [ ] **Step 2：运行红灯测试**
+- [x] **Step 2：运行红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "professional or auditor" --basetemp "$env:TEMP\pc-phase15d-frontend-lab" -p no:cacheprovider
@@ -969,18 +1001,18 @@ uv run --extra test pytest -q tests/test_phase15d_frontend.py -k "professional o
 
 Expected: FAIL，专业页面不存在。
 
-- [ ] **Step 3：实现专业详情与只读模式**
+- [x] **Step 3：实现专业详情与只读模式**
 
 `model-matching-lab.js` 根据可信 API 返回的角色/动作渲染。`auditor` 始终只读。完整矩阵使用表格展示，指标明确单位；审计区域显示 operation ID、状态和事件摘要，不渲染未转义 JSON。
 
-- [ ] **Step 4：实现专家动作**
+- [x] **Step 4：实现专家动作**
 
 - 重新配准：选择已有发布配置，调用 `/model-matching/registrations`；成功后刷新事项修订。
 - 替换：要求选择新配准和填写原因，调用 `/supersede`。
 - 恢复：选择历史绑定，展示“将创建新版本，不修改旧绑定”，调用 `/restore`。
 - 所有动作处理 loading、稳定错误和 `decision_conflict`。
 
-- [ ] **Step 5：运行绿灯和完整前端集**
+- [x] **Step 5：运行绿灯和完整前端集**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_frontend.py tests/test_frontend_workbench.py tests/test_frontend_api_and_embed.py tests/test_phase14_correction_frontend.py --basetemp "$env:TEMP\pc-phase15d-frontend-green" -p no:cacheprovider
@@ -988,7 +1020,7 @@ uv run --extra test pytest -q tests/test_phase15d_frontend.py tests/test_fronten
 
 Expected: PASS。
 
-- [ ] **Step 6：提交**
+- [x] **Step 6：提交**
 
 ```powershell
 git add -- frontend/model-matching-lab.html frontend/model-matching-lab.js frontend/model-matching-lab.css frontend/model-matching-workbench.js frontend/index.html tests/test_phase15d_frontend.py
@@ -1018,7 +1050,7 @@ git commit -m "feat: add professional model matching lab"
 - Consumes: Tasks 1–9。
 - Produces: Phase 14 → 15B-2 → 15C → 15D 闭环、用户操作资料和阶段完成证据。
 
-- [ ] **Step 1：编写端到端红灯测试**
+- [x] **Step 1：编写端到端红灯测试**
 
 复用任务 3 已定义的 `prepare_decision_case`，测试文件显式导入 `OPERATOR`、`decide_model_match` 和 `load_model_decision_item`。
 
@@ -1093,7 +1125,7 @@ uv run --extra test --extra browser-test pytest -q tests/browser --browser chrom
 
 失败时上传 `test-results/`，产物目录加入 `.gitignore`。不使用 `continue-on-error`、`importorskip` 或捕获浏览器启动异常后跳过；缺少依赖/浏览器即本门禁失败。日常后端聚焦测试不触发浏览器安装，阶段完成必须有 Chromium 运行证据。安装与 CI 命令依据 [Playwright Python 安装说明](https://playwright.dev/python/docs/intro) 和 [CI 说明](https://playwright.dev/python/docs/ci)；这里只采用测试能力，不引入前端框架。
 
-- [ ] **Step 2：运行端到端红灯测试**
+- [x] **Step 2：运行端到端红灯测试**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_e2e.py --basetemp "$env:TEMP\pc-phase15d-e2e" -p no:cacheprovider
@@ -1101,7 +1133,7 @@ uv run --extra test pytest -q tests/test_phase15d_e2e.py --basetemp "$env:TEMP\p
 
 Expected: 如存在集成缺口则 FAIL；只修复 Phase 15D 范围内缺口。
 
-- [ ] **Step 3：补齐集成并运行 Phase 15D 聚焦集**
+- [x] **Step 3：补齐集成并运行 Phase 15D 聚焦集**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_decision_contracts.py tests/test_phase15d_binding.py tests/test_phase15d_decision_store.py tests/test_phase15d_decisions.py tests/test_phase15d_queue.py tests/test_phase15d_cli_api.py tests/test_phase15d_frontend.py tests/test_phase15d_e2e.py --basetemp "$env:TEMP\pc-phase15d-focused" -p no:cacheprovider
@@ -1109,7 +1141,7 @@ uv run --extra test pytest -q tests/test_phase15d_decision_contracts.py tests/te
 
 Expected: PASS。
 
-- [ ] **Step 4：编写中文操作资料和资料测试**
+- [x] **Step 4：编写中文操作资料和资料测试**
 
 `docs/phase15d-human-decisions-bindings.md` 必须说明：
 
@@ -1123,11 +1155,11 @@ Expected: PASS。
 
 `tests/test_phase15d_docs.py` 精确检查中文标题、关键边界、页面链接和库存状态。
 
-- [ ] **Step 5：更新 README 和两份清单**
+- [x] **Step 5：更新 README 和两份清单**
 
 将 Phase 15D 标为已完成；下一目标为 Phase 15E 实物参考点云模板。明确 Phase 15F/17 才进行受控优化/训练，Phase 16 才建设统一三维查看器。
 
-- [ ] **Step 6：运行资料、编译和最终全仓门禁**
+- [x] **Step 6：运行资料、编译和最终全仓门禁**
 
 ```powershell
 uv run --extra test pytest -q tests/test_phase15d_docs.py --basetemp "$env:TEMP\pc-phase15d-docs" -p no:cacheprovider
@@ -1137,7 +1169,7 @@ uv run --extra test --extra browser-test pytest -q --browser chromium --tracing 
 
 Expected: 资料测试 PASS、compileall exit 0、全仓 0 failures。Open3D 未安装时只允许既有可选真实引擎测试 skip；既有 Starlette/httpx 弃用提示可记录但不得扩大本阶段修复范围。
 
-- [ ] **Step 7：检查差异并提交**
+- [x] **Step 7：检查差异并提交**
 
 ```powershell
 git diff --check
@@ -1146,7 +1178,7 @@ git add -- tests/phase15d_support.py tests/test_phase15d_e2e.py tests/test_phase
 git commit -m "feat: complete Phase 15D decisions and bindings"
 ```
 
-- [ ] **Step 8：最终复审**
+- [x] **Step 8：最终复审**
 
 逐条核对规格验收标准 1–13。只修复确认的严重和重要问题；若同类持久化或并发缺陷已达第二轮，停止补丁并回到提交包架构。记录最终测试证据和提交 SHA，不重复粘贴完整日志。
 

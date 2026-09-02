@@ -65,6 +65,9 @@
       operation_id:"op-"+value,request_id:"req-"+value,idempotency_key:"idem-"+value}; }
     function selectedCandidate() { return state.item?.candidate_summary.find(c => c.registration_id === $("candidate").value); }
     function renderActions() {
+      document.querySelectorAll("[data-status], #apply-filters, #more, #refresh, #connect, .decision-row").forEach(button => {
+        button.disabled = state.busy;
+      });
       const actions = state.item ? availableActions(state.item, state.role) : [];
       const candidate = selectedCandidate();
       document.querySelectorAll("[data-action]").forEach(button => {

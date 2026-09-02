@@ -223,7 +223,7 @@ LAS/LAZ or FLS source
 | P15-M2.7 可解释 Top-K 检索 / Explainable Top-K retrieval | 已完成 / Done | 混合类别、文本、厂商型号、尺寸、形状和占用评分，输出降级原因与风险。 | candidates, retrieval report |
 | P15-M2.8 公共入口与恢复 / Public surfaces and recovery | 已完成 / Done | 七个 CLI、八个 API、可信身份、幂等重放、哈希链审计和端到端恢复。 | CLI, API, audit events |
 | Phase 15C 刚性配准 / Rigid registration | 已完成 / Done | 候选证据冻结、FPFH/RANSAC/FGR、多尺度 ICP、双向指标、三态门禁和审计恢复；不自动绑定。 | rigid transform, quality gate, registration report |
-| Phase 15D 人工决策与绑定 / Decisions and bindings | 已规划 / Planned | 确认、换候选、拒绝与不可变对象—模型绑定。 | match decision, binding |
+| Phase 15D 人工决策与绑定 | 已完成本地开发与验收 | 确认、候选拒绝、无匹配、不可变绑定替换/恢复、审计与并发，以及业务/专业双页面。 | match decision, binding |
 | Phase 15E 实物参考模板 / Scanned reference templates | 已规划 / Planned | 将验证后的单对象参考点云纳入统一模板接口。 | reference template |
 | Phase 15F 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
 
@@ -282,14 +282,15 @@ python -m pc_system.cli show-model-retrieval --project-root .\workspace --asset-
 | 项目驾驶舱 / Dashboard | `frontend/index.html` | 资产、任务、分析、质量门禁、交付状态总览。 |
 | 展示页 / Showcase viewer | `frontend/viewer.html` | 单资产展示型查看器入口。 |
 | 分割纠正 / Segmentation correction | `frontend/correction.html` | 系统建议、对象确认、点选择、纠正与送审。 |
+| 模型决策 | `frontend/model-decisions.html` | 自动待办、业务确认、拒绝、无匹配和处理历史。 |
+| 专业匹配 | `frontend/model-matching-lab.html` | 配准证据、专家重新配准、版本替换/恢复和只读审计。 |
 | 设计候选 / Design options | `frontend/design-options/` | UI 风格候选页面。 |
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. Phase 15C：完成最终门禁后统一推送、创建 PR 和合并。
-2. Phase 15D：实现人工匹配决策、不可变绑定与双界面。
-4. Phase 15E：接入受验证的实物参考点云模板。
-5. Phase 15F：实现受控参数优化、审批、推广和回滚。
+1. Phase 15D：门禁和复审已完成，按用户授权统一推送、创建 PR 和合并；参见 [人工决策与绑定操作说明](phase15d-human-decisions-bindings.md)。
+2. Phase 15E：接入受验证的实物参考点云模板。
+3. Phase 15F：实现受控参数优化、审批、推广和回滚。
 
 
 

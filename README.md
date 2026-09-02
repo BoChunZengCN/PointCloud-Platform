@@ -852,3 +852,13 @@ python -m pc_system.cli retrieve-model-candidates `
 Phase 15C 已完成“冻结候选证据 → 有界初始姿态 → Open3D 粗/精配准 → 刚性矩阵验证 → 双向覆盖与残差 → passed/review_required/rejected 三态报告”的闭环。所有自动运行均绑定可信主体、幂等请求、不可变工件和哈希链审计；矩阵始终把模型坐标变换到对象点云坐标。
 
 本阶段不自动建立对象—模型绑定。人工确认、换候选、拒绝和版本化绑定属于 Phase 15D。安装、CLI/API、发布恢复和错误处理见 `docs/phase15c-rigid-registration.md`。
+
+## Phase 15D：人工决定、不可变绑定与双工作台
+
+已完成从配准报告自动生成待办、确认/候选拒绝/无匹配、不可变绑定替换与历史恢复、乐观并发和审计重放，以及 API、CLI、业务及专业双页面。阶段全仓门禁 1153 项通过、1 项环境跳过；最终恢复修订另有 41 项聚焦回归通过，真实浏览器场景 6 项通过。
+
+- [业务决策工作台](frontend/model-decisions.html)：简洁确认、拒绝、无匹配和处理清单。
+- [专业匹配工作台](frontend/model-matching-lab.html)：配准依据、专家重新配准、绑定版本链和只读审计。
+- [中文操作说明](docs/phase15d-human-decisions-bindings.md)：权限、接口、并发冲突与提交恢复。
+
+本阶段不自动训练或自动推广模型；后续目标为 Phase 15E 实物参考点云模板，受控优化/训练属于 Phase 15F/17，统一三维查看器属于 Phase 16。

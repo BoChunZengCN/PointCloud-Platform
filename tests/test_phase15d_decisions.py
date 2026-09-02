@@ -2,6 +2,7 @@ import concurrent.futures
 import multiprocessing
 import os
 import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -28,6 +29,46 @@ def test_confirm_replay_and_old_page_conflict(tmp_path):
     with pytest.raises(ModelMatchingError) as caught:
         service.decide_model_match(tmp_path, **arguments(case, 2))
     assert caught.value.code == "decision_conflict"
+
+
+def test_pre_owner_failure_is_finalized_while_object_lock_is_held(tmp_path, monkeypatch):
+    case = prepare_decision_case(tmp_path)
+    original_lock, original_fail = service.model_resource_lock, service.fail_operation
+    active = False
+    @contextmanager
+    def observed_lock(*args, **kwargs):
+        nonlocal active
+        with original_lock(*args, **kwargs):
+            active = True
+            try:
+                yield
+            finally:
+                active = False
+    def observed_fail(*args, **kwargs):
+        assert active, "失败终结必须与 owner 存在性判断处于同一对象锁内"
+        return original_fail(*args, **kwargs)
+    monkeypatch.setattr(service, "model_resource_lock", observed_lock)
+    monkeypatch.setattr(service, "fail_operation", observed_fail)
+    with pytest.raises(ModelMatchingError) as failure:
+        service.decide_model_match(tmp_path, **arguments(case, expected_case_revision="0" * 64))
+    assert failure.value.code == "decision_conflict"
+
+
+def test_case_lookup_failure_cannot_fail_an_operation_with_an_existing_owner(tmp_path, monkeypatch):
+    case = prepare_decision_case(tmp_path)
+    complete, resolve = service.complete_operation, service.resolve_decision_case_identity
+    monkeypatch.setattr(service, "complete_operation", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("interrupted")))
+    with pytest.raises(ModelMatchingError):
+        service.decide_model_match(tmp_path, **arguments(case))
+    monkeypatch.setattr(service, "complete_operation", complete)
+    monkeypatch.setattr(service, "resolve_decision_case_identity", lambda *_args: (_ for _ in ()).throw(
+        ModelMatchingError("artifact_integrity_failed", "lookup evidence temporarily unavailable")))
+    with pytest.raises(ModelMatchingError) as failure:
+        service.decide_model_match(tmp_path, **arguments(case))
+    assert failure.value.code == "artifact_integrity_failed"
+    assert read_verified_operation_snapshot(tmp_path, "op-decision-1")["operation"]["status"] == "running"
+    monkeypatch.setattr(service, "resolve_decision_case_identity", resolve)
+    assert service.decide_model_match(tmp_path, **arguments(case))["binding"]["binding_id"] == "binding-1"
 
 
 @pytest.mark.parametrize("mode,principal,allowed", [("passed", OPERATOR, True), ("review_required", OPERATOR, False),

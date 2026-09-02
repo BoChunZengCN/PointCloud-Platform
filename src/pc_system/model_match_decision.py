@@ -1,4 +1,4 @@
-"""人工决策的纯契约；持久化与服务入口随后在此接入。"""
+"""人工决策契约、不可变提交包与审计编排。"""
 
 import hashlib
 import copy
@@ -727,7 +727,12 @@ def _run_decision_action(project_root: Path, *, request: dict, operation_type: s
             identity = resolve_decision_case_identity(root, normalized["case_id"])
         else:
             identity = {key: _identifier(request[key], key) for key in (*_OBJECT_KEYS, "retrieval_run_id")}
-        with model_resource_lock(root, "model-decision", *(identity[key] for key in _OBJECT_KEYS)):
+    except (ModelMatchingError, OSError, KeyError, TypeError, ValueError) as exc:
+        code = exc.code if isinstance(exc, ModelMatchingError) else "decision_not_allowed"
+        # 尚未定位对象，无法在对象锁内证明没有既存 owner；保持可重试状态。
+        raise _error(code, str(exc)) from exc
+    with model_resource_lock(root, "model-decision", *(identity[key] for key in _OBJECT_KEYS)):
+        try:
             operation = _operation_context(root, operation_id)
             if operation["status"] == "completed":
                 return load_operation_decision_result(root, operation)
@@ -764,23 +769,23 @@ def _run_decision_action(project_root: Path, *, request: dict, operation_type: s
                 owner = _prepare_decision_owner_locked(root, request=request, context=context,
                     operation=operation, principal=principal, transition=transition, restores_binding=target)
             return _resume_decision_locked(root, owner=owner, operation=operation, principal=principal)
-    except (ModelMatchingError, OSError, KeyError, TypeError, ValueError) as exc:
-        if owner is None and identity is not None:
-            try:
-                persisted = _read_decision_json(_bundle_directory(root, identity, request["decision_id"]) / "owner.json")
-                if persisted["operation_id"] == operation_id:
-                    owner = persisted
-            except FileNotFoundError:
-                pass
-        if owner is not None:
-            if isinstance(exc, ModelMatchingError) and exc.code == "artifact_integrity_failed":
+        except (ModelMatchingError, OSError, KeyError, TypeError, ValueError) as exc:
+            if owner is None and identity is not None:
+                try:
+                    persisted = _read_decision_json(_bundle_directory(root, identity, request["decision_id"]) / "owner.json")
+                    if persisted["operation_id"] == operation_id:
+                        owner = persisted
+                except FileNotFoundError:
+                    pass
+            if owner is not None:
+                if isinstance(exc, ModelMatchingError) and exc.code == "artifact_integrity_failed":
+                    raise
+                raise _error("publication_recovery_required", "Decision publication requires same-operation recovery.") from exc
+            if isinstance(exc, ModelMatchingError) and exc.code in {"operation_busy", "publication_recovery_required"}:
                 raise
-            raise _error("publication_recovery_required", "Decision publication requires same-operation recovery.") from exc
-        if isinstance(exc, ModelMatchingError) and exc.code in {"operation_busy", "publication_recovery_required"}:
-            raise
-        code = exc.code if isinstance(exc, ModelMatchingError) else "decision_not_allowed"
-        fail_operation(root, operation_id, code, str(exc))
-        raise _error(code, str(exc)) from exc
+            code = exc.code if isinstance(exc, ModelMatchingError) else "decision_not_allowed"
+            fail_operation(root, operation_id, code, str(exc))
+            raise _error(code, str(exc)) from exc
 
 
 def decide_model_match(project_root: Path, *, decision_id: str, case_id: str, decision: str,
