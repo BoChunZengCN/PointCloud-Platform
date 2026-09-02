@@ -183,3 +183,33 @@ def project_current_decision_state(project_root: Path, *, asset_id: str, source_
     context = load_decision_context(project_root, asset_id=asset_id, source_id=source_id,
                                     instance_id=instance_id, retrieval_run_id=retrieval_run_id)
     return load_model_decision_item(project_root, case_id=context["case_id"], principal=principal)
+
+
+def crop_model_binding(binding: dict | None, *, principal: Principal) -> dict | None:
+    require_any_role(principal, {"operator", "expert", "auditor"})
+    if binding is None or principal.roles.intersection({"expert", "auditor"}):
+        return binding
+    fields = {"binding_id", "model_id", "model_version_id", "asset_id", "source_id", "instance_id",
+              "verification_scope", "created_at", "created_by", "supersedes_binding_id", "restores_binding_id", "status"}
+    return {key: value for key, value in binding.items() if key in fields}
+
+
+def load_model_bindings(project_root: Path, *, asset_id: str, source_id: str, instance_id: str,
+                        principal: Principal, include_history: bool = False) -> dict:
+    require_any_role(principal, {"operator", "expert", "auditor"})
+    identity = dict(asset_id=asset_id, source_id=source_id, instance_id=instance_id)
+    for key, value in identity.items():
+        _identifier(value, key)
+    bindings = [bundle["binding"] for bundle in list_decision_bundles(project_root, **identity)
+                if bundle["binding"] is not None]
+    fingerprint = "0" * 64
+    if bindings:
+        context = load_decision_context(project_root, **identity, retrieval_run_id=bindings[0]["retrieval_run_id"])
+        fingerprint = context["object_fingerprint"]
+    projection = project_binding_chain(bindings, current_object_fingerprint=fingerprint)
+    result = {"current_binding": crop_model_binding(projection["current_binding"], principal=principal),
+              "current_status": projection["current_status"],
+              "binding_head_fingerprint": projection["binding_head_fingerprint"]}
+    if include_history:
+        result["history"] = [crop_model_binding(binding, principal=principal) for binding in projection["history"]]
+    return result

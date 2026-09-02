@@ -9,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import ClientDisconnect
 
 from pc_system.config import ProjectConfig
+from pc_system.model_match_decision import decide_model_match, supersede_model_binding, restore_model_binding
+from pc_system.model_decision_queue import (
+    crop_model_binding, list_model_decision_items, load_model_decision_item, load_model_bindings,
+)
 from pc_system.identifiers import validate_identifier
 from pc_system.job_runner import JOB_STATUSES, create_job_from_plan, load_job, mark_step_status, read_job_events, write_job, write_job_event
 from pc_system.model_import import import_model_version, list_model_versions
@@ -216,6 +220,7 @@ def _correction_http_error(exc: CorrectionError) -> HTTPException:
 
 
 _PHASE15_NOT_FOUND = {
+    "decision_not_found", "decision_item_not_found", "binding_not_found",
     "feature_not_found",
     "model_not_found",
     "model_index_release_not_found",
@@ -227,6 +232,7 @@ _PHASE15_NOT_FOUND = {
     "model_registration_not_found",
 }
 _PHASE15_CONFLICT = {
+    "decision_conflict", "binding_exists", "binding_stale", "binding_chain_invalid",
     "idempotency_conflict",
     "model_exists",
     "model_version_exists",
@@ -256,6 +262,7 @@ _PHASE15_SERVICE_UNAVAILABLE = {
     "non_rigid_transform",
 }
 _PHASE15_BAD_REQUEST = {
+    "decision_not_allowed", "decision_reason_invalid", "registration_not_eligible",
     "feature_config_invalid",
     "invalid_audit_request",
     "invalid_model_asset",
@@ -451,9 +458,17 @@ def _staged_model_source(project_root: Path, relative: object) -> Path:
     return candidate
 
 
-async def _phase15_json_object(request: Request) -> dict:
+async def _phase15_json_object(request: Request, *, reject_duplicate_fields: bool = False) -> dict:
     def reject_nonstandard_number(value: str) -> None:
         raise ValueError(f"Non-standard JSON number: {value}")
+
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if reject_duplicate_fields and key in result:
+                raise ValueError("Duplicate JSON field.")
+            result[key] = value
+        return result
 
     raw_content_length = request.headers.get("content-length")
     try:
@@ -511,7 +526,7 @@ async def _phase15_json_object(request: Request) -> dict:
 
     try:
         payload = json.loads(
-            bytes(body), parse_constant=reject_nonstandard_number
+            bytes(body), parse_constant=reject_nonstandard_number, object_pairs_hook=object_pairs
         )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise _phase15_http_error(
@@ -1253,6 +1268,80 @@ def create_app(
         )
         configs = phase15_action(list_registration_configs, project_root)
         return {"config_count": len(configs), "configs": configs}
+
+    @app.get("/model-matching/decision-items")
+    def get_model_decision_items(request: Request, status: str = "all", asset_id: str | None = None,
+                                 class_id: str | None = None, gate_status: str | None = None,
+                                 decided_by: str | None = None, started_at: str | None = None,
+                                 ended_at: str | None = None, limit: int = 50, cursor: str | None = None) -> dict:
+        principal = require_phase15_principal(request, route="GET /model-matching/decision-items",
+                                              allowed_roles={"operator", "expert", "auditor"})
+        return phase15_action(list_model_decision_items, project_root, principal=principal, status=status,
+            asset_id=asset_id, class_id=class_id, gate_status=gate_status, decided_by=decided_by,
+            started_at=started_at, ended_at=ended_at, limit=limit, cursor=cursor)
+
+    @app.get("/model-matching/decision-items/{case_id}")
+    def get_model_decision_item(case_id: str, request: Request) -> dict:
+        principal = require_phase15_principal(request, route="GET /model-matching/decision-items/{case_id}",
+                                              allowed_roles={"operator", "expert", "auditor"})
+        return phase15_action(load_model_decision_item, project_root, case_id=case_id, principal=principal)
+
+    def read_model_bindings(request, asset_id, source_id, instance_id, include_history):
+        principal = require_phase15_principal(request, route="GET /model-matching/bindings",
+                                              allowed_roles={"operator", "expert", "auditor"})
+        return phase15_action(load_model_bindings, project_root, asset_id=asset_id, source_id=source_id,
+                             instance_id=instance_id, principal=principal, include_history=include_history)
+
+    @app.get("/model-matching/bindings/{asset_id}/{source_id}/{instance_id}")
+    def get_model_binding(asset_id: str, source_id: str, instance_id: str, request: Request) -> dict:
+        return read_model_bindings(request, asset_id, source_id, instance_id, False)
+
+    @app.get("/model-matching/bindings/{asset_id}/{source_id}/{instance_id}/history")
+    def get_model_binding_history(asset_id: str, source_id: str, instance_id: str, request: Request) -> dict:
+        return read_model_bindings(request, asset_id, source_id, instance_id, True)
+
+    async def phase15d_write(request, action, binding_id=None):
+        principal = require_phase15_principal(request, route=f"POST /model-matching/{action}",
+            allowed_roles={"operator", "expert"} if action == "decisions" else {"expert"})
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        common = {"decision_id", "decision_reason", "verification_scope", "expected_case_revision",
+                  "operation_id", "request_id", "idempotency_key"}
+        nullable = set()
+        if action == "decisions":
+            text_fields = common | {"case_id", "decision"}
+            nullable = {"registration_id", "binding_id", "candidate_rank"}
+            fields = text_fields | nullable
+        else:
+            text_fields = common | {"asset_id", "source_id", "instance_id", "retrieval_run_id", "binding_id"}
+            fields = text_fields | ({"registration_id", "candidate_rank"} if action == "supersede" else {"restores_binding_id"})
+            text_fields |= {"registration_id"} if action == "supersede" else {"restores_binding_id"}
+        if set(payload) != fields:
+            raise _phase15_http_error(_invalid_request("Request fields must exactly match the decision schema."))
+        if any(type(payload[field]) is not str for field in text_fields):
+            raise _phase15_http_error(_invalid_request("Decision text fields must be exact strings."))
+        for field in nullable - {"candidate_rank"}:
+            if payload[field] is not None and type(payload[field]) is not str:
+                raise _phase15_http_error(_invalid_request("Nullable identifiers must be strings or null."))
+        if "candidate_rank" in payload and not (action == "decisions" and payload["candidate_rank"] is None):
+            if type(payload["candidate_rank"]) is not int or payload["candidate_rank"] < 1:
+                raise _phase15_http_error(_invalid_request("Candidate rank must be a positive integer."))
+        function = {"decisions": decide_model_match, "supersede": supersede_model_binding, "restore": restore_model_binding}[action]
+        if binding_id is not None:
+            payload["current_binding_id"] = binding_id
+        result = phase15_action(function, project_root, principal=principal, **payload)
+        return {**result, "binding": crop_model_binding(result["binding"], principal=principal)}
+
+    @app.post("/model-matching/decisions", status_code=201)
+    async def post_model_decision(request: Request) -> dict:
+        return await phase15d_write(request, "decisions")
+
+    @app.post("/model-matching/bindings/{binding_id}/supersede", status_code=201)
+    async def post_model_binding_supersede(binding_id: str, request: Request) -> dict:
+        return await phase15d_write(request, "supersede", binding_id)
+
+    @app.post("/model-matching/bindings/{binding_id}/restore", status_code=201)
+    async def post_model_binding_restore(binding_id: str, request: Request) -> dict:
+        return await phase15d_write(request, "restore", binding_id)
 
     @app.post("/model-matching/registrations")
     async def post_model_registration(request: Request) -> dict:
