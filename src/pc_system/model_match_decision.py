@@ -13,7 +13,9 @@ from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal, require_any_role
 from pc_system.model_sampling import _canonical_json_bytes
 from pc_system.model_sampling import _publish_exact_json
-from pc_system.model_matching_audit import read_verified_operation_snapshot, ensure_operation_event
+from pc_system.model_matching_audit import (read_verified_operation_snapshot, ensure_operation_event,
+                                          start_operation, complete_operation, fail_operation)
+from pc_system.model_resource_lock import model_resource_lock
 from pc_system.model_binding import build_model_binding, project_binding_chain
 from pc_system.model_registration import load_model_registration
 from pc_system.model_registration_input import _load_model_evidence, _required_candidate
@@ -418,15 +420,45 @@ def _operation_context(root: Path, operation_id: str) -> dict:
     return {**snapshot["operation"], "started_event_at": snapshot["events"][0]["timestamp"]}
 
 
+def _action_request(request: dict, operation_type: str, context: dict) -> dict:
+    if operation_type == "model_match.decision":
+        return normalize_decision_request(**request)
+    fields = {*_OBJECT_KEYS, "retrieval_run_id", "current_binding_id", "decision_id", "binding_id",
+              "decision_reason", "verification_scope", "expected_case_revision"}
+    if operation_type == "model_binding.supersede":
+        fields.update({"registration_id", "candidate_rank"})
+        registration_id, rank = request["registration_id"], request["candidate_rank"]
+    elif operation_type == "model_binding.restore":
+        fields.add("restores_binding_id")
+        target = context["restores_binding"]
+        if target is None or target["binding_id"] != request["restores_binding_id"]:
+            raise _error("binding_not_found", "Historical restore target does not exist.")
+        registration_id = target["registration_id"]
+        registration = context["registrations_by_id"].get(registration_id)
+        if registration is None:
+            raise _error("registration_not_eligible", "Historical registration does not match this case.")
+        rank = registration["candidate_rank"]
+    else:
+        raise _integrity("Unknown audited decision operation.")
+    if set(request) != fields:
+        raise _error("decision_not_allowed", "Binding transition request fields are invalid.")
+    for key in (*_OBJECT_KEYS, "retrieval_run_id", "current_binding_id"):
+        _identifier(request[key], key)
+    if any(request[key] != context[key] for key in (*_OBJECT_KEYS, "retrieval_run_id")):
+        raise _integrity("Binding request differs from the frozen object identity.")
+    return normalize_decision_request(
+        **{key: request[key] for key in ("decision_id", "binding_id", "decision_reason", "verification_scope", "expected_case_revision")},
+        case_id=context["case_id"], decision="confirmed", registration_id=registration_id, candidate_rank=rank,
+    )
+
+
 def _frozen_context(root: Path, owner: dict, operation: dict) -> dict:
     try:
         if (set(owner) != _OWNER_FIELDS or owner["schema_version"] != "1.0"
                 or any(owner[key] != operation[key] for key in ("operation_id", "request_id", "request_fingerprint", "idempotency_key_hash"))
                 or _audit_request_hash(owner["request"]) != operation["request_fingerprint"]):
             raise _integrity("Decision owner differs from its audit envelope.")
-        request = normalize_decision_request(**owner["request"])
-        if request != owner["request"] or compute_case_id(**owner["identity"]) != request["case_id"]:
-            raise _integrity("Decision owner identity is invalid.")
+        case_id = compute_case_id(**owner["identity"])
         frozen = owner["frozen"]
         expected_fields = {"registrations", "decision_head_id", "decision_head_fingerprint", "binding_head_fingerprint", "current_binding", "restores_binding"}
         if type(frozen) is not dict or set(frozen) != expected_fields:
@@ -441,16 +473,24 @@ def _frozen_context(root: Path, owner: dict, operation: dict) -> dict:
         if (None if current is None else _digest(current)) != frozen["binding_head_fingerprint"]:
             raise _integrity("Frozen binding head fingerprint differs.")
         result = {
-            **owner["identity"], **frozen, "case_id": request["case_id"], "request": request,
+            **owner["identity"], **frozen, "case_id": case_id,
             "evidence_fingerprint": compute_evidence_fingerprint(registrations),
             "registrations_by_id": {item["registration_id"]: item for item in registrations},
         }
+        request = _action_request(owner["request"], operation["operation_type"], result)
+        result["request"] = request
+        if request["case_id"] != case_id:
+            raise _integrity("Decision owner identity is invalid.")
         result["case_revision"] = compute_case_revision(result["object_fingerprint"], result["evidence_fingerprint"],
                                                         result["decision_head_fingerprint"], result["binding_head_fingerprint"])
         if result["case_revision"] != request["expected_case_revision"]:
             raise _integrity("Frozen evidence does not reproduce the submitted revision.")
-        if operation["operation_type"] != "model_match.decision" or owner["transition"] != ("create" if request["decision"] == "confirmed" else None):
+        transition = {"model_match.decision": "create" if request["decision"] == "confirmed" else None,
+                      "model_binding.supersede": "supersede", "model_binding.restore": "restore"}.get(operation["operation_type"])
+        if owner["transition"] != transition:
             raise _integrity("Decision transition differs from its audit action.")
+        if transition in {"supersede", "restore"} and (current is None or current["binding_id"] != owner["request"]["current_binding_id"]):
+            raise _integrity("Binding transition predecessor differs from its audit request.")
         return result
     except (KeyError, TypeError, ValueError) as exc:
         raise _integrity("Frozen decision owner cannot be validated.") from exc
@@ -460,7 +500,8 @@ def _prepare_decision_owner_locked(project_root: Path, *, request: dict, context
                                    operation: dict, principal: Principal, transition: str | None,
                                    restores_binding: dict | None) -> dict:
     root = Path(project_root)
-    build_match_decision(request=request, context=context, operation=operation, principal=principal,
+    normalized = _action_request(request, operation["operation_type"], {**context, "restores_binding": restores_binding})
+    build_match_decision(request=normalized, context=context, operation=operation, principal=principal,
                          previous_decision_id=context["decision_head_id"])
     if transition == "create" and context["current_binding"] is not None:
         raise _error("binding_exists", "Create cannot replace an existing binding.")
@@ -487,7 +528,7 @@ def _business_events(root: Path, owner: dict, decision: dict, binding: dict | No
                "decision_id": decision["decision_id"], "case_id": decision["case_id"]}
     kinds = ["match.decision_" + decision["decision"]]
     if binding is not None:
-        kinds.append("model_binding.created")
+        kinds.append("model_binding." + {"create": "created", "supersede": "superseded", "restore": "restored"}[binding["transition"]])
     if publish:
         return [ensure_operation_event(root, owner["operation_id"], kind, details) for kind in kinds]
     snapshot = read_verified_operation_snapshot(root, owner["operation_id"])
@@ -645,4 +686,135 @@ def _load_frozen_decision_context_locked(project_root: Path, *, owner: dict, ope
     if ((None if head is None else _digest(head)) != context["decision_head_fingerprint"]
             or binding["binding_head_fingerprint"] != context["binding_head_fingerprint"]):
         raise _integrity("Recovery would cross a committed decision or binding successor.")
+    restored = context["restores_binding"]
+    if restored is not None and not any(bundle["binding"] == restored for bundle in bundles):
+        raise _integrity("Restore target is not a verified historical binding.")
     return context
+
+
+def _resume_decision_locked(root: Path, *, owner: dict, operation: dict, principal: Principal) -> dict:
+    context = _load_frozen_decision_context_locked(root, owner=owner, operation=operation)
+    request = context["request"]
+    decision = build_match_decision(request=request, context=context, operation=operation,
+                                    principal=principal, previous_decision_id=context["decision_head_id"])
+    binding = None
+    if request["decision"] == "confirmed":
+        binding = build_model_binding(binding_id=request["binding_id"], decision=decision,
+            registration=context["registrations_by_id"][request["registration_id"]], transition=owner["transition"],
+            current_binding=context["current_binding"], restores_binding=context["restores_binding"])
+    commit = _publish_decision_bundle_locked(root, owner=owner, operation=operation, decision=decision, binding=binding)
+    complete_operation(root, operation["operation_id"], {"result_fingerprint": commit["result_fingerprint"]})
+    return load_decision_bundle(root, **{key: decision[key] for key in _OBJECT_KEYS}, decision_id=decision["decision_id"])
+
+
+def _run_decision_action(project_root: Path, *, request: dict, operation_type: str,
+                         principal: Principal, operation_id: str, request_id: str, idempotency_key: str) -> dict:
+    require_any_role(principal, {"operator", "expert"} if operation_type == "model_match.decision" else {"expert"})
+    root = Path(project_root)
+    request = copy.deepcopy(request)
+    if type(request.get("decision_reason")) is str:
+        request["decision_reason"] = request["decision_reason"].strip()
+    operation, _ = start_operation(root, operation_id=operation_id, operation_type=operation_type,
+        principal=principal, request_id=request_id, idempotency_key=idempotency_key, request_payload=request)
+    if operation["status"] == "completed":
+        return load_operation_decision_result(root, operation)
+    if operation["status"] == "failed":
+        raise _error(operation["error"]["code"], operation["error"]["message"])
+    identity, owner = None, None
+    try:
+        if operation_type == "model_match.decision":
+            normalized = normalize_decision_request(**request)
+            identity = resolve_decision_case_identity(root, normalized["case_id"])
+        else:
+            identity = {key: _identifier(request[key], key) for key in (*_OBJECT_KEYS, "retrieval_run_id")}
+        with model_resource_lock(root, "model-decision", *(identity[key] for key in _OBJECT_KEYS)):
+            operation = _operation_context(root, operation_id)
+            if operation["status"] == "completed":
+                return load_operation_decision_result(root, operation)
+            if operation["status"] == "failed":
+                raise _error(operation["error"]["code"], operation["error"]["message"])
+            owner = _inspect_object_decision_writes_locked(root, identity=identity, operation=operation)
+            if owner is None:
+                context = load_decision_context(root, **{key: identity[key] for key in (*_OBJECT_KEYS, "retrieval_run_id")})
+                bundles = list_decision_bundles(root, **{key: identity[key] for key in _OBJECT_KEYS})
+                target = next((b["binding"] for b in bundles if b["binding"] is not None and b["binding"]["binding_id"] == request.get("restores_binding_id")), None)
+                context["restores_binding"] = target
+                normalized = _action_request(request, operation_type, context)
+                if context["case_id"] != normalized["case_id"] or context["case_revision"] != normalized["expected_case_revision"]:
+                    raise _error("decision_conflict", "Decision item changed; refresh required.")
+                if not context["registrations_by_id"]:
+                    raise _error("registration_not_eligible", "Decision case has no eligible registration evidence.")
+                current = context["current_binding"]
+                if operation_type == "model_match.decision":
+                    if normalized["decision"] == "confirmed" and current is not None:
+                        code = "binding_stale" if context["binding_status"] == "stale" else "binding_exists"
+                        raise _error(code, "Existing binding requires an explicit expert transition.")
+                    head = context["decision_head"]
+                    if head is not None and head["decision"] in {"confirmed", "no_match"} and head["evidence_fingerprint"] == context["evidence_fingerprint"]:
+                        raise _error("decision_conflict", "Decision case is already processed.")
+                    transition = "create" if normalized["decision"] == "confirmed" else None
+                else:
+                    if current is None or current["binding_id"] != request["current_binding_id"]:
+                        raise _error("decision_conflict", "Current binding changed; refresh required.")
+                    transition = "supersede" if operation_type.endswith("supersede") else "restore"
+                if normalized["binding_id"] is not None and any(b["binding"] is not None and b["binding"]["binding_id"] == normalized["binding_id"] for b in bundles):
+                    raise _error("binding_exists", "Binding identifier has already been used.")
+                if normalized["registration_id"] is not None and any(b["decision"]["case_id"] == context["case_id"] and b["decision"]["decision"] == "rejected" and b["decision"]["registration_id"] == normalized["registration_id"] for b in bundles):
+                    raise _error("decision_not_allowed", "This registration has already been rejected.")
+                owner = _prepare_decision_owner_locked(root, request=request, context=context,
+                    operation=operation, principal=principal, transition=transition, restores_binding=target)
+            return _resume_decision_locked(root, owner=owner, operation=operation, principal=principal)
+    except (ModelMatchingError, OSError, KeyError, TypeError, ValueError) as exc:
+        if owner is None and identity is not None:
+            try:
+                persisted = _read_decision_json(_bundle_directory(root, identity, request["decision_id"]) / "owner.json")
+                if persisted["operation_id"] == operation_id:
+                    owner = persisted
+            except FileNotFoundError:
+                pass
+        if owner is not None:
+            if isinstance(exc, ModelMatchingError) and exc.code == "artifact_integrity_failed":
+                raise
+            raise _error("publication_recovery_required", "Decision publication requires same-operation recovery.") from exc
+        if isinstance(exc, ModelMatchingError) and exc.code in {"operation_busy", "publication_recovery_required"}:
+            raise
+        code = exc.code if isinstance(exc, ModelMatchingError) else "decision_not_allowed"
+        fail_operation(root, operation_id, code, str(exc))
+        raise _error(code, str(exc)) from exc
+
+
+def decide_model_match(project_root: Path, *, decision_id: str, case_id: str, decision: str,
+                       decision_reason: str, verification_scope: str, registration_id: str | None,
+                       candidate_rank: int | None, expected_case_revision: str, binding_id: str | None,
+                       principal: Principal, operation_id: str, request_id: str, idempotency_key: str) -> dict:
+    request = dict(decision_id=decision_id, case_id=case_id, decision=decision, decision_reason=decision_reason,
+                   verification_scope=verification_scope, registration_id=registration_id, candidate_rank=candidate_rank,
+                   expected_case_revision=expected_case_revision, binding_id=binding_id)
+    return _run_decision_action(project_root, request=request, operation_type="model_match.decision", principal=principal,
+                                operation_id=operation_id, request_id=request_id, idempotency_key=idempotency_key)
+
+
+def supersede_model_binding(project_root: Path, *, asset_id: str, source_id: str, instance_id: str,
+                            retrieval_run_id: str, current_binding_id: str, registration_id: str, candidate_rank: int,
+                            decision_id: str, binding_id: str, decision_reason: str, verification_scope: str,
+                            expected_case_revision: str, principal: Principal, operation_id: str,
+                            request_id: str, idempotency_key: str) -> dict:
+    request = dict(asset_id=asset_id, source_id=source_id, instance_id=instance_id, retrieval_run_id=retrieval_run_id,
+                   current_binding_id=current_binding_id, registration_id=registration_id, candidate_rank=candidate_rank,
+                   decision_id=decision_id, binding_id=binding_id, decision_reason=decision_reason,
+                   verification_scope=verification_scope, expected_case_revision=expected_case_revision)
+    return _run_decision_action(project_root, request=request, operation_type="model_binding.supersede", principal=principal,
+                                operation_id=operation_id, request_id=request_id, idempotency_key=idempotency_key)
+
+
+def restore_model_binding(project_root: Path, *, asset_id: str, source_id: str, instance_id: str,
+                          retrieval_run_id: str, current_binding_id: str, restores_binding_id: str,
+                          decision_id: str, binding_id: str, decision_reason: str, verification_scope: str,
+                          expected_case_revision: str, principal: Principal, operation_id: str,
+                          request_id: str, idempotency_key: str) -> dict:
+    request = dict(asset_id=asset_id, source_id=source_id, instance_id=instance_id, retrieval_run_id=retrieval_run_id,
+                   current_binding_id=current_binding_id, restores_binding_id=restores_binding_id,
+                   decision_id=decision_id, binding_id=binding_id, decision_reason=decision_reason,
+                   verification_scope=verification_scope, expected_case_revision=expected_case_revision)
+    return _run_decision_action(project_root, request=request, operation_type="model_binding.restore", principal=principal,
+                                operation_id=operation_id, request_id=request_id, idempotency_key=idempotency_key)

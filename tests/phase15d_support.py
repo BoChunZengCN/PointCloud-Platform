@@ -1,6 +1,7 @@
 """Phase 15D 的可信主体和确定性配准夹具。"""
 
 from types import SimpleNamespace
+import json
 from pc_system.model_matching_identity import Principal
 from pc_system.model_registration import register_model_candidate
 from phase15c_support import DeterministicRegistrationEngine, prepare_phase15c_case
@@ -12,7 +13,12 @@ AUDITOR = Principal("auditor-a", frozenset({"auditor"}), "cli")
 
 
 def publish_registration(project_root, *, sequence=1, mode="passed"):
-    prepared = prepare_phase15c_case(project_root)
+    existing = sorted((project_root / "reports" / "model_registrations").glob("*/*/*/*/registration_report.json"))
+    if existing:
+        report = json.loads(existing[0].read_text(encoding="utf-8"))
+        prepared = {key: report[key] for key in ("asset_id", "source_id", "instance_id", "retrieval_run_id", "config_id")}
+    else:
+        prepared = prepare_phase15c_case(project_root)
     return register_model_candidate(
         project_root,
         registration_id=f"registration-{sequence}",
