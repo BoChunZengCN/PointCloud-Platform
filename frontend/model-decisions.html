@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模型决策工作台 · 点云平台</title><link rel="stylesheet" href="model-decisions.css">
+</head>
+<body>
+<main>
+  <nav><a href="index.html">项目驾驶舱</a><a href="model-matching-lab.html">专业匹配工作台</a></nav>
+  <header><p class="eyebrow">点云 × 模型</p><h1>模型决策工作台</h1><p>系统完成检索与配准，您只需核验、确认或纠正。</p></header>
+  <details class="connection"><summary>连接与身份</summary><label>API 访问令牌<input id="token" type="password" autocomplete="off" placeholder="仅在当前页面内存使用"></label><button id="connect">连接</button><p>权限由服务端验证。令牌不会放入 URL 或本地存储；无令牌时使用当前请求身份。</p></details>
+  <section id="filters" aria-label="筛选区">
+    <label>项目 / 资产<input id="asset-filter" placeholder="资产编号"></label>
+    <label>类别<input id="class-filter" placeholder="类别编号"></label>
+    <label>质量状态<select id="gate-filter"><option value="">全部质量</option><option value="passed">通过</option><option value="review_required">待专家复核</option><option value="rejected">算法拒绝</option></select></label>
+    <label>起始时间<input id="start-filter" type="datetime-local"></label><label>结束时间<input id="end-filter" type="datetime-local"></label>
+    <button id="apply-filters">应用筛选</button>
+  </section>
+  <div class="tabs" aria-label="事项状态"><button data-status="pending" aria-pressed="true">待处理 <span data-count="pending">0</span></button><button data-status="processed" aria-pressed="false">已处理 <span data-count="processed">0</span></button><button data-status="all" aria-pressed="false">全部 <span data-count="all">0</span></button><button id="refresh">刷新</button></div>
+  <p id="message" role="status" aria-live="polite">正在加载…</p>
+  <div class="workspace">
+    <section aria-label="决定事项列表"><div id="decision-list"></div><button id="more" hidden>加载更多</button></section>
+    <section id="detail" hidden aria-label="事项详情">
+      <h2 id="object-title"></h2><p><span data-testid="case-status" id="case-status"></span> · <span id="object-class"></span></p>
+      <p id="gate-note"></p><label>候选模型<select id="candidate"></select></label><p id="candidate-summary"></p>
+      <p>当前绑定：<strong id="binding-id" data-testid="binding-id"></strong></p><p id="decision-summary"></p>
+      <label>核验范围<select id="scope"><option value="identity">仅确认物体身份</option><option value="operational_pose">确认作业参考位姿</option></select></label>
+      <label>处理原因<textarea id="reason" data-testid="decision-reason" maxlength="1000" rows="3" placeholder="请简要说明核验依据或拒绝原因"></textarea></label>
+      <div class="actions"><button data-action="confirm">确认</button><button data-action="reject">拒绝</button><button data-action="no_match">无匹配</button></div>
+      <p class="muted">确认不代表工程安全认证。数据可作为后续受控学习的来源，本阶段不会自动训练。</p>
+    </section>
+  </div>
+</main>
+<script src="model-matching-workbench.js"></script><script src="model-decisions.js"></script>
+</body></html>
