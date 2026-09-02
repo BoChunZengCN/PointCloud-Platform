@@ -86,6 +86,7 @@ def _project(root: Path, identity: dict, reports: list[dict], principal: Princip
         timestamps.append(head["decided_at"])
     updated_at = max(timestamps, key=_time)
     result = {
+        "viewer_role": "expert" if expert else "operator" if "operator" in principal.roles else "auditor",
         "case_id": case_id, "status": status,
         "case_revision": compute_case_revision(context["object_fingerprint"], evidence,
                                                 None if head is None else _digest(head), bindings["binding_head_fingerprint"]),

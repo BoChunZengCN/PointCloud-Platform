@@ -7,6 +7,10 @@
   const labels = {pending:"待处理", processed:"已处理", stale:"已陈旧"};
   const gateLabels = {passed:"通过", review_required:"待专家复核", rejected:"算法拒绝"};
   function statusLabel(status) { return labels[status] || "未知状态"; }
+  function validMatrix(value) {
+    return Array.isArray(value) && value.length === 4 && value.every(row =>
+      Array.isArray(row) && row.length === 4 && row.every(number => typeof number === "number" && Number.isFinite(number)));
+  }
   function availableActions(item, role) {
     const allowed = role === "expert" ? ["confirm","reject","no_match","rerun","supersede","restore"] :
       role === "operator" ? ["confirm","reject","no_match"] : [];
@@ -73,7 +77,7 @@
       const item = state.item;
       if (!item) { $("detail").hidden = true; return; }
       $("detail").hidden = false;
-      state.role = options.professional ? (item.available_actions?.length ? "expert" : "auditor") : "operator";
+      state.role = options.professional ? (item.viewer_role || "auditor") : (item.viewer_role === "auditor" ? "auditor" : "operator");
       $("object-title").textContent = item.object.instance_id;
       $("object-class").textContent = item.object.class_id || "未分类";
       $("case-status").textContent = statusLabel(item.status);
@@ -150,9 +154,9 @@
         if (state.pending && state.pending.signature !== signature) throw new Error("上次提交结果尚未确认，请刷新核对后再改变操作内容。");
         if (!state.pending) state.pending = {signature,request};
         state.busy = true; renderActions(); message("正在提交，请勿关闭页面…");
-        await api(state.pending.request.path,state.pending.request.body);
+        const result = await api(state.pending.request.path,state.pending.request.body);
         state.pending = null;
-        const caseId = state.item.case_id;
+        const caseId = result.decision?.case_id || state.item.case_id;
         await loadList(); await loadDetail(caseId); message("操作已保存，已加载最新决定与绑定。");
       } catch (error) {
         if (error.status && error.status < 500) state.pending = null;
@@ -175,5 +179,5 @@
     });
     loadList();
   }
-  return {statusLabel,availableActions,buildListViewModel,buildDecisionPayload,mount};
+  return {statusLabel,validMatrix,availableActions,buildListViewModel,buildDecisionPayload,mount};
 });

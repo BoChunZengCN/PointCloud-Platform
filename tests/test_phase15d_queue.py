@@ -14,9 +14,11 @@ def test_queue_is_automatic_and_role_cropped(tmp_path):
     item = load_model_decision_item(tmp_path, case_id=case.request_fields["case_id"], principal=OPERATOR)
     assert item["available_actions"] == ["confirm", "reject", "no_match"]
     assert "technical" not in item
+    assert item["viewer_role"] == "operator"
     assert "rigid_transform_4x4" not in item["candidate_summary"][0]
     professional = load_model_decision_item(tmp_path, case_id=item["case_id"], principal=AUDITOR)
     assert professional["available_actions"] == []
+    assert professional["viewer_role"] == "auditor"
     assert professional["technical"]["registrations"][0]["rigid_transform_4x4"][0][3] == 1
 
 
