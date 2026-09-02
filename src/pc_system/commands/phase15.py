@@ -6,6 +6,9 @@ import stat
 import uuid
 from pathlib import Path
 
+from pc_system.model_decision_queue import crop_model_binding, list_model_decision_items, load_model_decision_item, load_model_bindings
+from pc_system.model_match_decision import decide_model_match, supersede_model_binding, restore_model_binding
+
 from pc_system.model_import import import_model_version
 from pc_system.model_feature_index import (
     build_model_feature_index,
@@ -719,4 +722,22 @@ def run_show_model_registration(
         registration_id=registration_id,
     )
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_phase15d_command(command: str, project_root: Path, *, actor: str, expert: bool = False, **values) -> int:
+    services = {
+        "list-model-decision-items": list_model_decision_items,
+        "show-model-decision-item": load_model_decision_item,
+        "decide-model-match": decide_model_match,
+        "list-model-bindings": load_model_bindings,
+        "supersede-model-binding": supersede_model_binding,
+        "restore-model-binding": restore_model_binding,
+    }
+    role = "expert" if expert or command in {"supersede-model-binding", "restore-model-binding"} else "operator"
+    principal = Principal(actor, frozenset({role}), "cli")
+    result = services[command](project_root, principal=principal, **values)
+    if "binding" in result:
+        result = {**result, "binding": crop_model_binding(result["binding"], principal=principal)}
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

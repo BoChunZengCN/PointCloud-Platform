@@ -13,6 +13,7 @@ las = ["laspy"]
 api = ["fastapi", "uvicorn"]
 models = ["trimesh>=4,<5"]
 registration = ["open3d>=0.19,<1"]
+browser-test = ["pytest-playwright>=0.7,<1", "uvicorn>=0.30,<1"]
 test = [
   "pytest>=8,<9",
   "fastapi>=0.115,<1",

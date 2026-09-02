@@ -43,6 +43,7 @@ from pc_system.commands.phase14 import (
     run_submit_segmentation_correction,
 )
 from pc_system.commands.phase15 import (
+    run_phase15d_command,
     run_build_model_feature_index,
     run_create_model_retrieval_config,
     run_create_model_asset,
@@ -505,6 +506,9 @@ def main(
                 instance_id=args.instance_id,
                 registration_id=args.registration_id,
             )
+        if args.command in {"list-model-decision-items", "show-model-decision-item", "decide-model-match",
+                            "list-model-bindings", "supersede-model-binding", "restore-model-binding"}:
+            return run_phase15d_command(**vars(args))
         raise ValueError(f"Unsupported command: {args.command}")
     except ModelMatchingError as exc:
         print(f"{exc.code}: {exc}", file=sys.stderr)

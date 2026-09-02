@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>专业匹配工作台 · 点云平台</title><link rel="stylesheet" href="model-decisions.css"><link rel="stylesheet" href="model-matching-lab.css"></head>
+<body><main>
+<nav><a href="index.html">项目驾驶舱</a><a href="model-decisions.html">业务决策工作台</a></nav>
+<header><p class="eyebrow">可核验 · 可追溯 · 不可变版本</p><h1>专业匹配工作台</h1><p>专家复核配准证据，管理绑定版本；审计员只读查看。</p></header>
+<details class="connection"><summary>连接与身份</summary><label>API 访问令牌<input id="token" type="password" autocomplete="off" placeholder="仅在当前页面内存使用"></label><button id="connect">连接</button><p>权限由服务端验证；不接受 URL 中的角色或凭据。</p></details>
+<section id="filters" aria-label="筛选区"><label>项目 / 资产<input id="asset-filter"></label><label>类别<input id="class-filter"></label><label>质量状态<select id="gate-filter"><option value="">全部质量</option><option value="passed">通过</option><option value="review_required">待专家复核</option><option value="rejected">算法拒绝</option></select></label><label>起始时间<input id="start-filter" type="datetime-local"></label><label>结束时间<input id="end-filter" type="datetime-local"></label><button id="apply-filters">应用筛选</button></section>
+<div class="tabs" aria-label="事项状态"><button data-status="pending" aria-pressed="true">待处理 <span data-count="pending">0</span></button><button data-status="processed" aria-pressed="false">已处理 <span data-count="processed">0</span></button><button data-status="all" aria-pressed="false">全部 <span data-count="all">0</span></button><button id="refresh">刷新</button></div>
+<p id="message" role="status" aria-live="polite">正在加载…</p>
+<div class="workspace"><section aria-label="决定事项列表"><div id="decision-list"></div><button id="more" hidden>加载更多</button></section>
+<section id="detail" hidden aria-label="事项详情">
+<h2 id="object-title"></h2><p><span id="case-status" data-testid="case-status"></span> · <span id="object-class"></span> · <strong id="role-status"></strong></p><p id="gate-note"></p>
+<label>候选模型<select id="candidate"></select></label><p id="candidate-summary"></p><p>当前绑定：<strong id="binding-id" data-testid="binding-id"></strong></p><p id="decision-summary"></p>
+<label>核验范围<select id="scope"><option value="identity">仅确认物体身份</option><option value="operational_pose">确认作业参考位姿</option><option value="expert_pose">专家核验位姿</option></select></label>
+<label>处理原因<textarea id="reason" data-testid="decision-reason" maxlength="1000" rows="3"></textarea></label><div class="actions"><button data-action="confirm">确认</button><button data-action="reject">拒绝</button><button data-action="no_match">无匹配</button></div>
+<div id="technical">
+<section><h3>配准配置与引擎</h3><p id="engine"></p><label>重新配准配置<select id="registration-config"><option value="">正在读取已发布配置…</option></select></label><div class="actions"><button data-action="rerun">重新配准</button><button data-action="supersede">替换当前绑定</button></div><p id="config-note" class="muted"></p></section>
+<section><h3>刚性变换矩阵（模型 → 对象，平移单位 m）</h3><table id="matrix" aria-label="刚性变换矩阵"></table><h3>覆盖率、残差与尺寸</h3><dl id="metrics"></dl><p id="gate-reasons"></p></section>
+<details><summary>Top-K 候选解释与模型版本</summary><pre id="retrieval-evidence"></pre></details>
+<section><h3>绑定版本链</h3><ol id="binding-history"></ol><label>恢复历史版本<select id="restore-target"></select></label><p>将创建新版本，不修改旧绑定。</p><button data-action="restore">恢复历史版本</button></section>
+<details><summary>人工决定历史</summary><pre id="decision-history"></pre></details><details><summary>审计操作与事件引用</summary><pre id="audit"></pre></details>
+</div></section></div></main><script src="model-matching-workbench.js"></script><script src="model-matching-lab.js"></script></body></html>

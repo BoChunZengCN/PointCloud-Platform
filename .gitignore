@@ -12,3 +12,5 @@ workspace/
 dist/
 build/
 *.egg-info/
+test-results/
+playwright-report/
