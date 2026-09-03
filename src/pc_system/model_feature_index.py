@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from pc_system.identifiers import validate_identifier
-from pc_system.model_feature_store import publish_model_feature
+from pc_system.model_feature_store import load_feature, publish_model_feature
 from pc_system.model_library import list_model_assets, load_model_asset, model_asset_path
 from pc_system.model_matching_audit import (
     complete_operation,
@@ -35,6 +35,8 @@ from pc_system.model_sampling import (
     list_sampled_representations,
     sample_model_version,
 )
+from pc_system.model_representation import load_model_representation
+from pc_system.reference_representation import build_reference_representation
 
 
 _MAX_LINE_BYTES = 64 * 1024
@@ -142,6 +144,19 @@ def _select_representation(
     parent_operation_id: str,
     mesh_reader,
 ) -> tuple[dict, str]:
+    asset = load_model_asset(root, model_id)
+    if asset.get("source_family") == "scanned_reference":
+        if config["feature_config"]["schema_version"] != "1.1":
+            raise ModelMatchingError("feature_config_invalid", "旧特征配置不支持扫描参考表达。")
+        child = _child_identity("auto-reference", parent_operation_id, model_id, version_id, config["config_fingerprint"])
+        representation = build_reference_representation(
+            root, model_id=model_id, version_id=version_id,
+            config=config["feature_config"], principal=principal,
+            operation_id=child[0], request_id=child[1], idempotency_key=child[2],
+        )
+        return representation, child[0]
+    if asset.get("source_family", "cad_mesh") != "cad_mesh":
+        raise ModelMatchingError("model_representation_integrity_error", "模型来源类型未知。")
     expected = _matching_config(config)
     matching = [
         item
@@ -218,18 +233,10 @@ def _build_entry(
         request_id=feature_child[1],
         idempotency_key=feature_child[2],
     )
-    representation_path = (
-        root
-        / "models"
-        / model_id
-        / "representations"
-        / version_id
-        / "cad_sampled"
-        / representation["representation_id"]
-        / "representation.json"
-    )
-    return {
-        "schema_version": "1.0",
+    representation_path = (root / "models" / model_id / "representations" / version_id
+                           / representation["representation_type"] / representation["representation_id"] / "representation.json")
+    entry = {
+        "schema_version": config["feature_config"]["schema_version"],
         "category_id": asset["category_id"],
         "model_id": model_id,
         "version_id": version_id,
@@ -238,7 +245,11 @@ def _build_entry(
         "model_asset_fingerprint": _file_fingerprint(model_asset_path(root, model_id)),
         "release_fingerprint": _release_fingerprint(release),
         "representation_id": representation["representation_id"],
+        "representation_type": representation["representation_type"],
         "representation_fingerprint": _file_fingerprint(representation_path),
+        "source_manifest_fingerprint": feature["source"]["source_manifest_fingerprint"],
+        "source_geometry_fingerprint": feature["source"]["source_geometry_fingerprint"],
+        "representation_geometry_fingerprint": feature["source"]["representation_geometry_fingerprint"],
         "sampling_operation_id": sampling_operation_id,
         "feature_id": feature["feature_id"],
         "feature_vector_fingerprint": feature["feature_vector_fingerprint"],
@@ -251,6 +262,10 @@ def _build_entry(
         "tag_terms": _tokens(asset.get("tags", [])),
         "terms": _tokenize(asset),
     }
+    for key in ("source_quality_fingerprint", "source_quality_status", "source_review_id", "source_review_fingerprint"):
+        if key in feature["source"]:
+            entry[key] = feature["source"][key]
+    return entry
 
 
 def _production_sources(root: Path) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
@@ -422,7 +437,7 @@ def load_model_feature_index(
             or owner["schema_version"] != "1.0"
             or owner["index_id"] != index_id
             or owner["operation_id"] != manifest["operation_id"]
-            or manifest["schema_version"] != "1.0"
+            or manifest["schema_version"] not in {"1.0", "1.1"}
             or manifest["index_id"] != index_id
             or manifest["index_mode"] not in {"production", "challenger"}
             or manifest["status"] != "ready"
@@ -433,7 +448,8 @@ def load_model_feature_index(
         ):
             raise ValueError("index manifest differs")
         config = load_retrieval_config(root, manifest["config_id"])
-        if config["config_fingerprint"] != manifest["config_fingerprint"]:
+        if (config["config_fingerprint"] != manifest["config_fingerprint"]
+                or config["feature_config"]["schema_version"] != manifest["schema_version"]):
             raise ValueError("index config differs")
     except (KeyError, TypeError, ValueError, ModelMatchingError) as exc:
         if isinstance(exc, ModelMatchingError) and exc.code == "operation_busy":
@@ -471,6 +487,30 @@ def read_index_entries(project_root: Path, index_id: str) -> Iterator[dict]:
         keys = [(item["category_id"], item["model_id"], item["version_id"]) for item in entries]
         if keys != sorted(keys) or len(entries) != manifest["entry_count"]:
             raise ValueError("index rows are not canonical")
+        if manifest["schema_version"] == "1.1":
+            for item in entries:
+                if item.get("schema_version") != "1.1" or item.get("representation_type") not in {"cad_sampled", "scanned_reference"}:
+                    raise ValueError("index representation type is invalid")
+                representation = load_model_representation(root, item["model_id"], item["version_id"], item["representation_id"])
+                feature = load_feature(root, feature_type="model", identity={
+                    "model_id": item["model_id"], "version_id": item["version_id"],
+                    "representation_id": item["representation_id"], "feature_id": item["feature_id"],
+                })
+                source = feature["source"]
+                if (representation["representation_type"] != item["representation_type"]
+                        or source.get("representation_type") != item["representation_type"]
+                        or item.get("representation_fingerprint") != source.get("representation_fingerprint")
+                        or item.get("source_manifest_fingerprint") != source.get("source_manifest_fingerprint")
+                        or item.get("source_geometry_fingerprint") != source.get("source_geometry_fingerprint")
+                        or item.get("representation_geometry_fingerprint") != source.get("representation_geometry_fingerprint")
+                        or item.get("feature_vector_fingerprint") != feature.get("feature_vector_fingerprint")):
+                    raise ValueError("index representation evidence differs")
+                if item["representation_type"] == "scanned_reference" and any(
+                    item.get(key) != source.get(key) for key in (
+                        "source_quality_fingerprint", "source_quality_status", "source_review_id", "source_review_fingerprint"
+                    )
+                ):
+                    raise ValueError("index scanned evidence differs")
     except (OSError, UnicodeError, ValueError, KeyError, json.JSONDecodeError, ModelMatchingError) as exc:
         if isinstance(exc, ModelMatchingError) and exc.code == "operation_busy":
             raise
@@ -593,7 +633,7 @@ def build_model_feature_index(
         indexed = len(entries)
         coverage_value = 1.0 if eligible == 0 else round(indexed / eligible, 12)
         coverage = {
-            "schema_version": "1.0",
+            "schema_version": config["feature_config"]["schema_version"],
             "eligible_count": eligible,
             "indexed_count": indexed,
             "excluded_count": len(exclusions),
@@ -604,7 +644,7 @@ def build_model_feature_index(
         snapshot = read_verified_operation_snapshot(root, operation_id)
         started = snapshot["events"][0]
         manifest = {
-            "schema_version": "1.0",
+            "schema_version": config["feature_config"]["schema_version"],
             "index_id": index_id,
             "index_mode": index_mode,
             "config_id": config["config_id"],

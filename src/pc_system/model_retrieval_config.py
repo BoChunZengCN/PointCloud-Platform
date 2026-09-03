@@ -19,7 +19,7 @@ from pc_system.model_resource_lock import model_resource_lock
 from pc_system.model_sampling import _file_fingerprint, _publish_exact_json
 
 
-_FEATURE_FIELDS = {
+_FEATURE_V10_FIELDS = {
     "schema_version",
     "config_id",
     "algorithm_version",
@@ -31,6 +31,7 @@ _FEATURE_FIELDS = {
     "degenerate_eigenvalue_ratio",
     "ambiguous_axis_relative_gap",
 }
+_FEATURE_V11_FIELDS = _FEATURE_V10_FIELDS | {"scanned_sampling"}
 _SAMPLING_FIELDS = {"algorithm", "point_count", "random_seed"}
 _SCORING_FIELDS = {
     "schema_version",
@@ -128,12 +129,19 @@ def _config_identity(values: list[object]) -> str:
 
 
 def _normalize_feature(value: object) -> dict:
-    feature = _exact_dict(value, _FEATURE_FIELDS, "Feature config")
+    if type(value) is not dict:
+        raise _invalid("Feature config structure is invalid.")
+    version = value.get("schema_version")
+    if version == "1.0":
+        feature = _exact_dict(value, _FEATURE_V10_FIELDS, "Feature config")
+    elif version == "1.1":
+        feature = _exact_dict(value, _FEATURE_V11_FIELDS, "Feature config")
+    else:
+        raise _invalid("Feature config version is invalid.")
     sampling = _exact_dict(feature["sampling"], _SAMPLING_FIELDS, "Sampling config")
     config_id = _config_identity([feature["config_id"]])
     if (
-        feature["schema_version"] != "1.0"
-        or feature["algorithm_version"] != "phase15b2-feature-v1"
+        feature["algorithm_version"] != "phase15b2-feature-v1"
         or sampling["algorithm"] != "sha256_area_weighted_v1"
     ):
         raise _invalid("Feature config version is invalid.")
@@ -149,8 +157,8 @@ def _normalize_feature(value: object) -> dict:
     random_seed = _exact_int(
         sampling["random_seed"], 0, 9_223_372_036_854_775_807, "random_seed"
     )
-    return {
-        "schema_version": "1.0",
+    normalized = {
+        "schema_version": version,
         "config_id": config_id,
         "algorithm_version": "phase15b2-feature-v1",
         "sampling": {
@@ -175,6 +183,24 @@ def _normalize_feature(value: object) -> dict:
             label="ambiguous_axis_relative_gap",
         ),
     }
+    if version == "1.1":
+        scanned = _exact_dict(
+            feature["scanned_sampling"], _SAMPLING_FIELDS, "Scanned sampling config"
+        )
+        if scanned["algorithm"] != "sha256_point_subset_v1":
+            raise _invalid("Scanned sampling algorithm is invalid.")
+        scanned_count = _exact_int(
+            scanned["point_count"], minimum_points, 500_000, "scanned point_count"
+        )
+        normalized["scanned_sampling"] = {
+            "algorithm": "sha256_point_subset_v1",
+            "point_count": scanned_count,
+            "random_seed": _exact_int(
+                scanned["random_seed"], 0, 9_223_372_036_854_775_807,
+                "scanned random_seed",
+            ),
+        }
+    return normalized
 
 
 def _normalize_scoring(value: object) -> dict:
@@ -265,7 +291,7 @@ def build_retrieval_config(
         ]
     )
     value = {
-        "schema_version": "1.0",
+        "schema_version": normalized_feature["schema_version"],
         "config_id": config_id,
         "feature_config": normalized_feature,
         "scoring_config": normalized_scoring,
@@ -361,7 +387,7 @@ def load_retrieval_config(project_root: Path, config_id: str) -> dict:
         ) from exc
     if (
         set(manifest) != _MANIFEST_FIELDS
-        or manifest.get("schema_version") != "1.0"
+        or manifest.get("schema_version") not in {"1.0", "1.1"}
         or manifest.get("config_id") != config_id
         or {key: manifest[key] for key in canonical} != canonical
         or manifest.get("status") != "ready"

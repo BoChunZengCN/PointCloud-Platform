@@ -143,7 +143,7 @@ def _load_release(root: Path, release_id: str) -> dict:
         if (
             set(owner) != _OWNER_FIELDS
             or set(release) != _RELEASE_FIELDS
-            or release["schema_version"] != "1.0"
+            or release["schema_version"] not in {"1.0", "1.1"}
             or release["release_id"] != release_id
             or release["status"] != "published"
             or owner["release_id"] != release_id
@@ -163,7 +163,8 @@ def _load_release(root: Path, release_id: str) -> dict:
             root, release["index_id"], require_current_heads=False
         )
         if (
-            _fingerprint(index) != release["index_fingerprint"]
+            index["schema_version"] != release["schema_version"]
+            or _fingerprint(index) != release["index_fingerprint"]
             or index["current_heads"] != release["current_heads"]
             or index["coverage"] != release["coverage"]
         ):
@@ -389,7 +390,7 @@ def release_model_feature_index(
             snapshot = read_verified_operation_snapshot(root, operation_id)
             started = snapshot["events"][0]
             release = {
-                "schema_version": "1.0",
+                "schema_version": index["schema_version"],
                 "release_id": release_id,
                 "index_id": index_id,
                 "index_fingerprint": _fingerprint(index),

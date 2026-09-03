@@ -21,8 +21,8 @@ from pc_system.model_retrieval_input import _reload_retrieval_object, load_retri
 from pc_system.model_sampling import (
     _file_fingerprint,
     _publish_exact_json,
-    load_sampled_representation,
 )
+from pc_system.model_representation import load_model_representation, load_representation_points
 
 
 _OWNER_FIELDS = {
@@ -144,22 +144,9 @@ def _read_json(path: Path) -> dict:
 
 
 def _sampled_points(root: Path, representation: dict) -> list[dict]:
-    path = (
-        root
-        / "models"
-        / representation["model_id"]
-        / "representations"
-        / representation["source_version_id"]
-        / "cad_sampled"
-        / representation["representation_id"]
-        / "sampled_points.json"
-    )
-    value = _read_json(path)
-    points = value.get("points")
+    points = load_representation_points(root, representation)
     if type(points) is not list or len(points) != representation["point_count"]:
-        raise ModelMatchingError(
-            "feature_integrity_error", "Sampled model points are invalid."
-        )
+        raise ModelMatchingError("feature_integrity_error", "Sampled model points are invalid.")
     normalized = []
     for point in points:
         if (
@@ -177,9 +164,7 @@ def _sampled_points(root: Path, representation: dict) -> list[dict]:
 def _model_source(
     root: Path, model_id: str, version_id: str, representation_id: str
 ) -> tuple[dict, list[dict]]:
-    representation = load_sampled_representation(
-        root, model_id, version_id, representation_id
-    )
+    representation = load_model_representation(root, model_id, version_id, representation_id)
     if not any(
         release["version_id"] == version_id
         for release in list_model_releases(root, model_id)
@@ -187,25 +172,21 @@ def _model_source(
         raise ModelMatchingError(
             "feature_not_found", "Model version has no verified release."
         )
-    representation_path = (
-        root
-        / "models"
-        / model_id
-        / "representations"
-        / version_id
-        / "cad_sampled"
-        / representation_id
-        / "representation.json"
-    )
+    representation_path = (root / "models" / model_id / "representations" / version_id
+                           / representation["representation_type"] / representation_id / "representation.json")
     source = {
         "model_id": model_id,
         "version_id": version_id,
         "representation_id": representation_id,
+        "representation_type": representation["representation_type"],
         "source_manifest_fingerprint": representation["source_manifest_fingerprint"],
         "source_geometry_fingerprint": representation["source_geometry_fingerprint"],
         "representation_geometry_fingerprint": representation["geometry_fingerprint"],
         "representation_fingerprint": _file_fingerprint(representation_path),
     }
+    for key in ("source_quality_fingerprint", "source_quality_status", "source_review_id", "source_review_fingerprint"):
+        if key in representation:
+            source[key] = representation[key]
     return source, _sampled_points(root, representation)
 
 
@@ -233,7 +214,7 @@ def _expected_manifest(
     *, feature_type: str, source: dict, config: dict, features: dict, operation: dict
 ) -> dict:
     identity_payload = {
-        "schema_version": "1.0",
+        "schema_version": config["feature_config"]["schema_version"],
         "feature_type": feature_type,
         "source": source,
         "config_fingerprint": config["config_fingerprint"],
@@ -243,7 +224,7 @@ def _expected_manifest(
     snapshot = read_verified_operation_snapshot(Path(operation["project_root"]), operation["operation_id"])
     started = snapshot["events"][0]
     return {
-        "schema_version": "1.0",
+        "schema_version": config["feature_config"]["schema_version"],
         "feature_id": feature_id,
         "feature_type": feature_type,
         "source": source,
@@ -365,7 +346,7 @@ def load_feature(
     if (
         set(owner) != _OWNER_FIELDS
         or set(manifest) != _MANIFEST_FIELDS
-        or manifest.get("schema_version") != "1.0"
+        or manifest.get("schema_version") not in {"1.0", "1.1"}
         or manifest.get("feature_id") != feature_id
         or manifest.get("feature_type") != feature_type
         or manifest.get("status") != "ready"
@@ -386,7 +367,7 @@ def load_feature(
             "feature_integrity_error", "Feature source evidence is invalid."
         ) from exc
     identity_payload = {
-        "schema_version": "1.0",
+        "schema_version": config["feature_config"]["schema_version"],
         "feature_type": feature_type,
         "source": current_source,
         "config_fingerprint": config["config_fingerprint"],
@@ -396,6 +377,7 @@ def load_feature(
         current_source != manifest["source"]
         or config["config_fingerprint"] != manifest["config_fingerprint"]
         or config["feature_config"]["algorithm_version"] != manifest["algorithm_version"]
+        or config["feature_config"]["schema_version"] != manifest["schema_version"]
         or _feature_id(identity_payload) != feature_id
         or features != manifest["features"]
         or feature_vector_fingerprint(features) != manifest["feature_vector_fingerprint"]
@@ -449,7 +431,7 @@ def _publish(
 ) -> dict:
     features = extract_geometric_features(points, config["feature_config"])
     identity_payload = {
-        "schema_version": "1.0",
+        "schema_version": config["feature_config"]["schema_version"],
         "feature_type": feature_type,
         "source": source,
         "config_fingerprint": config["config_fingerprint"],

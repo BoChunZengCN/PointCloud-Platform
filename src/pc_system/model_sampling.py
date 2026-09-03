@@ -693,6 +693,14 @@ def load_sampled_representation(
         raise ModelMatchingError(
             "model_representation_not_found", "Invalid representation identity."
         ) from exc
+    try:
+        from pc_system.model_library import load_model_asset
+        if load_model_asset(Path(project_root), model_id).get("source_family", "cad_mesh") != "cad_mesh":
+            raise ValueError("non-CAD asset")
+    except (ModelMatchingError, ValueError) as exc:
+        raise ModelMatchingError(
+            "model_representation_not_found", "CAD sampled representation source is invalid."
+        ) from exc
     return _load_representation(
         Path(project_root),
         model_id,
@@ -706,6 +714,14 @@ def list_sampled_representations(
     project_root: Path, model_id: str, version_id: str
 ) -> list[dict]:
     root = Path(project_root)
+    try:
+        from pc_system.model_library import load_model_asset
+        if load_model_asset(root, model_id).get("source_family", "cad_mesh") != "cad_mesh":
+            raise ValueError("non-CAD asset")
+    except (ModelMatchingError, ValueError) as exc:
+        raise ModelMatchingError(
+            "model_representation_not_found", "CAD sampled representation source is invalid."
+        ) from exc
     load_model_version(root, model_id, version_id)
     parent = (
         root
