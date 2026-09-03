@@ -35,7 +35,7 @@ from pc_system.model_sampling import (
     list_sampled_representations,
     sample_model_version,
 )
-from pc_system.model_representation import load_model_representation
+from pc_system.model_representation import load_model_representation, model_source_family
 from pc_system.reference_representation import build_reference_representation
 
 
@@ -145,7 +145,8 @@ def _select_representation(
     mesh_reader,
 ) -> tuple[dict, str]:
     asset = load_model_asset(root, model_id)
-    if asset.get("source_family") == "scanned_reference":
+    family = model_source_family(asset)
+    if family == "scanned_reference":
         if config["feature_config"]["schema_version"] != "1.1":
             raise ModelMatchingError("feature_config_invalid", "旧特征配置不支持扫描参考表达。")
         child = _child_identity("auto-reference", parent_operation_id, model_id, version_id, config["config_fingerprint"])
@@ -155,7 +156,7 @@ def _select_representation(
             operation_id=child[0], request_id=child[1], idempotency_key=child[2],
         )
         return representation, child[0]
-    if asset.get("source_family", "cad_mesh") != "cad_mesh":
+    if family != "cad_mesh":
         raise ModelMatchingError("model_representation_integrity_error", "模型来源类型未知。")
     expected = _matching_config(config)
     matching = [
@@ -191,6 +192,17 @@ def _select_representation(
         mesh_reader=mesh_reader,
     )
     return representation, child[0]
+
+
+def _representation_child_id(asset: dict, release: dict, config: dict, parent_operation_id: str) -> str | None:
+    family = model_source_family(asset)
+    if family == "scanned_reference":
+        if config["feature_config"]["schema_version"] != "1.1":
+            return None
+        return _child_identity("auto-reference", parent_operation_id, asset["model_id"], release["version_id"], config["config_fingerprint"])[0]
+    if family == "cad_mesh":
+        return _child_identity("auto-sample", parent_operation_id, asset["model_id"], release["version_id"], config["config_fingerprint"])[0]
+    return None
 
 
 def _build_entry(
@@ -587,13 +599,7 @@ def build_model_feature_index(
         entries = []
         exclusions = list(missing)
         for asset, release in sources:
-            sampling_child = _child_identity(
-                "auto-sample",
-                operation_id,
-                asset["model_id"],
-                release["version_id"],
-                config["config_fingerprint"],
-            )[0]
+            sampling_child = _representation_child_id(asset, release, config, operation_id)
             try:
                 entries.append(
                     _build_entry(
@@ -610,23 +616,23 @@ def build_model_feature_index(
             except ModelMatchingError as exc:
                 if exc.code in _FATAL_CHILD_CODES:
                     raise
-                exclusions.append(
-                    {
+                exclusion = {
                         "model_id": asset["model_id"],
                         "version_id": release["version_id"],
                         "code": exc.code,
-                        "child_operation_id": sampling_child,
                     }
-                )
+                if sampling_child is not None:
+                    exclusion["child_operation_id"] = sampling_child
+                exclusions.append(exclusion)
             except Exception:
-                exclusions.append(
-                    {
+                exclusion = {
                         "model_id": asset["model_id"],
                         "version_id": release["version_id"],
                         "code": "feature_integrity_error",
-                        "child_operation_id": sampling_child,
                     }
-                )
+                if sampling_child is not None:
+                    exclusion["child_operation_id"] = sampling_child
+                exclusions.append(exclusion)
         entries.sort(key=lambda item: (item["category_id"], item["model_id"], item["version_id"]))
         exclusions.sort(key=lambda item: (item["model_id"], item.get("version_id", ""), item["code"]))
         eligible = len(sources)
@@ -704,7 +710,7 @@ def build_model_feature_index(
             "model_index_integrity_error", "Model feature index build failed."
         )
         current = load_operation(root, operation_id)
-        if current["status"] == "running" and error.code not in {"operation_busy", "publication_recovery_required"}:
+        if current["status"] == "running" and error.code not in _FATAL_CHILD_CODES:
             _record_failure(root, operation_id, error)
         if error is exc:
             raise

@@ -33,6 +33,8 @@ _OWNER_FIELDS = frozenset({
     "request_id", "request_fingerprint",
 })
 _POINTS_FIELDS = frozenset({"schema_version", "coordinate_unit", "point_count", "points"})
+_FATAL_CODES = {"audit_persistence_error", "audit_integrity_error", "operation_busy", "publication_recovery_required"}
+_MAX_POINTS_BYTES = 64 * 1024 * 1024
 
 
 def _error(code: str, message: str) -> ModelMatchingError:
@@ -72,13 +74,28 @@ def _request(value: dict) -> dict:
             "generation_config": value["generation_config"], "representation_id": value["representation_id"]}
 
 
-def _load(root: Path, model_id: str, version_id: str, representation_id: str) -> dict:
+def _verified_points(path: Path) -> tuple[dict, str]:
+    _require_plain(path, directory=False)
+    with path.open("rb") as handle:
+        payload = handle.read(_MAX_POINTS_BYTES + 1)
+    if len(payload) > _MAX_POINTS_BYTES:
+        raise ValueError("sampled points exceed limit")
+    value = json.loads(payload)
+    if (type(value) is not dict or set(value) != _POINTS_FIELDS or value.get("schema_version") != "1.0"
+            or value.get("coordinate_unit") != "m" or type(value.get("point_count")) is not int
+            or type(value.get("points")) is not list or len(value["points"]) != value["point_count"]
+            or any(type(point) is not list or len(point) != 3 or any(type(axis) is not float or not math.isfinite(axis) for axis in point) for point in value["points"])):
+        raise ValueError("sampled points invalid")
+    return value, hashlib.sha256(payload).hexdigest()
+
+
+def _load(root: Path, model_id: str, version_id: str, representation_id: str) -> tuple[dict, list[list[float]]]:
     directory = _root(root, model_id, version_id, representation_id)
     try:
         _require_plain(directory, directory=True)
         owner = read_json(directory / "operation_owner.json")
         value = read_json(directory / "representation.json")
-        points = read_json(directory / "sampled_points.json")
+        points, points_fingerprint = _verified_points(directory / "sampled_points.json")
         bundle = load_bundle(root, model_id, version_id)
         review = approved_review_evidence(root, model_id, version_id)
         if (set(owner) != _OWNER_FIELDS or set(value) != _FIELDS or set(points) != _POINTS_FIELDS
@@ -95,7 +112,7 @@ def _load(root: Path, model_id: str, version_id: str, representation_id: str) ->
                 or value.get("source_review_id") != review["review_id"] or value.get("source_review_fingerprint") != review["review_fingerprint"]
                 or value.get("generation_config_fingerprint") != _fingerprint(value.get("generation_config"))
                 or representation_id != "scanned-reference-" + value.get("generation_config_fingerprint", "")
-                or value.get("geometry_fingerprint") != _file_fingerprint(directory / "sampled_points.json")
+                or value.get("geometry_fingerprint") != points_fingerprint
                 or points.get("schema_version") != "1.0" or points.get("coordinate_unit") != "m"
                 or points.get("point_count") != value.get("point_count") or not isinstance(points.get("points"), list)
                 or len(points["points"]) != value["point_count"]
@@ -110,28 +127,51 @@ def _load(root: Path, model_id: str, version_id: str, representation_id: str) ->
                 or operation.get("result") != _result(value)
                 or events[0]["actor_id"] != value["generated_by"] or events[0]["timestamp"] != value["generated_at"]):
             raise ValueError("representation audit differs")
-        return json.loads(json.dumps(value, ensure_ascii=False))
+        return json.loads(json.dumps(value, ensure_ascii=False)), [list(point) for point in points["points"]]
     except ModelMatchingError as exc:
-        if exc.code == "operation_busy":
+        if exc.code in _FATAL_CODES:
             raise
         raise _error("model_representation_integrity_error", "扫描参考表达证据无效。") from exc
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise _error("model_representation_integrity_error", "扫描参考表达证据无效。") from exc
 
 
-def load_reference_representation(root, model_id, version_id, representation_id) -> dict:
+def _validated_identity(model_id, version_id, representation_id) -> tuple[str, str, str]:
     try:
-        return _load(Path(root), validate_identifier(model_id, "model_id"), validate_identifier(version_id, "version_id"), validate_identifier(representation_id, "representation_id"))
+        return (
+            validate_identifier(model_id, "model_id"),
+            validate_identifier(version_id, "version_id"),
+            validate_identifier(representation_id, "representation_id"),
+        )
     except (TypeError, ValueError) as exc:
         raise _error("model_representation_not_found", "扫描参考表达身份无效。") from exc
 
 
+def load_reference_representation(root, model_id, version_id, representation_id) -> dict:
+    identity = _validated_identity(model_id, version_id, representation_id)
+    return _load(Path(root), *identity)[0]
+
+
 def load_reference_representation_points(root, representation: dict) -> list[list[float]]:
-    value = load_reference_representation(root, representation["model_id"], representation["source_version_id"], representation["representation_id"])
+    if type(representation) is not dict:
+        raise _error("model_representation_integrity_error", "扫描参考表达无效。")
+    try:
+        identity = _validated_identity(
+            representation["model_id"],
+            representation["source_version_id"],
+            representation["representation_id"],
+        )
+    except (KeyError, ModelMatchingError) as exc:
+        raise _error("model_representation_integrity_error", "扫描参考表达无效。") from exc
+    value, points = _load(Path(root), *identity)
     if value != representation:
         raise _error("model_representation_integrity_error", "扫描参考表达已改变。")
-    points = read_json(_root(Path(root), value["model_id"], value["source_version_id"], value["representation_id"]) / "sampled_points.json")["points"]
-    return [list(point) for point in points]
+    return points
+
+
+def load_reference_representation_with_points(root, model_id, version_id, representation_id) -> tuple[dict, list[list[float]]]:
+    identity = _validated_identity(model_id, version_id, representation_id)
+    return _load(Path(root), *identity)
 
 
 def build_reference_representation(root, *, model_id, version_id, config, principal: Principal,
@@ -139,8 +179,6 @@ def build_reference_representation(root, *, model_id, version_id, config, princi
     root = Path(root)
     model_id, version_id = validate_identifier(model_id, "model_id"), validate_identifier(version_id, "version_id")
     generation = _config(config)
-    bundle = load_bundle(root, model_id, version_id)
-    review = approved_review_evidence(root, model_id, version_id)
     generation_fingerprint = _fingerprint(generation)
     representation_id = f"scanned-reference-{generation_fingerprint}"
     payload = {"model_id": model_id, "version_id": version_id, "generation_config": generation, "representation_id": representation_id}
@@ -151,15 +189,12 @@ def build_reference_representation(root, *, model_id, version_id, config, princi
         raise _error(error.get("code", "model_representation_integrity_error"), error.get("message", "扫描参考表达生成失败。"))
     try:
         require_any_role(principal, {"expert"})
+        if replayed and operation["status"] == "completed":
+            return _load(root, model_id, version_id, representation_id)[0]
+        bundle = load_bundle(root, model_id, version_id)
+        review = approved_review_evidence(root, model_id, version_id)
         directory = _root(root, model_id, version_id, representation_id)
         with model_resource_lock(root, "reference-representation", model_id, version_id, representation_id):
-            if (directory / "representation.json").is_file():
-                visible = _load(root, model_id, version_id, representation_id)
-                if replayed and operation["status"] == "completed":
-                    return visible
-                ensure_operation_event(root, operation_id, "reference_representation.reused", {**_result(visible), "producer_operation_id": visible["operation_id"]})
-                complete_operation(root, operation_id, _result(visible))
-                return visible
             selected = select_reference_points(bundle["normalized"]["points"], point_count=generation["point_count"], random_seed=generation["random_seed"])
             points = {"schema_version": "1.0", "coordinate_unit": "m", "point_count": len(selected), "points": selected}
             snapshot = read_verified_operation_snapshot(root, operation_id)
@@ -172,19 +207,40 @@ def build_reference_representation(root, *, model_id, version_id, config, princi
                      "generation_config_fingerprint": generation_fingerprint, "point_count": len(selected), "coordinate_unit": "m",
                      "artifact_uri": "sampled_points.json", "operation_id": operation_id, "generated_by": started["actor_id"],
                      "generated_at": started["timestamp"], "status": "ready"}
-            directory.mkdir(parents=True, exist_ok=True)
             owner = {"schema_version": "1.0", "model_id": model_id, "version_id": version_id, "representation_id": representation_id,
                      "operation_id": operation_id, "request_id": operation["request_id"], "request_fingerprint": audit_digest(payload)}
+            directory.mkdir(parents=True, exist_ok=True)
+            try:
+                actual_owner = read_json(directory / "operation_owner.json")
+            except FileNotFoundError:
+                actual_owner = None
+            if actual_owner is not None and actual_owner != owner:
+                try:
+                    producer = load_operation(root, actual_owner["operation_id"])
+                except (KeyError, ModelMatchingError) as exc:
+                    raise _error(
+                        "operation_busy",
+                        "扫描参考表达由另一项未完成或不确定的操作持有。",
+                    ) from exc
+                if producer["status"] != "completed":
+                    raise _error(
+                        "operation_busy",
+                        "扫描参考表达由另一项未完成或不确定的操作持有。",
+                    )
+                visible = _load(root, model_id, version_id, representation_id)[0]
+                ensure_operation_event(root, operation_id, "reference_representation.reused", {**_result(visible), "producer_operation_id": visible["operation_id"]})
+                complete_operation(root, operation_id, _result(visible))
+                return visible
             _publish_exact_json(directory / "operation_owner.json", owner, conflict_code="operation_busy", conflict_message="扫描参考表达所有者冲突。")
             _publish_exact_json(directory / "sampled_points.json", points, conflict_code="model_representation_integrity_error", conflict_message="扫描参考点冲突。")
             value["geometry_fingerprint"] = _file_fingerprint(directory / "sampled_points.json")
             _publish_exact_json(directory / "representation.json", value, conflict_code="model_representation_integrity_error", conflict_message="扫描参考表达冲突。")
             ensure_operation_event(root, operation_id, "reference_representation.published", _result(value))
             complete_operation(root, operation_id, _result(value))
-            return _load(root, model_id, version_id, representation_id)
+            return _load(root, model_id, version_id, representation_id)[0]
     except Exception as exc:
-        error = exc if isinstance(exc, ModelMatchingError) else _error("model_representation_integrity_error", "扫描参考表达生成失败。")
-        if load_operation(root, operation_id)["status"] == "running" and error.code not in {"operation_busy", "publication_recovery_required"}:
+        error = exc if isinstance(exc, ModelMatchingError) else _error("publication_recovery_required", "扫描参考表达发布需恢复。")
+        if load_operation(root, operation_id)["status"] == "running" and error.code not in _FATAL_CODES:
             _record_failure(root, operation_id, error)
         if error is exc:
             raise
