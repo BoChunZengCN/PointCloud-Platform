@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e ".[test]"
+      - run: python -m pip install -e ".[test,scanned-reference]"
       - run: python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider
   browser:
     runs-on: ubuntu-latest
@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e ".[test,browser-test]"
+      - run: python -m pip install -e ".[test,browser-test,scanned-reference]"
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest tests/browser -q --browser chromium --tracing retain-on-failure --screenshot only-on-failure --output test-results -p no:cacheprovider
       - uses: actions/upload-artifact@v4

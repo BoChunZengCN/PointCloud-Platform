@@ -10,6 +10,7 @@ pc-system = "pc_system.cli:main"
 
 [project.optional-dependencies]
 las = ["laspy"]
+scanned-reference = ["laspy>=2.5,<3", "lazrs>=0.8.2,<0.9", "pyproj>=3.6,<4"]
 api = ["fastapi", "uvicorn"]
 models = ["trimesh>=4,<5"]
 registration = ["open3d>=0.19,<1"]
