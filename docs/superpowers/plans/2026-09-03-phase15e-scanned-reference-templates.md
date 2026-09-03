@@ -100,14 +100,16 @@ assert import_reference_version(root, **import_request) == version
 
 ## 任务 4：专家核验、模板发布与回滚
 
-**文件：** 新增 `src/pc_system/reference_review.py`、`tests/test_phase15e_reference_review.py`、`tests/test_phase15e_reference_release.py`；修改 `reference_store.py`、`model_release.py`、必要的 `model_release_state.py`。
+**文件：** 新增 `src/pc_system/reference_review.py`、`tests/test_phase15e_reference_review.py`、`tests/test_phase15e_reference_release.py`；修改 `model_release.py`、共享测试夹具 `tests/phase15e_support.py` 及本计划、两份功能盘点。经接缝检查，无需修改 `reference_store.py` 或 `model_release_state.py`。
 
 **接口：** `review_reference_version(root, *, model_id, version_id, decision, reason, acknowledgements, principal, operation_id, request_id, idempotency_key) -> dict`；`load_reference_review(root, model_id, version_id) -> dict | None`；发布仍调用 `release_model_version`。
 
-- [ ] 红灯：非专家拒绝、硬失败不能通过、缺风险确认拒绝、一次最终决定、并发核验、响应丢失恢复；未通过不能 activate/rollback。
-- [ ] 绿灯：固定版本/质量指纹的不可变核验；扫描发布 1.1 冻结核验指纹；旧 CAD 1.0 保持；复用现有发布所有者与头比较，不向旧 manifest 注入字段。
-- [ ] 验证：`python -m pytest tests/test_phase15e_reference_review.py tests/test_phase15e_reference_release.py tests/test_phase15b1_model_release.py -q`。
-- [ ] 提交：`feat: review and release scanned reference versions`。
+**任务 4 实施冻结：** 核验包位于 `models/{model_id}/reviews/{version_id}`，不向已完成导入目录追加文件；核验 ID 采用原操作 ID。`approved` 必须确认 `single_object`、`metadata_and_rights`、`coverage_limitations` 三项基础声明及自动报告全部风险码；`rejected` 必须填写原因，但不要求作出通过声明。原因 1–1,000 字符；确认码规范去重排序，未知码拒绝。每版本一个不可变最终核验包，固定原版本清单和质量指纹，使用核验版本锁、owner→review→commit→completed 审计；归属不确定保留 running，仅原身份恢复。新发布记录 1.1 增加 `review_id` 和 `review_fingerprint`，生成、恢复及读取均验证已完成的 approved 核验。旧 CAD 发布 1.0 和发布头状态机不重写；不自动发布索引、不改变绑定、不增加页面。验收包括权限/风险门禁、并发首写、审计中断恢复、证据篡改、扫描回滚及旧 CAD 回归。
+
+- [x] 红灯：最初 21 项因缺少核验及发布门禁失败；覆盖非专家拒绝、硬失败不能通过、缺风险确认拒绝、一次最终决定、并发核验、响应丢失恢复及未通过不能 activate/rollback。另补上游证据暂损和空目录中断的失败回归。
+- [x] 绿灯：固定版本/质量指纹的不可变核验；扫描发布 1.1 冻结核验指纹；旧 CAD 1.0 保持；复用现有发布所有者与头比较，不向旧 manifest 注入字段。
+- [x] 验证：`python -m pytest tests/test_phase15e_reference_review.py tests/test_phase15e_reference_release.py tests/test_phase15b1_model_release.py -q -p no:cacheprovider --tb=short`，50 项通过（新增 27 项，24.05 秒）；独立复审定向恢复回归 4 项通过。
+- [x] 提交就绪：`feat: review and release scanned reference versions`；功能提交包含本文验证证据，提交 SHA 以 Git 历史为准。
 
 ```python
 with pytest.raises(ModelMatchingError) as missing_review:
@@ -205,8 +207,10 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 - 任务 2 初版：真实 LAS/LAZ、三种 PLY 编码、单位/CRS、截断/计数/上限、真实子进程与超时，26 项读取测试通过；与几何和旧 LAS 测试共 68 项通过。读取依赖已安装至项目共享 `.venv`（laspy 2.7.0、lazrs 0.8.2、pyproj 3.7.2）。初版当时尚未提交。
 - 任务 2 最终复审：块表不能借用 EVLR 字节；真实重叠文件先红，改用受限字节流后 81 项通过，复审定向 5 项通过。依赖显式限定 `lazrs>=0.8.2,<0.9`，CI 两条测试任务安装扫描依赖。
 - 任务 3 独立复审：3 项重要问题（误把索引系统目录当资产、损坏 running owner 误终态、配额释放观察竞态）均有失败回归并在一轮修复中闭环；复审者独立运行对应 3 项通过（1.10 秒）。没有改写原审计架构。
-- 当前检查点：任务 1–3 已实现并完成聚焦验证；任务 4–9 尚未实施。未运行本阶段浏览器验收，未收到真实重复扫描/不同型号负例，不宣称生产业务验收完成。
+- 当前检查点：任务 1–4 已实现并完成聚焦验证；任务 5–9 尚未实施。下一步为统一表达、特征配置与检索索引。未运行本阶段浏览器验收，未收到真实重复扫描/不同型号负例，不宣称生产业务验收完成。
 - 本轮提交就绪门禁：`python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider --tb=short`，1,255 项通过、1 项跳过，366.44 秒；仅运行一次。1 条既有 Starlette/httpx 弃用警告记录为依赖维护事项，本轮不扩大修复。静态编译和暂存差异检查通过。Task 2 提交 `67e54fe`，Task 3 单独功能提交；未推送、未合并、未发布。
+- 任务 4 独立设计复审通过；最终复审发现 1 项重要问题：所有者写入前中断产生的空目录阻止重试。新增回归先红，将“保留恢复资格”与“目录确有工件”分离后通过；复审定向 4 项通过（2.20 秒），该问题已关闭。核验/发布/回滚实现未改写审计或发布头状态机，未扩大到页面与匹配链。
+- 任务 4 提交就绪门禁：全仓非浏览器测试一次运行，`1,282 passed, 1 skipped, 1 warning`，378.24 秒；27 项新增测试全部通过。既有 Starlette/httpx 弃用警告保留为依赖维护事项；语法编译、差异检查通过。仅本地提交，不推送、不合并、不发布；没有浏览器或真实业务样本验收结论。
 
 ### 任务 2 边界调整：LAZ 点数的独立完整性保证
 

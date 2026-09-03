@@ -81,6 +81,13 @@ _OWNER_FIELDS = frozenset(
 )
 
 
+def _scan_review_evidence(project_root: Path, manifest: dict) -> dict:
+    if manifest.get("source_kind") != "scanned_reference":
+        return {}
+    from pc_system.reference_review import approved_review_evidence
+    return approved_review_evidence(project_root, manifest["model_id"], manifest["version_id"])
+
+
 def _canonical_bytes(value: dict) -> bytes:
     return json.dumps(
         value,
@@ -253,10 +260,12 @@ def _validate_release(
     value: object,
 ) -> dict:
     try:
-        if type(value) is not dict or set(value) != _RELEASE_FIELDS:
+        scanned = type(value) is dict and value.get("schema_version") == "1.1"
+        fields = _RELEASE_FIELDS | {"review_id", "review_fingerprint"} if scanned else _RELEASE_FIELDS
+        if type(value) is not dict or set(value) != fields:
             raise ValueError("invalid release structure")
         if (
-            value["schema_version"] != "1.0"
+            value["schema_version"] != ("1.1" if scanned else "1.0")
             or value["model_id"] != model_id
             or value["release_id"] != release_id
             or value["action"] not in RELEASE_ACTIONS
@@ -285,7 +294,10 @@ def _validate_release(
             or any(character not in "0123456789abcdef" for character in fingerprint)
         ):
             raise ValueError("invalid version manifest fingerprint")
-        load_model_version(project_root, model_id, value["version_id"])
+        manifest = load_model_version(project_root, model_id, value["version_id"])
+        review = _scan_review_evidence(project_root, manifest)
+        if scanned != bool(review) or any(value.get(key) != item for key, item in review.items()):
+            raise ValueError("release review evidence differs")
         manifest_path = (
             model_version_dir(project_root, model_id, value["version_id"])
             / "model_manifest.json"
@@ -593,9 +605,10 @@ def _expected_release(
             "audit_integrity_error",
             "Model release start evidence differs from its frozen request.",
         )
-    load_model_version(
+    manifest = load_model_version(
         project_root, normalized["model_id"], normalized["version_id"]
     )
+    review = _scan_review_evidence(project_root, manifest)
     manifest_path = (
         model_version_dir(
             project_root, normalized["model_id"], normalized["version_id"]
@@ -603,7 +616,8 @@ def _expected_release(
         / "model_manifest.json"
     )
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if review else "1.0",
+        **review,
         "model_id": normalized["model_id"],
         "release_id": normalized["release_id"],
         "version_id": normalized["version_id"],

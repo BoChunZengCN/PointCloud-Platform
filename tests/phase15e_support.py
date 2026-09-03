@@ -27,3 +27,31 @@ def import_request(path, *, version_id="v1", model_id="scan-pump", **overrides):
                   operation_id=f"import-{model_id}-{version_id}", request_id=f"req-{model_id}-{version_id}", idempotency_key=f"idem-{model_id}-{version_id}")
     values.update(overrides)
     return values
+
+
+def prepared_scan(root, *, version_id="v1", kind="volume"):
+    from pc_system.reference_import import import_reference_version
+    scan_asset(root)
+    path = root / f"{version_id}.ply"
+    if kind == "plane":
+        points = [(x, y, 0) for x in range(8) for y in range(8)]
+        path.write_text("ply\nformat ascii 1.0\nelement vertex 64\nproperty float x\nproperty float y\nproperty float z\nend_header\n" + "".join(f"{x} {y} {z}\n" for x, y, z in points), encoding="ascii")
+    else:
+        scan_source(path, count=16 if kind == "small" else 64)
+    return import_reference_version(root, **import_request(path, version_id=version_id))
+
+
+def review_request(*, version_id="v1", sequence="1", **overrides):
+    values = dict(model_id="scan-pump", version_id=version_id, decision="approved", reason="已核对单对象、来源许可与扫描覆盖范围",
+                  acknowledgements=["single_object", "metadata_and_rights", "coverage_limitations"], principal=EXPERT,
+                  operation_id=f"review-{sequence}", request_id=f"req-review-{sequence}", idempotency_key=f"idem-review-{sequence}")
+    values.update(overrides)
+    return values
+
+
+def release_request(sequence="1", **overrides):
+    values = dict(model_id="scan-pump", version_id="v1", release_id=f"release-{sequence}", action="activate",
+                  expected_current_release_id=None, rollback_of_release_id=None, reason="发布经核验的参考模板", principal=EXPERT,
+                  operation_id=f"release-{sequence}", request_id=f"req-release-{sequence}", idempotency_key=f"idem-release-{sequence}")
+    values.update(overrides)
+    return values
