@@ -782,6 +782,9 @@ def load_model_version(
     manifest = _load_json_artifact(
         path, "Model version manifest could not be read."
     )
+    if type(manifest) is dict and manifest.get("schema_version") == "2.0":
+        from pc_system.reference_store import load_reference_version
+        return load_reference_version(project_root, normalized_model_id, normalized_version_id)
     return _validate_manifest(
         project_root, normalized_model_id, normalized_version_id, manifest
     )
@@ -1733,7 +1736,9 @@ def import_model_version(
                 normalized["model_id"],
                 normalized["supersedes_version_id"],
             )
-        load_model_asset(project_root, normalized["model_id"])
+        asset = load_model_asset(project_root, normalized["model_id"])
+        if asset.get("source_family", "cad_mesh") != "cad_mesh":
+            raise ModelMatchingError("model_source_family_conflict", "扫描资产不能导入 CAD 网格版本。")
         final = model_version_dir(
             project_root, normalized["model_id"], normalized["version_id"]
         )

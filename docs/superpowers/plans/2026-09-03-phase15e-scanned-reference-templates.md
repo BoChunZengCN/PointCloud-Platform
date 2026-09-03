@@ -60,14 +60,14 @@ assert value["source_m_to_reference_4x4"][0] == [1.0, 0.0, 0.0, -0.5]
 
 ## 任务 2：真实格式读取与有界解析进程
 
-**文件：** 新增 `src/pc_system/reference_reader.py`、`src/pc_system/reference_worker.py`、`tests/test_phase15e_reference_reader.py`；调整 `pyproject.toml` 的扫描可选依赖。
+**文件：** 新增 `src/pc_system/reference_reader.py`、`src/pc_system/reference_worker.py`、`src/pc_system/reference_laz.py`、`tests/test_phase15e_reference_reader.py`；调整 `pyproject.toml` 的扫描可选依赖。提前同步 `.github/workflows/test.yml` 安装该依赖，避免新增真实格式测试在 CI 缺包。
 
 **接口：** `read_reference_file(path: Path, *, declared_unit: str, maximum_points: int) -> dict` 返回标准化结果、质量报告、读取器/格式/单位元数据；`decode_reference_file(path: Path, *, declared_unit: str, timeout_seconds: float = 120, maximum_points: int = 1_000_000) -> dict` 在工作进程执行，输出有界且不使用 pickle 解析外部内容。
 
-- [ ] 红灯：真实 LAS/LAZ、ASCII/大小端 PLY；缺字段、非空 faces、列表顶点、假声明点数、截断、超限、依赖缺失、单位冲突、地理 CRS、超时。
-- [ ] 绿灯：LAS 流式计数和真实解码；PLY 严格属性/字节/点数校验；检查后再分配；父进程超时终止自身子进程。解码槽位由任务 3 的项目级锁管理，不在纯读取函数内引入全局数据库。
-- [ ] 验证：`python -m pytest tests/test_phase15e_reference_reader.py tests/test_phase15e_reference_geometry.py tests/test_las_reader.py -q`。
-- [ ] 提交：`feat: read bounded scanned reference files`。
+- [x] 红灯：真实 LAS/LAZ、ASCII/大小端 PLY；缺字段、非空 faces、列表顶点、假声明点数、截断、超限、依赖缺失、单位冲突、地理 CRS、超时。新增 LAZ 独立点数证据用例先观察到 8 项预期失败。
+- [x] 绿灯：LAS 流式计数和真实解码；LAZ 收窄到已验证子集；PLY 严格属性/字节/点数校验；检查后再分配；父进程超时终止自身子进程。解码槽位由任务 3 的项目级锁管理，不在纯读取函数内引入全局数据库。
+- [x] 验证：`python -m pytest tests/test_phase15e_reference_reader.py tests/test_phase15e_reference_geometry.py tests/test_las_reader.py -q`，81 项通过（3.17 秒）。独立复审的块表/EVLR 重叠问题已按有界字节流修复并闭环。
+- [x] 提交：`67e54fe`，`feat: read bounded scanned reference files`。
 
 ```python
 decoded = read_reference_file(ply_path, declared_unit="m", maximum_points=64)
@@ -79,15 +79,17 @@ with pytest.raises(ModelMatchingError, match="limit"):
 
 ## 任务 3：扫描资产、源冻结与不可变版本导入
 
-**文件：** 新增 `src/pc_system/reference_import.py`、`src/pc_system/reference_store.py`、`tests/test_phase15e_reference_import.py`、`tests/phase15e_support.py`；调整 `model_library.py`、`model_import.py` 的类型分派与清单读取。
+**文件：** 新增 `src/pc_system/reference_import.py`、`src/pc_system/reference_store.py`、`tests/test_phase15e_reference_import.py`、`tests/phase15e_support.py`；调整 `model_library.py`、`model_import.py` 的类型分派与清单读取；同步两份功能盘点中的当前进度。
 
 **接口：** `create_model_asset(..., source_family="cad_mesh")` 保持旧省略参数行为；`import_reference_version(root, *, model_id, version_id, source_path, declared_unit, license_name, provenance, principal, operation_id, request_id, idempotency_key, supersedes_version_id=None) -> dict`；`load_reference_version(root, model_id, version_id) -> dict`；`list_reference_versions(root, model_id) -> list[dict]`。
 
-- [ ] 红灯：扫描资产无 CAD 导入；旧 CAD 仍为 1.0；双向类型拒绝；原文件被改/丢失后的同操作恢复；配额争用、两解码槽位；损坏提交拒绝读取。
-- [ ] 绿灯：冻结输入并在内核锁内预留保守字节配额；同操作目录保存源副本，完成复制后持久化 `source_frozen.json`；完整源指纹已固定后不重新接受改变的源；不完整源副本不能被当作已冻结内容。配额统计扫描暂存、进行中与失败目录，不能复用只统计 CAD 临时目录的旧逻辑。
-- [ ] 绿灯：扫描清单 2.0、所有者/最后提交清单/审计一致读取；标准化与质量工件不可覆盖；无自动删除；旧 `load_model_version` 明确分派新类型且旧版本仍原校验。扫描公开读取必须验证完整提交与 completed 审计，不能继承 CAD 对 running 工件的内部兼容读法。
-- [ ] 验证：`python -m pytest tests/test_phase15e_reference_import.py tests/test_phase15a_model_library.py tests/test_phase15a_model_import.py -q`。
-- [ ] 提交：`feat: import immutable scanned reference versions`。
+**实施冻结与恢复边界：** 同一版本锁覆盖所有者、源冻结、派生工件和审计完成；只复用原操作身份。项目配额锁下对每个未完成版本预留最多 512 MiB，已提交/明确拒绝的版本按实际留存计费，暂存源也计入 2 GiB。源复制采用独占创建的尝试文件，复制完成并同步后再发布 `source_frozen.json`；中断残留不删除、不复用为冻结源。确定性解析拒绝保存不可变拒绝记录并审计失败；I/O 或发布不确定保留 running 供原操作恢复。读取同时核对所有者、各工件 SHA-256、最后提交和 completed 审计；不创建第二份版本目录或跨模块事务。
+
+- [x] 红灯：扫描资产无 CAD 导入；旧 CAD 仍为 1.0；双向类型拒绝；原文件被改/丢失后的同操作恢复；配额争用、两解码槽位；损坏提交拒绝读取。最初 19 项因功能缺失失败，后续加入身份重放和复审回归。
+- [x] 绿灯：冻结输入并在内核锁内预留保守字节配额；同操作目录保存源副本，完成复制后持久化 `source_frozen.json`；完整源指纹已固定后不重新接受改变的源；不完整源副本不能被当作已冻结内容。配额统计扫描暂存、进行中与失败目录，不能复用只统计 CAD 临时目录的旧逻辑。
+- [x] 绿灯：扫描清单 2.0、所有者/最后提交清单/审计一致读取；标准化与质量工件不可覆盖；无自动删除；旧 `load_model_version` 明确分派新类型且旧版本仍原校验。扫描公开读取必须验证完整提交与 completed 审计，不能继承 CAD 对 running 工件的内部兼容读法。
+- [x] 验证：`python -m pytest tests/test_phase15e_reference_import.py tests/test_phase15a_model_library.py tests/test_phase15a_model_import.py -q`，137 项通过（新增 28 项，16.79 秒）；compileall 和差异检查通过。
+- [x] 提交：`feat: import immutable scanned reference versions`（包含本检查点记录，以 Git 历史中的该功能提交为准）。
 
 ```python
 version = import_reference_version(root, **import_request)
@@ -199,3 +201,21 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 - 独立设计复审：无严重/重要矛盾；三个实施接缝已写入任务 3/4：扫描公开读取只接受 completed 审计；冻结源完成标记与完整配额统计；发布 1.1 的读取和恢复均核验人工证据。旧 CAD 不改写。
 - 文档/身份基线：`python -m pytest tests/test_phase15a_identity.py tests/test_phase15d_docs.py -q`，17 项通过；未重复运行全仓门禁。
 - 任务 1 红灯：40 项因缺少几何模块失败；绿灯：新增 40 项与旧特征 12 项共 52 项通过，1.40 秒。未改变任何旧算法、发布或绑定逻辑。
+- 任务 1 已提交：`8892b5e`；规格/计划基线提交 `e973d0b`。
+- 任务 2 初版：真实 LAS/LAZ、三种 PLY 编码、单位/CRS、截断/计数/上限、真实子进程与超时，26 项读取测试通过；与几何和旧 LAS 测试共 68 项通过。读取依赖已安装至项目共享 `.venv`（laspy 2.7.0、lazrs 0.8.2、pyproj 3.7.2）。初版当时尚未提交。
+- 任务 2 最终复审：块表不能借用 EVLR 字节；真实重叠文件先红，改用受限字节流后 81 项通过，复审定向 5 项通过。依赖显式限定 `lazrs>=0.8.2,<0.9`，CI 两条测试任务安装扫描依赖。
+- 任务 3 独立复审：3 项重要问题（误把索引系统目录当资产、损坏 running owner 误终态、配额释放观察竞态）均有失败回归并在一轮修复中闭环；复审者独立运行对应 3 项通过（1.10 秒）。没有改写原审计架构。
+- 当前检查点：任务 1–3 已实现并完成聚焦验证；任务 4–9 尚未实施。未运行本阶段浏览器验收，未收到真实重复扫描/不同型号负例，不宣称生产业务验收完成。
+- 本轮提交就绪门禁：`python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider --tb=short`，1,255 项通过、1 项跳过，366.44 秒；仅运行一次。1 条既有 Starlette/httpx 弃用警告记录为依赖维护事项，本轮不扩大修复。静态编译和暂存差异检查通过。Task 2 提交 `67e54fe`，Task 3 单独功能提交；未推送、未合并、未发布。
+
+### 任务 2 边界调整：LAZ 点数的独立完整性保证
+
+后续定向复核发现：固定块的旧式 LAZ 并不独立保存最后一块的实际点数。真实内存文件探针中，64 点文件的块表显示固定容量 50,000，直接请求解码 63、64、65 点均未报错；不能以解码返回数量证明完整性。
+
+新增回归 `test_fixed_chunk_laz_underreported_count_cannot_be_claimed_independently_verified` 使用实际 125 点三维 LAZ，仅将文件头声明改为 124。最初读取器未报错，测试确定性失败；收窄支持范围后通过，保留该回归。
+
+独立复审裁定为重要规格保证缺口：规格第 4 节要求声明与实际一致、不能仅依赖文件头，第 12 节包含假点数验收。旧式固定块缺口不应泛化为所有 LAZ：新式分层块及具有独立点数信息的变体需分别验证。
+
+用户在收到推荐边界后授权“继续执行开发”：首版支持 LAS/PLY；LAZ 只开放已证明可交叉校验点数的子集，其余明确拒绝并提示先转换为 LAS。具体子集见规格第 4.1 节。代价是部分合法 LAZ 不能直接导入，导入、版本、审计架构无需重构。
+
+依据：[laspy 官方读取源码](https://laspy.readthedocs.io/en/latest/_modules/laspy/lasreader.html)、[LAZ 格式规范第 11.6–11.7 节](https://portal.ogc.org/files/?artifact_id=110135&version=2)，以及真实文件回归。点格式 6/7/8、分层点数/层字节/块表破坏、50,064 点跨块末块均已有回归；不以“请求多读一点”作为独立证据。本期未推送或合并。

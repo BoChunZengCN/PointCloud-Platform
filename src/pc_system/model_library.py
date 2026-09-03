@@ -58,6 +58,11 @@ MODEL_ASSET_CREATE_SCHEMA = RequestSchema(
     ),
 )
 
+SCANNED_ASSET_CREATE_SCHEMA = RequestSchema(
+    schema_id="model_asset.create", schema_version="1.1",
+    fields=MODEL_ASSET_CREATE_SCHEMA.fields + (FieldSpec("source_family", "text"),),
+)
+
 
 def model_asset_path(project_root: Path, model_id: str) -> Path:
     model_id = validate_identifier(model_id, "model_id")
@@ -259,7 +264,7 @@ def _normalize_model_request(
         raise ModelMatchingError(
             "invalid_model_asset", str(exc)
         ) from exc
-    return {
+    result = {
         "model_id": normalized_model_id,
         "display_name": normalized_display_name,
         "category_id": normalized_category_id,
@@ -268,6 +273,11 @@ def _normalize_model_request(
         "keywords": normalized_keywords,
         "tags": normalized_tags,
     }
+    if frozen_request.to_audit_payload()["request_schema_version"] == "1.1":
+        if frozen_request.require_text("source_family") != "scanned_reference":
+            raise ModelMatchingError("invalid_model_asset", "不支持的模型来源类型。")
+        result["source_family"] = "scanned_reference"
+    return result
 
 
 def _operation_result(project_root: Path, model_id: str) -> dict:
@@ -305,7 +315,7 @@ def _require_matching_manifest(
     canonical_start: dict,
 ) -> None:
     expected = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if "source_family" in normalized else "1.0",
         **normalized,
         "lifecycle_status": "active",
         "created_by": canonical_start["actor_id"],
@@ -533,11 +543,13 @@ def create_model_asset(
     operation_id: str,
     request_id: str,
     idempotency_key: str,
+    source_family: str = "cad_mesh",
 ) -> dict:
     project_root = Path(project_root)
     operation_id = validate_identifier(operation_id, "operation_id")
+    scanned = not (type(source_family) is str and source_family == "cad_mesh")
     frozen_request = freeze_request(
-        MODEL_ASSET_CREATE_SCHEMA,
+        SCANNED_ASSET_CREATE_SCHEMA if scanned else MODEL_ASSET_CREATE_SCHEMA,
         {
             "model_id": model_id,
             "display_name": display_name,
@@ -546,6 +558,7 @@ def create_model_asset(
             "model_number": model_number,
             "keywords": keywords,
             "tags": tags,
+            **({"source_family": source_family} if scanned else {}),
         },
     )
     operation, replayed = start_operation(
@@ -592,7 +605,7 @@ def create_model_asset(
             project_root, audited_operation_id
         )
         manifest = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if "source_family" in normalized else "1.0",
             **normalized,
             "lifecycle_status": "active",
             "created_by": canonical_start["actor_id"],
@@ -632,13 +645,16 @@ def create_model_asset(
 
 
 def _validate_manifest(manifest: object, expected_model_id: str) -> dict:
-    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_FIELDS:
+    scanned = type(manifest) is dict and manifest.get("schema_version") == "1.1"
+    fields = _MANIFEST_FIELDS | {"source_family"} if scanned else _MANIFEST_FIELDS
+    if not isinstance(manifest, dict) or set(manifest) != fields:
         raise ModelMatchingError(
             "model_asset_integrity_error",
             "Model asset manifest has an invalid structure.",
         )
     if (
-        manifest["schema_version"] != "1.0"
+        manifest["schema_version"] != ("1.1" if scanned else "1.0")
+        or (scanned and manifest["source_family"] != "scanned_reference")
         or manifest["model_id"] != expected_model_id
         or manifest["lifecycle_status"] != "active"
     ):
