@@ -44,10 +44,10 @@ assess_reference_quality(normalized: dict) -> dict
 # 返回 status、rejection_codes、warning_codes、metrics、quality_policy_version。
 ```
 
-- [ ] 红灯：无模块时确认新增测试失败；写 mm/cm/m 手算坐标、点序不变性、重复点、非有限值/布尔值/溢出/非法上限、低点数、平面、共线和真实子集测试。
-- [ ] 绿灯：纯函数实现验证、稳定中心和规范指纹；点距统计使用确定性至多 4,096 点，分块计算最近邻避免创建完整三维差张量。
-- [ ] 验证：`python -m pytest tests/test_phase15e_reference_geometry.py tests/test_phase15b2_features.py -q`。
-- [ ] 提交：`feat: add deterministic scanned reference geometry`，精确暂存本任务两文件及计划证据。
+- [x] 红灯：无模块时确认新增测试失败；写 mm/cm/m 手算坐标、点序不变性、重复点、非有限值/布尔值/溢出/非法上限、低点数、平面、共线和真实子集测试。
+- [x] 绿灯：纯函数实现验证、稳定中心和规范指纹；点距统计使用确定性至多 4,096 点，分块计算最近邻避免创建完整三维差张量。
+- [x] 验证：`python -m pytest tests/test_phase15e_reference_geometry.py tests/test_phase15b2_features.py -q`，52 项通过（新增 40 项）；compileall 与差异检查通过。
+- [x] 提交：`feat: add deterministic scanned reference geometry`，精确暂存本任务两文件及计划证据。
 
 验收示例（预期由手算给出）：
 
@@ -198,3 +198,4 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 - 2026-09-03：开发授权已收到；源工作区只有本阶段三份文档变更，未混入其他代码修改。
 - 独立设计复审：无严重/重要矛盾；三个实施接缝已写入任务 3/4：扫描公开读取只接受 completed 审计；冻结源完成标记与完整配额统计；发布 1.1 的读取和恢复均核验人工证据。旧 CAD 不改写。
 - 文档/身份基线：`python -m pytest tests/test_phase15a_identity.py tests/test_phase15d_docs.py -q`，17 项通过；未重复运行全仓门禁。
+- 任务 1 红灯：40 项因缺少几何模块失败；绿灯：新增 40 项与旧特征 12 项共 52 项通过，1.40 秒。未改变任何旧算法、发布或绑定逻辑。
