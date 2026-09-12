@@ -232,7 +232,7 @@ def _build_registration_artifacts(
                 "registration_engine_failed", "Registration results are invalid."
             ) from exc
     report = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if candidate.get("representation_type") is not None else "1.0",
         "registration_id": registration_id,
         "asset_id": retrieval.get("asset_id"),
         "source_id": retrieval.get("source_id"),
@@ -274,6 +274,9 @@ def _build_registration_artifacts(
         "status": "completed" if completed else "failed",
         "error": error,
     }
+    if candidate.get("representation_type") is not None:
+        report["candidate_representation_type"] = candidate["representation_type"]
+        report["coordinate_unit"] = frozen.get("coordinate_unit")
     report = _plain(report)
     report["report_fingerprint"] = _canonical_fingerprint(report)
     return report, artifacts
@@ -310,6 +313,15 @@ def _validate_report_artifacts(directory: Path, report: dict) -> None:
         or candidate.get("candidate_rank") != report.get("candidate_rank")
         or candidate.get("representation_fingerprint")
         != report.get("candidate_representation_fingerprint")
+        or (
+            report.get("schema_version") == "1.1"
+            and (
+                candidate.get("representation_type")
+                != report.get("candidate_representation_type")
+                or frozen.get("coordinate_unit") != "m"
+                or report.get("coordinate_unit") != "m"
+            )
+        )
         or frozen.get("object_fingerprint") != report.get("object_fingerprint")
     ):
         raise _integrity("Registration artifact contents differ from the report.")
@@ -383,7 +395,7 @@ def _load_published_registration(
     basis = {key: value for key, value in report.items() if key != "report_fingerprint"}
     if (
         set(owner) != _OWNER_FIELDS
-        or report.get("schema_version") != "1.0"
+        or report.get("schema_version") not in {"1.0", "1.1"}
         or report.get("registration_id") != registration_id
         or report.get("asset_id") != asset_id
         or report.get("source_id") != source_id

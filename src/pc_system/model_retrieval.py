@@ -44,6 +44,10 @@ _REGISTRATION_EVIDENCE_FIELDS = {
     "feature_id",
     "feature_vector_fingerprint",
 }
+_TYPED_REGISTRATION_EVIDENCE_FIELDS = {
+    *_REGISTRATION_EVIDENCE_FIELDS,
+    "representation_type",
+}
 
 
 def _round(value: float) -> float:
@@ -156,7 +160,7 @@ def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
     last = next(reversed(effective))
     effective[last] = _round(1.0 - math.fsum(value for name, value in effective.items() if name != last))
     total = math.fsum(effective[name] * components[name]["score"] for name in components)
-    return {
+    result = {
         "model_id": candidate["model_id"],
         "version_id": candidate["version_id"],
         "release_id": candidate["release_id"],
@@ -169,6 +173,9 @@ def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
         "effective_weights": effective,
         "risks": sorted(risks),
     }
+    if "representation_type" in candidate:
+        result["representation_type"] = candidate["representation_type"]
+    return result
 
 
 def _hash(value: object) -> str:
@@ -178,19 +185,29 @@ def _hash(value: object) -> str:
 def _validate_retrieval_contract_version(report: dict, candidates: dict) -> str:
     report_version = report.get("schema_version")
     candidates_version = candidates.get("schema_version")
-    if report_version not in {"1.0", "1.1"} or candidates_version != report_version:
+    if report_version not in {"1.0", "1.1", "1.2"} or candidates_version != report_version:
         raise ValueError("retrieval schema versions differ")
     items = candidates.get("candidates")
     if type(items) is not list:
         raise ValueError("retrieval candidate schema is invalid")
-    if report_version == "1.1":
+    if report_version in {"1.1", "1.2"}:
+        fields = (
+            _TYPED_REGISTRATION_EVIDENCE_FIELDS
+            if report_version == "1.2"
+            else _REGISTRATION_EVIDENCE_FIELDS
+        )
         for candidate in items:
             if (
                 type(candidate) is not dict
                 or any(
                     type(candidate.get(field)) is not str
                     or not candidate[field]
-                    for field in _REGISTRATION_EVIDENCE_FIELDS
+                    for field in fields
+                )
+                or (
+                    report_version == "1.2"
+                    and candidate.get("representation_type")
+                    not in {"cad_sampled", "scanned_reference"}
                 )
             ):
                 raise ValueError("retrieval candidate evidence is incomplete")
@@ -420,9 +437,10 @@ def retrieve_model_candidates(
         ensure_operation_event(root, operation_id, "model_retrieval.input_verified", {"object_fingerprint": query_object["object_fingerprint"], "index_id": selected_index_id})
         snapshot = read_verified_operation_snapshot(root, operation_id)
         first_event = snapshot["events"][0]
-        candidates_artifact = {"schema_version": "1.1", "candidates": returned}
+        retrieval_schema_version = "1.2" if index["schema_version"] == "1.1" else "1.1"
+        candidates_artifact = {"schema_version": retrieval_schema_version, "candidates": returned}
         report = {
-            "schema_version": "1.1", "retrieval_run_id": retrieval_run_id, "asset_id": asset_id,
+            "schema_version": retrieval_schema_version, "retrieval_run_id": retrieval_run_id, "asset_id": asset_id,
             "source_id": source_id, "instance_id": instance_id, "source_kind": source_kind,
             "object_fingerprint": query_object["object_fingerprint"], "query_feature_id": query_feature["feature_id"],
             "query_feature_fingerprint": _hash(query_feature), "index_release_id": selected_release_id,

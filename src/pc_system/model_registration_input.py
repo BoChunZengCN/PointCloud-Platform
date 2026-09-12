@@ -9,10 +9,8 @@ from pc_system.model_matching_identity import Principal, require_any_role
 from pc_system.model_release import _require_plain, list_model_releases
 from pc_system.model_retrieval import load_model_retrieval
 from pc_system.model_retrieval_input import load_retrieval_object
-from pc_system.model_sampling import (
-    _canonical_json_bytes,
-    load_sampled_representation,
-)
+from pc_system.model_representation import load_model_representation, load_representation_points
+from pc_system.model_sampling import _canonical_json_bytes
 
 
 _CANDIDATE_FIELDS = {
@@ -24,6 +22,7 @@ _CANDIDATE_FIELDS = {
     "feature_id",
     "feature_vector_fingerprint",
 }
+_TYPED_CANDIDATE_FIELDS = {"representation_type", *_CANDIDATE_FIELDS}
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 
 
@@ -83,7 +82,8 @@ def _load_retrieval(
 def _required_candidate(report: dict, candidate_rank: int) -> dict:
     if type(candidate_rank) is not int or type(candidate_rank) is bool:
         raise _incomplete("Candidate rank must be a one-based integer.")
-    if report.get("schema_version") != "1.1":
+    version = report.get("schema_version")
+    if version not in {"1.1", "1.2"}:
         raise _incomplete("Retrieval evidence does not freeze registration inputs.")
     candidates = report.get("candidates")
     if (
@@ -93,9 +93,13 @@ def _required_candidate(report: dict, candidate_rank: int) -> dict:
     ):
         raise _incomplete("Candidate rank does not exist in the retrieval report.")
     candidate = candidates[candidate_rank - 1]
+    fields = _TYPED_CANDIDATE_FIELDS if version == "1.2" else _CANDIDATE_FIELDS
     if type(candidate) is not dict or any(
         type(candidate.get(field)) is not str or not candidate[field]
-        for field in _CANDIDATE_FIELDS
+        for field in fields
+    ) or (
+        version == "1.2"
+        and candidate.get("representation_type") not in {"cad_sampled", "scanned_reference"}
     ):
         raise _incomplete("Candidate registration evidence is incomplete.")
     return candidate
@@ -118,9 +122,8 @@ def _load_model_evidence(root: Path, candidate: dict) -> tuple[dict, dict, list]
     version_id = candidate["version_id"]
     representation_id = candidate["representation_id"]
     try:
-        representation = load_sampled_representation(
-            root, model_id, version_id, representation_id
-        )
+        representation = load_model_representation(root, model_id, version_id, representation_id)
+        model_points = load_representation_points(root, representation)
         releases = list_model_releases(root, model_id)
         release = next(
             item
@@ -149,7 +152,7 @@ def _load_model_evidence(root: Path, candidate: dict) -> tuple[dict, dict, list]
         / model_id
         / "representations"
         / version_id
-        / "cad_sampled"
+        / representation["representation_type"]
         / representation_id
     )
     visible_representation, representation_fingerprint = _read_canonical_artifact(
@@ -161,6 +164,10 @@ def _load_model_evidence(root: Path, candidate: dict) -> tuple[dict, dict, list]
     try:
         if (
             visible_representation != representation
+            or (
+                "representation_type" in candidate
+                and representation["representation_type"] != candidate["representation_type"]
+            )
             or representation_fingerprint
             != candidate["representation_fingerprint"]
             or points_fingerprint != representation["geometry_fingerprint"]
@@ -174,11 +181,12 @@ def _load_model_evidence(root: Path, candidate: dict) -> tuple[dict, dict, list]
             or sampled_points["coordinate_unit"] != "m"
             or sampled_points["point_count"] != representation["point_count"]
             or type(sampled_points["points"]) is not list
+            or sampled_points["points"] != model_points
         ):
             raise ValueError("candidate evidence differs")
     except (KeyError, TypeError, ValueError) as exc:
         raise _integrity("Candidate model evidence differs.") from exc
-    return asset, feature, sampled_points["points"]
+    return asset, feature, model_points
 
 
 def load_registration_input(
