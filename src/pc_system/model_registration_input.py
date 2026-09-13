@@ -100,6 +100,8 @@ def _required_candidate(report: dict, candidate_rank: int) -> dict:
     ) or (
         version == "1.2"
         and candidate.get("representation_type") not in {"cad_sampled", "scanned_reference"}
+    ) or (
+        version == "1.1" and "representation_type" in candidate
     ):
         raise _incomplete("Candidate registration evidence is incomplete.")
     return candidate

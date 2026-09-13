@@ -225,3 +225,42 @@ def test_legacy_retrieval_and_registration_contracts_remain_readable():
             }],
         },
     ) == "1.1"
+
+
+def test_v10_index_keeps_legacy_candidates_and_registration_report_untyped(tmp_path):
+    """旧索引的真实链路不得因内部索引字段而升级检索或配准工件。"""
+    _prepare_project(tmp_path)
+    report = _retrieve(tmp_path)
+
+    assert report["schema_version"] == "1.1"
+    assert all("representation_type" not in candidate for candidate in report["candidates"])
+
+    frozen = input_module.load_registration_input(
+        tmp_path,
+        asset_id=report["asset_id"],
+        source_id=report["source_id"],
+        instance_id=report["instance_id"],
+        retrieval_run_id=report["retrieval_run_id"],
+        candidate_rank=1,
+        principal=EXPERT,
+    )
+    _publish_registration_config(tmp_path)
+    registration = register_model_candidate(
+        tmp_path,
+        registration_id="registration-legacy-1",
+        asset_id=report["asset_id"],
+        source_id=report["source_id"],
+        instance_id=report["instance_id"],
+        retrieval_run_id=report["retrieval_run_id"],
+        candidate_rank=1,
+        config_id="registration-scanned-v1",
+        engine_resolver=lambda _name: DeterministicRegistrationEngine(),
+        principal=EXPERT,
+        operation_id="op-registration-legacy-1",
+        request_id="req-registration-legacy-1",
+        idempotency_key="idem-registration-legacy-1",
+    )
+
+    assert "representation_type" not in frozen["candidate_evidence"]
+    assert registration["schema_version"] == "1.0"
+    assert "candidate_representation_type" not in registration

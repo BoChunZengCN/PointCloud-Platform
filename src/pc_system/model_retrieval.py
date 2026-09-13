@@ -95,7 +95,13 @@ def _vector_similarity(first: object, second: object) -> float | None:
     return max(0.0, min(1.0, 1.0 - 0.5 * math.fsum(abs(float(a) - float(b)) for a, b in zip(first, second))))
 
 
-def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
+def score_candidate(
+    query: dict,
+    candidate: dict,
+    config: dict,
+    *,
+    require_representation_type: bool = False,
+) -> dict:
     scoring = config.get("scoring_config", config)
     weights = scoring["weights"]
     components: dict[str, dict] = {}
@@ -173,7 +179,14 @@ def score_candidate(query: dict, candidate: dict, config: dict) -> dict:
         "effective_weights": effective,
         "risks": sorted(risks),
     }
-    if "representation_type" in candidate:
+    if require_representation_type:
+        if candidate.get("representation_type") not in {
+            "cad_sampled",
+            "scanned_reference",
+        }:
+            raise ModelMatchingError(
+                "feature_integrity_error", "Candidate representation type is invalid."
+            )
         result["representation_type"] = candidate["representation_type"]
     return result
 
@@ -211,6 +224,8 @@ def _validate_retrieval_contract_version(report: dict, candidates: dict) -> str:
                 )
             ):
                 raise ValueError("retrieval candidate evidence is incomplete")
+            if report_version == "1.1" and "representation_type" in candidate:
+                raise ValueError("legacy retrieval candidate has a representation type")
     return report_version
 
 
@@ -421,11 +436,19 @@ def retrieve_model_candidates(
             reason = "category_filter_empty" if hard_eligible else "category_filter_not_trusted"
             filter_info = {"applied": False, "category_id": mapped_category, "degraded": True, "reason": reason}
             ensure_operation_event(root, operation_id, "model_retrieval.category_filter_degraded", {"reason": reason, "candidate_count": len(selected)})
+        retrieval_schema_version = "1.2" if index["schema_version"] == "1.1" else "1.1"
         started = time.perf_counter_ns()
         scored = []
         for entry in selected:
             try:
-                scored.append(score_candidate(query, entry, config))
+                scored.append(
+                    score_candidate(
+                        query,
+                        entry,
+                        config,
+                        require_representation_type=retrieval_schema_version == "1.2",
+                    )
+                )
             except ModelMatchingError as exc:
                 if exc.code != "no_candidate_models":
                     raise
@@ -437,7 +460,6 @@ def retrieve_model_candidates(
         ensure_operation_event(root, operation_id, "model_retrieval.input_verified", {"object_fingerprint": query_object["object_fingerprint"], "index_id": selected_index_id})
         snapshot = read_verified_operation_snapshot(root, operation_id)
         first_event = snapshot["events"][0]
-        retrieval_schema_version = "1.2" if index["schema_version"] == "1.1" else "1.1"
         candidates_artifact = {"schema_version": retrieval_schema_version, "candidates": returned}
         report = {
             "schema_version": retrieval_schema_version, "retrieval_run_id": retrieval_run_id, "asset_id": asset_id,

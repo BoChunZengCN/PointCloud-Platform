@@ -231,8 +231,9 @@ def _build_registration_artifacts(
             raise ModelMatchingError(
                 "registration_engine_failed", "Registration results are invalid."
             ) from exc
+    typed_retrieval = retrieval.get("schema_version") == "1.2"
     report = {
-        "schema_version": "1.1" if candidate.get("representation_type") is not None else "1.0",
+        "schema_version": "1.1" if typed_retrieval else "1.0",
         "registration_id": registration_id,
         "asset_id": retrieval.get("asset_id"),
         "source_id": retrieval.get("source_id"),
@@ -274,7 +275,7 @@ def _build_registration_artifacts(
         "status": "completed" if completed else "failed",
         "error": error,
     }
-    if candidate.get("representation_type") is not None:
+    if typed_retrieval:
         report["candidate_representation_type"] = candidate["representation_type"]
         report["coordinate_unit"] = frozen.get("coordinate_unit")
     report = _plain(report)
@@ -316,7 +317,10 @@ def _validate_report_artifacts(directory: Path, report: dict) -> None:
         or (
             report.get("schema_version") == "1.1"
             and (
-                candidate.get("representation_type")
+                retrieval.get("schema_version") != "1.2"
+                or candidate.get("representation_type")
+                not in {"cad_sampled", "scanned_reference"}
+                or candidate.get("representation_type")
                 != report.get("candidate_representation_type")
                 or frozen.get("coordinate_unit") != "m"
                 or report.get("coordinate_unit") != "m"
