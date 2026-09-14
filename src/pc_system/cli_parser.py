@@ -306,6 +306,9 @@ def build_parser() -> argparse.ArgumentParser:
     create_model_asset.add_argument("--model-number", default="")
     create_model_asset.add_argument("--keyword", action="append", default=[])
     create_model_asset.add_argument("--tag", action="append", default=[])
+    create_model_asset.add_argument(
+        "--source-family", choices=["cad_mesh", "scanned_reference"], default="cad_mesh"
+    )
     create_model_asset.add_argument("--actor", required=True)
     create_model_asset.add_argument("--operation-id", required=True)
     create_model_asset.add_argument("--request-id", required=True)
@@ -325,6 +328,56 @@ def build_parser() -> argparse.ArgumentParser:
     import_model.add_argument("--operation-id", required=True)
     import_model.add_argument("--request-id", required=True)
     import_model.add_argument("--idempotency-key", required=True)
+
+    reference_import = subparsers.add_parser(
+        "model-reference-import", help="导入一份扫描参考版本。"
+    )
+    reference_import.add_argument("--project-root", required=True, type=Path)
+    reference_import.add_argument("--model-id", required=True)
+    reference_import.add_argument("--version-id", required=True)
+    reference_import.add_argument("--source", required=True, type=Path)
+    reference_import.add_argument("--unit", required=True, choices=["mm", "cm", "m"])
+    reference_import.add_argument("--license", required=True)
+    reference_import.add_argument("--provenance", type=Path)
+    reference_import.add_argument("--supersedes-version-id")
+    reference_import.add_argument("--actor", required=True)
+    reference_import.add_argument("--operation-id", required=True)
+    reference_import.add_argument("--request-id", required=True)
+    reference_import.add_argument("--idempotency-key", required=True)
+
+    reference_list = subparsers.add_parser(
+        "model-reference-list", help="读取扫描参考目录。"
+    )
+    reference_list.add_argument("--project-root", required=True, type=Path)
+    reference_list.add_argument("--model-id")
+    reference_list.add_argument("--status", choices=["all", "pending_review", "publishable", "published", "rejected"], default="all")
+    reference_list.add_argument("--cursor")
+    reference_list.add_argument("--limit", type=int, default=50)
+    reference_list.add_argument("--actor", required=True)
+    reference_list.add_argument("--role", choices=["operator", "expert", "auditor"], default="operator")
+
+    reference_show = subparsers.add_parser(
+        "model-reference-show", help="读取一个扫描参考版本。"
+    )
+    reference_show.add_argument("--project-root", required=True, type=Path)
+    reference_show.add_argument("--model-id", required=True)
+    reference_show.add_argument("--version-id", required=True)
+    reference_show.add_argument("--actor", required=True)
+    reference_show.add_argument("--role", choices=["operator", "expert", "auditor"], default="operator")
+
+    reference_review = subparsers.add_parser(
+        "model-reference-review", help="核验一份扫描参考版本。"
+    )
+    reference_review.add_argument("--project-root", required=True, type=Path)
+    reference_review.add_argument("--model-id", required=True)
+    reference_review.add_argument("--version-id", required=True)
+    reference_review.add_argument("--decision", required=True, choices=["approved", "rejected"])
+    reference_review.add_argument("--reason", required=True)
+    reference_review.add_argument("--acknowledgement", dest="acknowledgements", action="append", default=[])
+    reference_review.add_argument("--actor", required=True)
+    reference_review.add_argument("--operation-id", required=True)
+    reference_review.add_argument("--request-id", required=True)
+    reference_review.add_argument("--idempotency-key", required=True)
     release_model = subparsers.add_parser(
         "release-model-version",
         help="Publish or roll back one immutable model version release.",

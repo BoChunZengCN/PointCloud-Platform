@@ -48,6 +48,10 @@ from pc_system.commands.phase15 import (
     run_create_model_retrieval_config,
     run_create_model_asset,
     run_import_model,
+    run_model_reference_import,
+    run_model_reference_list,
+    run_model_reference_review,
+    run_model_reference_show,
     run_list_model_feature_index_releases,
     run_list_model_feature_indexes,
     run_list_model_representations,
@@ -348,6 +352,7 @@ def main(
                 operation_id=args.operation_id,
                 request_id=args.request_id,
                 idempotency_key=args.idempotency_key,
+                source_family=args.source_family,
             )
         if args.command == "import-model":
             return run_import_model(
@@ -361,6 +366,31 @@ def main(
                 actor=args.actor,
                 operation_id=args.operation_id,
                 request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "model-reference-import":
+            return run_model_reference_import(
+                args.project_root, model_id=args.model_id, version_id=args.version_id,
+                source_path=args.source, declared_unit=args.unit, license_name=args.license,
+                provenance_path=args.provenance, supersedes_version_id=args.supersedes_version_id,
+                actor=args.actor, operation_id=args.operation_id, request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "model-reference-list":
+            return run_model_reference_list(
+                args.project_root, actor=args.actor, role=args.role, model_id=args.model_id,
+                status=args.status, cursor=args.cursor, limit=args.limit,
+            )
+        if args.command == "model-reference-show":
+            return run_model_reference_show(
+                args.project_root, model_id=args.model_id, version_id=args.version_id,
+                actor=args.actor, role=args.role,
+            )
+        if args.command == "model-reference-review":
+            return run_model_reference_review(
+                args.project_root, model_id=args.model_id, version_id=args.version_id,
+                decision=args.decision, reason=args.reason, acknowledgements=args.acknowledgements,
+                actor=args.actor, operation_id=args.operation_id, request_id=args.request_id,
                 idempotency_key=args.idempotency_key,
             )
         if args.command == "release-model-version":

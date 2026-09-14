@@ -24,6 +24,9 @@ from pc_system.model_matching_errors import ModelMatchingError
 from pc_system.model_matching_identity import Principal
 from pc_system.model_mesh import trimesh_mesh_reader
 from pc_system.model_release import list_model_releases, release_model_version
+from pc_system.reference_catalog import list_reference_catalog, load_reference_catalog_version
+from pc_system.reference_import import import_reference_version
+from pc_system.reference_review import review_reference_version
 from pc_system.model_sampling import (
     list_sampled_representations,
     sample_model_version,
@@ -277,6 +280,7 @@ def run_create_model_asset(
     operation_id: str,
     request_id: str,
     idempotency_key: str,
+    source_family: str = "cad_mesh",
 ) -> int:
     principal = Principal(actor, frozenset({"expert"}), "cli")
     asset = create_model_asset(
@@ -292,6 +296,7 @@ def run_create_model_asset(
         operation_id=operation_id,
         request_id=request_id,
         idempotency_key=idempotency_key,
+        source_family=source_family,
     )
     print(model_asset_path(project_root, asset["model_id"]))
     return 0
@@ -347,6 +352,109 @@ def run_import_model(
         model_version_dir(project_root, version["model_id"], version["version_id"])
         / "model_manifest.json"
     )
+    return 0
+
+
+def run_model_reference_import(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    source_path: Path,
+    declared_unit: str,
+    license_name: str,
+    provenance_path: Path | None,
+    supersedes_version_id: str | None,
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    version = import_reference_version(
+        project_root,
+        model_id=model_id,
+        version_id=version_id,
+        source_path=source_path,
+        declared_unit=declared_unit,
+        license_name=license_name,
+        provenance=_load_provenance(provenance_path),
+        supersedes_version_id=supersedes_version_id,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(version, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _reference_principal(actor: str, role: str) -> Principal:
+    return Principal(actor, frozenset({role}), "cli")
+
+
+def run_model_reference_list(
+    project_root: Path,
+    *,
+    actor: str,
+    role: str,
+    model_id: str | None,
+    status: str | None,
+    cursor: str | None,
+    limit: int,
+) -> int:
+    result = list_reference_catalog(
+        project_root,
+        principal=_reference_principal(actor, role),
+        model_id=model_id,
+        status=status,
+        cursor=cursor,
+        limit=limit,
+    )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_model_reference_show(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    actor: str,
+    role: str,
+) -> int:
+    result = load_reference_catalog_version(
+        project_root, model_id, version_id, principal=_reference_principal(actor, role)
+    )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_model_reference_review(
+    project_root: Path,
+    *,
+    model_id: str,
+    version_id: str,
+    decision: str,
+    reason: str,
+    acknowledgements: list[str],
+    actor: str,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> int:
+    result = review_reference_version(
+        project_root,
+        model_id=model_id,
+        version_id=version_id,
+        decision=decision,
+        reason=reason,
+        acknowledgements=acknowledgements,
+        principal=Principal(actor, frozenset({"expert"}), "cli"),
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
 

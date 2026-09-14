@@ -45,6 +45,13 @@ from pc_system.model_release import (
     load_current_model_release,
     release_model_version,
 )
+from pc_system.reference_catalog import (
+    crop_reference_catalog_entry,
+    list_reference_catalog,
+    load_reference_catalog_version,
+)
+from pc_system.reference_import import import_reference_version
+from pc_system.reference_review import review_reference_version
 from pc_system.model_registration import (
     load_model_registration,
     register_model_candidate,
@@ -230,6 +237,7 @@ _PHASE15_NOT_FOUND = {
     "retrieval_object_not_found",
     "registration_config_not_found",
     "model_registration_not_found",
+    "reference_catalog_not_found",
 }
 _PHASE15_CONFLICT = {
     "decision_conflict", "binding_exists", "binding_stale", "binding_chain_invalid",
@@ -275,6 +283,7 @@ _PHASE15_BAD_REQUEST = {
     "invalid_request_body",
     "invalid_retrieval_input",
     "invalid_staged_source",
+    "invalid_reference_catalog_request",
     "model_file_error",
     "model_source_not_found",
     "model_source_read_error",
@@ -802,6 +811,14 @@ def create_app(
         """Model metadata is intentionally readable without authentication."""
 
         models = phase15_action(list_model_assets, project_root)
+        models = [
+            model if model.get("source_family") != "scanned_reference" else {
+                "model_id": model["model_id"],
+                "display_name": model["display_name"],
+                "source_family": "scanned_reference",
+            }
+            for model in models
+        ]
         return {"model_count": len(models), "models": models}
 
     @app.post("/model-library/models", status_code=status.HTTP_201_CREATED)
@@ -823,11 +840,13 @@ def create_app(
             "idempotency_key",
         }
         list_fields = {"keywords", "tags"}
-        captured = _capture_payload(payload, text_fields | list_fields)
+        optional_text_fields = {"source_family"}
+        captured = _capture_payload(payload, text_fields | list_fields | optional_text_fields)
         values = _require_payload_shape(
             captured,
             text_fields=text_fields,
             list_fields=list_fields,
+            optional_text_fields=optional_text_fields,
         )
         return phase15_action(
             create_model_asset,
@@ -843,6 +862,7 @@ def create_app(
             operation_id=values["operation_id"],
             request_id=values["request_id"],
             idempotency_key=values["idempotency_key"],
+            source_family=values["source_family"] or "cad_mesh",
         )
 
     @app.get("/model-library/models/{model_id}")
@@ -850,9 +870,22 @@ def create_app(
         """Published model metadata is intentionally public."""
 
         model = phase15_action(load_model_asset, project_root, model_id)
-        versions = phase15_action(
-            list_model_versions, project_root, model_id
-        )
+        if model.get("source_family") == "scanned_reference":
+            public_principal = Principal("public", frozenset({"operator"}), "configured_token")
+            catalog = phase15_action(
+                list_reference_catalog, project_root, principal=public_principal, model_id=model_id, limit=100,
+            )
+            versions = [crop_reference_catalog_entry(item) for item in catalog["items"]]
+            current_release = next((
+                {"version_id": item["version_id"], "publication_status": item["publication_status"]}
+                for item in versions if item["publication_status"] == "current"
+            ), None)
+            return {
+                "model": {"model_id": model["model_id"], "display_name": model["display_name"], "source_family": "scanned_reference"},
+                "version_count": len(versions), "versions": versions,
+                "current_release": current_release, "release_history": [],
+            }
+        versions = phase15_action(list_model_versions, project_root, model_id)
         current_release = phase15_action(
             load_current_model_release, project_root, model_id
         )
@@ -866,6 +899,64 @@ def create_app(
             "current_release": current_release,
             "release_history": release_history,
         }
+
+    @app.post(
+        "/model-library/models/{model_id}/scanned-versions",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_scanned_reference_version(model_id: str, request: Request) -> dict:
+        principal = require_phase15_principal(
+            request, route="POST /model-library/models/{model_id}/scanned-versions", allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        text_fields = {"version_id", "staged_source", "declared_unit", "license", "operation_id", "request_id", "idempotency_key"}
+        values = _require_payload_shape(
+            _capture_payload(payload, text_fields | {"provenance", "supersedes_version_id"}),
+            text_fields=text_fields, object_fields={"provenance"}, optional_text_fields={"supersedes_version_id"},
+        )
+        source_path = phase15_action(_staged_model_source, project_root, values["staged_source"])
+        return phase15_action(
+            import_reference_version, project_root, model_id=model_id, version_id=values["version_id"], source_path=source_path,
+            declared_unit=values["declared_unit"], license_name=values["license"], provenance=values["provenance"],
+            supersedes_version_id=values["supersedes_version_id"], principal=principal, operation_id=values["operation_id"],
+            request_id=values["request_id"], idempotency_key=values["idempotency_key"],
+        )
+
+    @app.get("/model-library/models/{model_id}/scanned-versions")
+    def get_scanned_reference_versions(model_id: str, request: Request, status: str | None = None,
+                                       cursor: str | None = None, limit: int = 50) -> dict:
+        principal = require_phase15_principal(
+            request, route="GET /model-library/models/{model_id}/scanned-versions", allowed_roles={"operator", "expert", "auditor"},
+        )
+        return phase15_action(list_reference_catalog, project_root, principal=principal, model_id=model_id,
+                              status=status, cursor=cursor, limit=limit)
+
+    @app.get("/model-library/models/{model_id}/scanned-versions/{version_id}")
+    def get_scanned_reference_version(model_id: str, version_id: str, request: Request) -> dict:
+        principal = require_phase15_principal(
+            request, route="GET /model-library/models/{model_id}/scanned-versions/{version_id}", allowed_roles={"operator", "expert", "auditor"},
+        )
+        return phase15_action(load_reference_catalog_version, project_root, model_id, version_id, principal=principal)
+
+    @app.post(
+        "/model-library/models/{model_id}/scanned-versions/{version_id}/review",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def post_scanned_reference_review(model_id: str, version_id: str, request: Request) -> dict:
+        principal = require_phase15_principal(
+            request, route="POST /model-library/models/{model_id}/scanned-versions/{version_id}/review", allowed_roles={"expert"},
+        )
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        text_fields = {"decision", "reason", "operation_id", "request_id", "idempotency_key"}
+        values = _require_payload_shape(
+            _capture_payload(payload, text_fields | {"acknowledgements"}), text_fields=text_fields,
+            list_fields={"acknowledgements"},
+        )
+        return phase15_action(
+            review_reference_version, project_root, model_id=model_id, version_id=version_id, decision=values["decision"],
+            reason=values["reason"], acknowledgements=values["acknowledgements"], principal=principal,
+            operation_id=values["operation_id"], request_id=values["request_id"], idempotency_key=values["idempotency_key"],
+        )
 
     @app.post(
         "/model-library/models/{model_id}/releases",
