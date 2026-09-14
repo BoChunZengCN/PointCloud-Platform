@@ -238,6 +238,7 @@ _PHASE15_NOT_FOUND = {
     "registration_config_not_found",
     "model_registration_not_found",
     "reference_catalog_not_found",
+    "reference_version_not_ready",
 }
 _PHASE15_CONFLICT = {
     "decision_conflict", "binding_exists", "binding_stale", "binding_chain_invalid",
@@ -254,6 +255,14 @@ _PHASE15_CONFLICT = {
     "stale_model_release",
     "object_fingerprint_stale",
     "artifact_integrity_failed",
+    "model_source_family_conflict",
+    "reference_operation_identity_conflict",
+    "reference_quality_rejected",
+    "reference_review_exists",
+    "reference_review_owned",
+    "reference_review_required",
+    "reference_source_changed",
+    "reference_version_owned",
 }
 _PHASE15_SERVICE_UNAVAILABLE = {
     "audit_persistence_error",
@@ -268,6 +277,11 @@ _PHASE15_SERVICE_UNAVAILABLE = {
     "registration_engine_unavailable",
     "registration_engine_failed",
     "non_rigid_transform",
+    "reference_decode_timeout",
+    "reference_import_failed",
+    "reference_reader_unavailable",
+    "reference_review_failed",
+    "reference_storage_limit",
 }
 _PHASE15_BAD_REQUEST = {
     "decision_not_allowed", "decision_reason_invalid", "registration_not_eligible",
@@ -284,6 +298,19 @@ _PHASE15_BAD_REQUEST = {
     "invalid_retrieval_input",
     "invalid_staged_source",
     "invalid_reference_catalog_request",
+    "reference_acknowledgements_required",
+    "reference_crs_unsupported",
+    "reference_format_invalid",
+    "reference_format_unsupported",
+    "reference_input_limit",
+    "reference_laz_variant_unsupported",
+    "reference_limit_invalid",
+    "reference_points_invalid",
+    "reference_request_invalid",
+    "reference_review_invalid",
+    "reference_sampling_invalid",
+    "reference_unit_conflict",
+    "reference_unit_unsupported",
     "model_file_error",
     "model_source_not_found",
     "model_source_read_error",
@@ -848,6 +875,11 @@ def create_app(
             list_fields=list_fields,
             optional_text_fields=optional_text_fields,
         )
+        source_family = "cad_mesh" if "source_family" not in captured else captured["source_family"]
+        if source_family not in {"cad_mesh", "scanned_reference"}:
+            raise _phase15_http_error(
+                _invalid_request("source_family must be cad_mesh or scanned_reference when supplied.")
+            )
         return phase15_action(
             create_model_asset,
             project_root,
@@ -862,7 +894,7 @@ def create_app(
             operation_id=values["operation_id"],
             request_id=values["request_id"],
             idempotency_key=values["idempotency_key"],
-            source_family=values["source_family"] or "cad_mesh",
+            source_family=source_family,
         )
 
     @app.get("/model-library/models/{model_id}")
@@ -872,10 +904,17 @@ def create_app(
         model = phase15_action(load_model_asset, project_root, model_id)
         if model.get("source_family") == "scanned_reference":
             public_principal = Principal("public", frozenset({"operator"}), "configured_token")
-            catalog = phase15_action(
-                list_reference_catalog, project_root, principal=public_principal, model_id=model_id, limit=100,
-            )
-            versions = [crop_reference_catalog_entry(item) for item in catalog["items"]]
+            catalog_items, cursor = [], None
+            while True:
+                catalog = phase15_action(
+                    list_reference_catalog, project_root, principal=public_principal, model_id=model_id,
+                    limit=100, cursor=cursor,
+                )
+                catalog_items.extend(catalog["items"])
+                cursor = catalog["next_cursor"]
+                if cursor is None:
+                    break
+            versions = [crop_reference_catalog_entry(item) for item in catalog_items]
             current_release = next((
                 {"version_id": item["version_id"], "publication_status": item["publication_status"]}
                 for item in versions if item["publication_status"] == "current"

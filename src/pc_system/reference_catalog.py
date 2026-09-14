@@ -94,14 +94,19 @@ def _review_status(review: dict | None) -> str:
     return {"approved": "approved", "rejected": "rejected"}[review["decision"]]
 
 
-def _catalog_status(*, quality_status: str, review_status: str, publication_status: str) -> str:
-    if quality_status == "rejected" or review_status == "rejected":
-        return "rejected"
-    if publication_status != "unpublished":
-        return "published"
-    if review_status == "approved":
-        return "publishable"
-    return "pending_review"
+def _matches_status(row: dict, status: str) -> bool:
+    if status == "all":
+        return True
+    quality_status = row["quality_status"]
+    review_status = row["review_status"]
+    publication_status = row["publication_status"]
+    if status == "rejected":
+        return quality_status == "rejected" or review_status == "rejected"
+    if status == "published":
+        return publication_status in {"current", "historical"}
+    if status == "publishable":
+        return review_status == "approved" and publication_status != "current"
+    return quality_status != "rejected" and review_status == "pending"
 
 
 def _risk_summary(*, quality_status: str, review_status: str, index_status: str) -> list[str]:
@@ -177,9 +182,7 @@ def list_reference_catalog(root, *, principal: Principal, status: str | None = N
     for asset in _assets(root, model_id):
         for manifest in list_reference_versions(root, asset["model_id"]):
             row = _projection(root, asset, manifest, visibility=visibility)
-            if normalized_status == "all" or _catalog_status(**{
-                key: row[key] for key in ("quality_status", "review_status", "publication_status")
-            }) == normalized_status:
+            if _matches_status(row, normalized_status):
                 rows.append(row)
     rows.sort(key=lambda item: (item["model_id"], item["version_id"]))
     if after is not None:

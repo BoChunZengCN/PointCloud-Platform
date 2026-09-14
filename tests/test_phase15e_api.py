@@ -1,9 +1,12 @@
 import json
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from pc_system.api import create_app
-from phase15e_support import scan_source
+from pc_system.cli import main
+from phase15e_support import EXPERT, import_request, review_request, scan_asset, scan_source
 
 
 def _client(root):
@@ -50,6 +53,20 @@ def _import_payload(version_id="v1"):
         "operation_id": "import-" + version_id,
         "request_id": "req-import-" + version_id,
         "idempotency_key": "idem-import-" + version_id,
+    }
+
+
+def _release_payload(version_id, release_id, expected_current_release_id):
+    return {
+        "version_id": version_id,
+        "release_id": release_id,
+        "action": "activate",
+        "expected_current_release_id": expected_current_release_id,
+        "rollback_of_release_id": None,
+        "reason": "发布已核验扫描参考",
+        "operation_id": "release-" + release_id,
+        "request_id": "req-release-" + release_id,
+        "idempotency_key": "idem-release-" + release_id,
     }
 
 
@@ -109,11 +126,22 @@ def test_api_imports_only_controlled_staging_and_replays_same_operation(tmp_path
         json={**payload, "operation_id": "traversal", "request_id": "traversal", "idempotency_key": "traversal", "staged_source": "imports/models/../scan.ply"},
         headers=_headers("expert"),
     )
+    linked = staging / "linked.ply"
+    try:
+        linked.symlink_to("scan.ply")
+    except OSError:
+        pytest.skip("测试主机不允许创建文件符号链接")
+    link = client.post(
+        "/model-library/models/scan-pump/scanned-versions",
+        json={**payload, "operation_id": "link", "request_id": "link", "idempotency_key": "link", "staged_source": "imports/models/linked.ply"},
+        headers=_headers("expert"),
+    )
 
     assert first.status_code == replay.status_code == 201
     assert replay.json() == first.json()
     assert absolute.status_code == traversal.status_code == 400
     assert absolute.json()["detail"]["code"] == traversal.json()["detail"]["code"] == "invalid_staged_source"
+    assert link.status_code == 400 and link.json()["detail"]["code"] == "invalid_staged_source"
 
 
 def test_api_catalog_paginates_binds_cursor_and_crops_operator_details(tmp_path):
@@ -162,12 +190,127 @@ def test_api_enforces_roles_and_never_uses_claimed_body_identity(tmp_path):
         "idempotency_key": "idem-review-1",
     }
     denied = client.post("/model-library/models/scan-pump/scanned-versions/v1/review", json={**review, "roles": ["expert"]}, headers=_headers("operator"))
+    auditor_import = client.post("/model-library/models/scan-pump/scanned-versions", json=_import_payload("v2"), headers=_headers("auditor"))
+    auditor_denied = client.post("/model-library/models/scan-pump/scanned-versions/v1/review", json=review, headers=_headers("auditor"))
     audited = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("auditor"))
     approved = client.post("/model-library/models/scan-pump/scanned-versions/v1/review", json=review, headers=_headers("expert"))
+    replayed = client.post("/model-library/models/scan-pump/scanned-versions/v1/review", json=review, headers=_headers("expert"))
 
     assert denied.status_code == 403
+    assert auditor_import.status_code == 403
+    assert auditor_denied.status_code == 403
     assert audited.status_code == 200 and audited.json()["license"] == "内部扫描授权正文"
     assert approved.status_code == 201 and approved.json()["decision"] == "approved"
+    assert replayed.status_code == 201 and replayed.json() == approved.json()
     public = client.get("/model-library/models/scan-pump")
     assert public.status_code == 200
     assert "内部扫描授权正文" not in json.dumps(public.json(), ensure_ascii=False)
+
+
+def test_api_catalog_keeps_historical_approved_version_publishable(tmp_path):
+    """Collapsing historical approvals into only `published` must fail this filter."""
+    client = _client(tmp_path)
+    _prepare_scan(tmp_path, client)
+    staging = tmp_path / "imports" / "models"
+    scan_source(staging / "scan-v2.ply")
+    second = _import_payload("v2")
+    second["staged_source"] = "imports/models/scan-v2.ply"
+    assert client.post("/model-library/models/scan-pump/scanned-versions", json=second, headers=_headers("expert")).status_code == 201
+    for version_id in ("v1", "v2"):
+        review = {
+            "decision": "approved", "reason": "已核对单对象、来源许可与扫描覆盖范围",
+            "acknowledgements": ["single_object", "metadata_and_rights", "coverage_limitations"],
+            "operation_id": "review-" + version_id, "request_id": "req-review-" + version_id,
+            "idempotency_key": "idem-review-" + version_id,
+        }
+        assert client.post(f"/model-library/models/scan-pump/scanned-versions/{version_id}/review", json=review, headers=_headers("expert")).status_code == 201
+        expected = None if version_id == "v1" else "release-v1"
+        assert client.post(
+            "/model-library/models/scan-pump/releases", json=_release_payload(version_id, "release-" + version_id, expected), headers=_headers("expert"),
+        ).status_code == 201
+
+    publishable = client.get("/model-library/models/scan-pump/scanned-versions?status=publishable", headers=_headers("operator"))
+    published = client.get("/model-library/models/scan-pump/scanned-versions?status=published", headers=_headers("operator"))
+
+    assert publishable.status_code == published.status_code == 200
+    assert [item["version_id"] for item in publishable.json()["items"]] == ["v1"]
+    assert [item["version_id"] for item in published.json()["items"]] == ["v1", "v2"]
+
+
+@pytest.mark.parametrize("source_family", ["", None, "untrusted_family"])
+def test_api_rejects_explicit_invalid_source_family_without_creating_cad_asset(tmp_path, source_family):
+    """Defaulting an explicit invalid source family to CAD must not create an asset."""
+    client = _client(tmp_path)
+    model_id = "bad-family-" + ("null" if source_family is None else ("empty" if not source_family else "other"))
+
+    payload = _asset_payload(model_id, source_family=source_family)
+    payload["source_family"] = source_family
+    response = client.post("/model-library/models", json=payload, headers=_headers("expert"))
+
+    assert response.status_code == 400
+    assert not (tmp_path / "models" / model_id / "model_asset.json").exists()
+
+
+def test_api_maps_invalid_reference_review_decision_to_bad_request(tmp_path):
+    """An invalid review decision is client input, not an internal server error."""
+    client = _client(tmp_path)
+    _prepare_scan(tmp_path, client)
+    response = client.post(
+        "/model-library/models/scan-pump/scanned-versions/v1/review",
+        json={
+            "decision": "maybe", "reason": "非法决定", "acknowledgements": [],
+            "operation_id": "review-invalid", "request_id": "req-review-invalid", "idempotency_key": "idem-review-invalid",
+        }, headers=_headers("expert"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "reference_review_invalid"
+
+
+def test_public_scan_detail_consumes_all_pages_before_projecting_current_release(tmp_path):
+    """A one-page public scan projection would omit the last current version and leak no evidence."""
+    from pc_system.reference_import import import_reference_version
+    from pc_system.reference_review import review_reference_version
+    from pc_system.model_release import release_model_version
+
+    scan_asset(tmp_path)
+    source = scan_source(tmp_path / "source.ply")
+    for sequence in range(100):
+        version_id = f"v{sequence:03d}"
+        import_reference_version(tmp_path, **import_request(
+            source, version_id=version_id, operation_id="import-" + version_id,
+            request_id="req-" + version_id, idempotency_key="idem-" + version_id,
+        ))
+    current = import_reference_version(tmp_path, **import_request(
+        source, version_id="z-current", operation_id="import-z", request_id="req-z", idempotency_key="idem-z",
+    ))
+    review_reference_version(tmp_path, **review_request(
+        version_id="z-current", sequence="z", operation_id="review-z", request_id="req-review-z", idempotency_key="idem-review-z",
+    ))
+    release_model_version(tmp_path, model_id="scan-pump", version_id="z-current", release_id="release-z", action="activate",
+        expected_current_release_id=None, rollback_of_release_id=None, reason="发布最后一页扫描版本", principal=EXPERT,
+        operation_id="release-z", request_id="req-release-z", idempotency_key="idem-release-z")
+
+    response = _client(tmp_path).get("/model-library/models/scan-pump")
+
+    assert response.status_code == 200
+    assert response.json()["version_count"] == 101
+    assert response.json()["versions"][-1]["version_id"] == "z-current"
+    assert response.json()["current_release"] == {"version_id": current["version_id"], "publication_status": "current"}
+    assert "source_path" not in json.dumps(response.json(), ensure_ascii=False)
+
+
+def test_api_and_cli_operator_list_share_the_same_business_projection(tmp_path, capsys):
+    """Divergent transport adapters must not expose different operator catalog data."""
+    client = _client(tmp_path)
+    _prepare_scan(tmp_path, client)
+    api_projection = client.get(
+        "/model-library/models/scan-pump/scanned-versions", headers=_headers("operator")
+    ).json()
+
+    assert main([
+        "model-reference-list", "--project-root", str(tmp_path), "--model-id", "scan-pump",
+        "--actor", "operator", "--role", "operator",
+    ]) == 0
+
+    assert json.loads(capsys.readouterr().out) == api_projection
