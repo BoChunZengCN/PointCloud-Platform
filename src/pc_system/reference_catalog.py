@@ -147,8 +147,15 @@ def _projection(root: Path, asset: dict, manifest: dict, *, visibility: str) -> 
     })
     if visibility == "professional":
         bundle = load_bundle(root, model_id, version_id)
+        current_release = load_current_model_release(root, model_id)
+        release_history = list_model_releases(root, model_id)
         points = select_reference_points(bundle["normalized"]["points"], point_count=4096, random_seed=0)
         result.update({
+            "current_release_id": None if current_release is None else current_release["release_id"],
+            "release_history": [{key: release[key] for key in (
+                "release_id", "version_id", "action", "previous_release_id", "rollback_of_release_id",
+                "reason", "actor_id", "created_at",
+            )} for release in release_history],
             "dimensions_m": bundle["normalized"]["dimensions_m"],
             "preview": {
                 "schema_version": "1.0", "coordinate_unit": "m", "algorithm": "sha256_point_subset_v1",

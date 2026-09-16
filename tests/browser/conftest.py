@@ -14,7 +14,7 @@ from playwright.sync_api import expect
 from pc_system.api import create_app
 from phase15c_support import DeterministicRegistrationEngine
 from phase15d_support import prepare_decision_case
-from phase15e_support import import_request, scan_asset, scan_source
+from phase15e_support import EXPERT, import_request, scan_asset, scan_source
 
 
 expect.set_options(timeout=15000)
@@ -23,14 +23,75 @@ expect.set_options(timeout=15000)
 @pytest.fixture
 def browser_server(tmp_path, request):
     mode = getattr(request, "param", "passed")
-    if mode == "reference":
+    if mode.startswith("reference") and mode != "reference-labels":
         staging = tmp_path / "imports" / "models"
         staging.mkdir(parents=True)
         scan_source(staging / "browser-scan.ply")
+        (staging / "warning-scan.ply").write_text(
+            "ply\nformat ascii 1.0\nelement vertex 64\nproperty float x\nproperty float y\nproperty float z\nend_header\n"
+            + "".join(f"{x} {y} 0\n" for x in range(8) for y in range(8)),
+            encoding="ascii",
+        )
         from pc_system.reference_import import import_reference_version
         scan_asset(tmp_path, model_id="scan-readonly")
         import_reference_version(tmp_path, **import_request(staging / "browser-scan.ply", model_id="scan-readonly", version_id="v1"))
-    case = None if mode in {"empty", "reference"} else prepare_decision_case(tmp_path, mode="passed" if mode == "slow" else mode)
+        if mode == "reference-history":
+            from pc_system.model_release import release_model_version
+            from pc_system.reference_review import review_reference_version
+            for version_id in ("v2", "v3", "v4"):
+                import_reference_version(
+                    tmp_path,
+                    **import_request(
+                        staging / "browser-scan.ply",
+                        model_id="scan-readonly",
+                        version_id=version_id,
+                        operation_id=f"import-history-{version_id}",
+                        request_id=f"req-history-{version_id}",
+                        idempotency_key=f"idem-history-{version_id}",
+                    ),
+                )
+            for sequence, version_id in enumerate(("v1", "v2"), 1):
+                review_reference_version(
+                    tmp_path,
+                    model_id="scan-readonly",
+                    version_id=version_id,
+                    decision="approved",
+                    reason="历史夹具已核验",
+                    acknowledgements=["single_object", "metadata_and_rights", "coverage_limitations"],
+                    principal=EXPERT,
+                    operation_id=f"review-history-{version_id}",
+                    request_id=f"req-review-history-{version_id}",
+                    idempotency_key=f"idem-review-history-{version_id}",
+                )
+                release_model_version(
+                    tmp_path,
+                    model_id="scan-readonly",
+                    version_id=version_id,
+                    release_id=f"release-history-{version_id}",
+                    action="activate",
+                    expected_current_release_id=None if sequence == 1 else "release-history-v1",
+                    rollback_of_release_id=None,
+                    reason="历史夹具发布",
+                    principal=EXPERT,
+                    operation_id=f"release-history-{version_id}",
+                    request_id=f"req-release-history-{version_id}",
+                    idempotency_key=f"idem-release-history-{version_id}",
+                )
+            review_reference_version(
+                tmp_path,
+                model_id="scan-readonly",
+                version_id="v4",
+                decision="rejected",
+                reason="历史夹具拒绝",
+                acknowledgements=[],
+                principal=EXPERT,
+                operation_id="review-history-v4",
+                request_id="req-review-history-v4",
+                idempotency_key="idem-review-history-v4",
+            )
+    case = None if mode in {"empty", "reference", "reference-history", "reference-slow"} else prepare_decision_case(
+        tmp_path, mode="passed" if mode in {"slow", "reference-labels"} else mode
+    )
     app = create_app(tmp_path, run_mode="production", api_key="phase15d-test-service-key",
         principal_bindings={role + "-token": {"actor_id": role + "-browser", "roles": [role]}
                             for role in ("operator", "expert", "auditor")},
@@ -39,6 +100,12 @@ def browser_server(tmp_path, request):
         @app.middleware("http")
         async def latency(request, call_next):
             if request.url.path == "/model-matching/decision-items":
+                await asyncio.sleep(1)
+            return await call_next(request)
+    if mode == "reference-slow":
+        @app.middleware("http")
+        async def reference_latency(request, call_next):
+            if request.method == "POST":
                 await asyncio.sleep(1)
             return await call_next(request)
     app.mount("/workbench", StaticFiles(directory=Path(__file__).resolve().parents[2] / "frontend"), name="workbench")
@@ -88,7 +155,7 @@ def open_workbench(new_context, browser_server):
 def open_reference_library(new_context, browser_server):
     contexts, errors = [], []
     def open_page(role="expert", model_id=None):
-        context = new_context(extra_http_headers={"Authorization":"Bearer " + role + "-token"}, viewport={"width":1440,"height":1050})
+        context = new_context(viewport={"width":1440,"height":1050})
         contexts.append(context)
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))

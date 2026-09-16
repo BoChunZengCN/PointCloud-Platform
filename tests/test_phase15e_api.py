@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from pc_system.api import create_app
 from pc_system.cli import main
+from pc_system.reference_store import load_bundle
 from phase15e_support import EXPERT, import_request, review_request, scan_asset, scan_source
 
 
@@ -340,3 +341,64 @@ def test_catalog_professional_preview_is_bounded_deterministic_and_role_projecte
     assert auditor_list.json()["viewer_role"] == "auditor"
     assert operator.json()["viewer_role"] == "operator"
     assert not {"preview", "quality", "source", "license", "provenance", "review"}.intersection(operator.json())
+
+
+def test_catalog_preview_over_4096_is_deterministic_bounded_and_uses_only_normalized_measured_points(tmp_path):
+    """预览算法不得插值、复制或返回标准化实测点之外的坐标。"""
+    client = _client(tmp_path)
+    staging = tmp_path / "imports" / "models"
+    staging.mkdir(parents=True)
+    source = staging / "large.ply"
+    points = [(float(index), float(index % 97), float(index % 31)) for index in range(5000)]
+    source.write_text(
+        "ply\nformat ascii 1.0\nelement vertex 5000\nproperty float x\nproperty float y\nproperty float z\nend_header\n"
+        + "".join(f"{x} {y} {z}\n" for x, y, z in points),
+        encoding="ascii",
+    )
+    assert client.post(
+        "/model-library/models", json=_asset_payload("large-scan", source_family="scanned_reference"),
+        headers=_headers("expert"),
+    ).status_code == 201
+    payload = {**_import_payload(), "staged_source": "imports/models/large.ply"}
+    assert client.post(
+        "/model-library/models/large-scan/scanned-versions", json=payload, headers=_headers("expert"),
+    ).status_code == 201
+
+    first = client.get("/model-library/models/large-scan/scanned-versions/v1", headers=_headers("expert")).json()["preview"]
+    second = client.get("/model-library/models/large-scan/scanned-versions/v1", headers=_headers("expert")).json()["preview"]
+    measured = {tuple(point) for point in load_bundle(tmp_path, "large-scan", "v1")["normalized"]["points"]}
+
+    assert first == second
+    assert first["source_point_count"] == 5000
+    assert first["point_count"] == len(first["points"]) == 4096
+    assert all(tuple(point) in measured for point in first["points"])
+
+
+def test_reference_session_and_professional_release_projection_are_trusted_and_cropped(tmp_path):
+    """页面初始角色、发布头和历史只能由服务端只读投影给出。"""
+    client = _client(tmp_path)
+    _prepare_scan(tmp_path, client)
+    for role in ("expert", "auditor", "operator"):
+        response = client.get("/model-library/reference-session", headers=_headers(role))
+        assert response.status_code == 200
+        assert response.json() == {"viewer_role": role}
+    review = {"decision":"approved", "reason":"已核对单对象、来源许可与扫描覆盖范围",
+              "acknowledgements":["single_object","metadata_and_rights","coverage_limitations"],
+              "operation_id":"review-release", "request_id":"req-review-release", "idempotency_key":"idem-review-release"}
+    reviewed = client.post("/model-library/models/scan-pump/scanned-versions/v1/review", json=review, headers=_headers("expert"))
+    assert reviewed.status_code == 201
+    assert client.post("/model-library/models/scan-pump/releases", json=_release_payload("v1", "release-v1", None), headers=_headers("expert")).status_code == 201
+    from pc_system.model_release import load_current_model_release
+    from pc_system.reference_review import load_reference_review
+    expert = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("expert"))
+    operator = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("operator"))
+    immutable_review = load_reference_review(tmp_path, "scan-pump", "v1")
+    current = load_current_model_release(tmp_path, "scan-pump")
+    assert immutable_review["decision"] == "approved"
+    assert immutable_review["acknowledgements"] == sorted(review["acknowledgements"])
+    assert current["model_id"] == "scan-pump"
+    assert current["version_id"] == "v1"
+    assert current["release_id"] == "release-v1"
+    assert expert.json()["current_release_id"] == "release-v1"
+    assert expert.json()["release_history"][0]["release_id"] == "release-v1"
+    assert not {"current_release_id", "release_history"}.intersection(operator.json())

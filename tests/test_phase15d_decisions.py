@@ -9,6 +9,7 @@ import pytest
 import pc_system.model_match_decision as service
 from pc_system.model_matching_audit import read_verified_operation_snapshot
 from pc_system.model_matching_errors import ModelMatchingError
+from phase15c_support import DeterministicRegistrationEngine
 from phase15d_support import OPERATOR, EXPERT, prepare_decision_case, publish_registration
 
 
@@ -37,6 +38,45 @@ def test_legacy_candidate_summary_labels_cad_representation(tmp_path):
     case = prepare_decision_case(tmp_path)
     item = load_model_decision_item(tmp_path, case_id=case.request_fields["case_id"], principal=OPERATOR)
     assert item["candidate_summary"][0]["representation_type"] == "cad_sampled"
+
+
+def test_scanned_candidate_summary_preserves_scanned_representation(tmp_path):
+    """真实扫描配准报告进入队列后，安全候选摘要不能被投影为 CAD。"""
+    from pc_system.model_decision_queue import load_model_decision_item
+    from pc_system.model_match_decision import load_decision_context
+    from pc_system.model_registration import register_model_candidate
+    from test_phase15e_reference_matching import _prepare_scanned_retrieval, _publish_registration_config
+
+    retrieval, rank = _prepare_scanned_retrieval(tmp_path)
+    config = _publish_registration_config(tmp_path)
+    registration = register_model_candidate(
+        tmp_path,
+        registration_id="registration-scanned-decision",
+        asset_id=retrieval["asset_id"], source_id=retrieval["source_id"],
+        instance_id=retrieval["instance_id"], retrieval_run_id=retrieval["retrieval_run_id"],
+        candidate_rank=rank, config_id=config["config_id"],
+        engine_resolver=lambda _name: DeterministicRegistrationEngine(),
+        principal=EXPERT, operation_id="op-scanned-decision", request_id="req-scanned-decision",
+        idempotency_key="idem-scanned-decision",
+    )
+    context = load_decision_context(
+        tmp_path,
+        asset_id=retrieval["asset_id"], source_id=retrieval["source_id"],
+        instance_id=retrieval["instance_id"], retrieval_run_id=retrieval["retrieval_run_id"],
+    )
+    item = load_model_decision_item(
+        tmp_path,
+        case_id=context["case_id"],
+        principal=OPERATOR,
+    )
+
+    assert registration["candidate_representation_type"] == "scanned_reference"
+    assert item["candidate_summary"] == [{
+        "registration_id": "registration-scanned-decision", "candidate_rank": rank,
+        "model_id": "scan-pump", "model_version_id": "v1", "gate_status": "passed",
+        "human_rejected": False, "representation_type": "scanned_reference",
+        "generated_at": registration["generated_at"], "available_actions": ["confirm", "reject"],
+    }]
 
 
 def test_pre_owner_failure_is_finalized_while_object_lock_is_held(tmp_path, monkeypatch):

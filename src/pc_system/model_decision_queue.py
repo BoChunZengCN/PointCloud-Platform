@@ -36,6 +36,11 @@ def _time(value):
         raise _invalid("Time filter must include a valid timezone.") from exc
 
 
+def _candidate_representation_type(report: dict) -> str:
+    """按冻结的配准报告版本投影候选来源；合法旧 1.0 固定解释为 CAD。"""
+    return report.get("candidate_representation_type") if report.get("schema_version") == "1.1" else "cad_sampled"
+
+
 def _project(root: Path, identity: dict, reports: list[dict], principal: Principal, *, detail=False) -> dict:
     context = load_decision_context(root, **{key: identity[key] for key in _IDENTITY if key != "object_fingerprint"})
     case_id = compute_case_id(**identity)
@@ -66,7 +71,7 @@ def _project(root: Path, identity: dict, reports: list[dict], principal: Princip
             "registration_id": report["registration_id"], "candidate_rank": report["candidate_rank"],
             "model_id": report["candidate_model_id"], "model_version_id": report["candidate_version_id"],
             "gate_status": report["gate_status"], "human_rejected": report["registration_id"] in rejected,
-            "representation_type": report.get("candidate_representation_type") if report.get("schema_version") == "1.1" else "cad_sampled",
+            "representation_type": _candidate_representation_type(report),
             "generated_at": report["generated_at"], "available_actions": actions,
         })
     actions = []

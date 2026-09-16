@@ -897,6 +897,14 @@ def create_app(
             source_family=source_family,
         )
 
+    @app.get("/model-library/reference-session")
+    def get_reference_session(request: Request) -> dict:
+        """页面初始化的可信角色投影；不创建会话，也不产生领域副作用。"""
+        principal = require_phase15_principal(
+            request, route="GET /model-library/reference-session", allowed_roles={"operator", "expert", "auditor"},
+        )
+        return {"viewer_role": "expert" if "expert" in principal.roles else "auditor" if "auditor" in principal.roles else "operator"}
+
     @app.get("/model-library/models/{model_id}")
     def get_model_library_model(model_id: str) -> dict:
         """Published model metadata is intentionally public."""
