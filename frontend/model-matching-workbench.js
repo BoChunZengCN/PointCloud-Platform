@@ -97,7 +97,7 @@
     }
     function renderCandidate() {
       const c = selectedCandidate();
-      $("candidate-summary").textContent = c ? `配准记录：${c.registration_id} · ${c.generated_at}` : "没有可用候选";
+      $("candidate-summary").textContent = c ? `配准记录：${c.registration_id} · ${c.generated_at} · 来源：${c.representation_type === "scanned_reference" ? "扫描参考" : "CAD 采样"}` : "没有可用候选";
       $("gate-note").textContent = state.item.status === "stale" ? "对象或绑定已陈旧，普通确认已禁用，请专家基于当前对象重新配准或替换。" :
         c?.gate_status === "review_required" ? "自动配准需要专家复核，普通用户不能确认。" :
         c?.gate_status === "rejected" ? "算法门禁未通过，此配准不能绑定；可声明无匹配或请专家重新配准。" :

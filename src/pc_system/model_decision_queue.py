@@ -66,6 +66,7 @@ def _project(root: Path, identity: dict, reports: list[dict], principal: Princip
             "registration_id": report["registration_id"], "candidate_rank": report["candidate_rank"],
             "model_id": report["candidate_model_id"], "model_version_id": report["candidate_version_id"],
             "gate_status": report["gate_status"], "human_rejected": report["registration_id"] in rejected,
+            "representation_type": report.get("candidate_representation_type") if report.get("schema_version") == "1.1" else "cad_sampled",
             "generated_at": report["generated_at"], "available_actions": actions,
         })
     actions = []

@@ -314,3 +314,29 @@ def test_api_and_cli_operator_list_share_the_same_business_projection(tmp_path, 
     ]) == 0
 
     assert json.loads(capsys.readouterr().out) == api_projection
+
+
+def test_catalog_professional_preview_is_bounded_deterministic_and_role_projected(tmp_path):
+    """目录预览必须来自已验证实测点，且业务角色不能取得专业证据。"""
+    client = _client(tmp_path)
+    _prepare_scan(tmp_path, client)
+
+    expert_first = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("expert"))
+    expert_second = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("expert"))
+    auditor_list = client.get("/model-library/models/scan-pump/scanned-versions", headers=_headers("auditor"))
+    operator = client.get("/model-library/models/scan-pump/scanned-versions/v1", headers=_headers("operator"))
+
+    assert expert_first.status_code == expert_second.status_code == auditor_list.status_code == operator.status_code == 200
+    preview = expert_first.json()["preview"]
+    assert expert_first.json()["viewer_role"] == "expert"
+    assert expert_first.json()["dimensions_m"] == [3.0, 3.0, 3.0]
+    assert preview == expert_second.json()["preview"]
+    assert preview["schema_version"] == "1.0"
+    assert preview["coordinate_unit"] == "m"
+    assert preview["algorithm"] == "sha256_point_subset_v1"
+    assert preview["random_seed"] == 0
+    assert preview["point_count"] <= 4096
+    assert preview["point_count"] == len(preview["points"])
+    assert auditor_list.json()["viewer_role"] == "auditor"
+    assert operator.json()["viewer_role"] == "operator"
+    assert not {"preview", "quality", "source", "license", "provenance", "review"}.intersection(operator.json())

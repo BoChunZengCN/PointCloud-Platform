@@ -31,6 +31,14 @@ def test_confirm_replay_and_old_page_conflict(tmp_path):
     assert caught.value.code == "decision_conflict"
 
 
+def test_legacy_candidate_summary_labels_cad_representation(tmp_path):
+    """旧冻结配准报告在页面安全摘要中仍应明确为 CAD 采样。"""
+    from pc_system.model_decision_queue import load_model_decision_item
+    case = prepare_decision_case(tmp_path)
+    item = load_model_decision_item(tmp_path, case_id=case.request_fields["case_id"], principal=OPERATOR)
+    assert item["candidate_summary"][0]["representation_type"] == "cad_sampled"
+
+
 def test_pre_owner_failure_is_finalized_while_object_lock_is_held(tmp_path, monkeypatch):
     case = prepare_decision_case(tmp_path)
     original_lock, original_fail = service.model_resource_lock, service.fail_operation

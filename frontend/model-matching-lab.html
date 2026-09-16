@@ -2,7 +2,7 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>专业匹配工作台 · 点云平台</title><link rel="stylesheet" href="model-decisions.css"><link rel="stylesheet" href="model-matching-lab.css"></head>
 <body><main>
-<nav><a href="index.html">项目驾驶舱</a><a href="model-decisions.html">业务决策工作台</a></nav>
+<nav><a href="index.html">项目驾驶舱</a><a href="model-decisions.html">业务决策工作台</a><a href="model-reference-library.html">扫描参考模板</a></nav>
 <header><p class="eyebrow">可核验 · 可追溯 · 不可变版本</p><h1>专业匹配工作台</h1><p>专家复核配准证据，管理绑定版本；审计员只读查看。</p></header>
 <details class="connection"><summary>连接与身份</summary><label>API 访问令牌<input id="token" type="password" autocomplete="off" placeholder="仅在当前页面内存使用"></label><button id="connect">连接</button><p>权限由服务端验证；不接受 URL 中的角色或凭据。</p></details>
 <section id="filters" aria-label="筛选区"><label>项目 / 资产<input id="asset-filter"></label><label>类别<input id="class-filter"></label><label>质量状态<select id="gate-filter"><option value="">全部质量</option><option value="passed">通过</option><option value="review_required">待专家复核</option><option value="rejected">算法拒绝</option></select></label><label>起始时间<input id="start-filter" type="datetime-local"></label><label>结束时间<input id="end-filter" type="datetime-local"></label><button id="apply-filters">应用筛选</button></section>

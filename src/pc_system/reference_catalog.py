@@ -13,6 +13,7 @@ from pc_system.model_matching_identity import Principal, require_any_role
 from pc_system.model_release import list_model_releases, load_current_model_release
 from pc_system.reference_review import load_reference_review
 from pc_system.reference_store import load_bundle, list_reference_versions
+from pc_system.reference_geometry import select_reference_points
 
 
 _STATUSES = frozenset({"all", "pending_review", "publishable", "published", "rejected"})
@@ -29,6 +30,11 @@ def _invalid(message: str) -> ModelMatchingError:
 def _visibility(principal: Principal) -> str:
     require_any_role(principal, {"operator", "expert", "auditor"})
     return "professional" if principal.roles.intersection({"expert", "auditor"}) else "business"
+
+
+def _viewer_role(principal: Principal) -> str:
+    """角色只从已验证 principal 投影，不能由客户端字段决定。"""
+    return "expert" if "expert" in principal.roles else "auditor" if "auditor" in principal.roles else "operator"
 
 
 def _cursor_filters(*, model_id: str | None, status: str, visibility: str) -> str:
@@ -141,7 +147,14 @@ def _projection(root: Path, asset: dict, manifest: dict, *, visibility: str) -> 
     })
     if visibility == "professional":
         bundle = load_bundle(root, model_id, version_id)
+        points = select_reference_points(bundle["normalized"]["points"], point_count=4096, random_seed=0)
         result.update({
+            "dimensions_m": bundle["normalized"]["dimensions_m"],
+            "preview": {
+                "schema_version": "1.0", "coordinate_unit": "m", "algorithm": "sha256_point_subset_v1",
+                "random_seed": 0, "source_point_count": bundle["normalized"]["point_count"],
+                "point_count": len(points), "points": points,
+            },
             "source": {
                 "format": manifest["source_format"],
                 "path": manifest["source_path"],
@@ -188,14 +201,16 @@ def list_reference_catalog(root, *, principal: Principal, status: str | None = N
     if after is not None:
         rows = [item for item in rows if (item["model_id"], item["version_id"]) > after]
     page = rows[:limit]
-    return {"items": page, "next_cursor": _encode_cursor(filters=filters, item=page[-1]) if len(rows) > limit else None}
+    return {"viewer_role": _viewer_role(principal), "items": page,
+            "next_cursor": _encode_cursor(filters=filters, item=page[-1]) if len(rows) > limit else None}
 
 
 def load_reference_catalog_version(root, model_id: str, version_id: str, *, principal: Principal) -> dict:
     visibility = _visibility(principal)
     asset = _assets(Path(root), model_id)[0]
     manifest = load_bundle(root, model_id, version_id)["manifest"]
-    return _projection(Path(root), asset, manifest, visibility=visibility)
+    return {"viewer_role": _viewer_role(principal),
+            **_projection(Path(root), asset, manifest, visibility=visibility)}
 
 
 def crop_reference_catalog_entry(value: dict) -> dict:

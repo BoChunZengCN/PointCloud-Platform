@@ -14,6 +14,7 @@ from playwright.sync_api import expect
 from pc_system.api import create_app
 from phase15c_support import DeterministicRegistrationEngine
 from phase15d_support import prepare_decision_case
+from phase15e_support import import_request, scan_asset, scan_source
 
 
 expect.set_options(timeout=15000)
@@ -22,7 +23,14 @@ expect.set_options(timeout=15000)
 @pytest.fixture
 def browser_server(tmp_path, request):
     mode = getattr(request, "param", "passed")
-    case = None if mode == "empty" else prepare_decision_case(tmp_path, mode="passed" if mode == "slow" else mode)
+    if mode == "reference":
+        staging = tmp_path / "imports" / "models"
+        staging.mkdir(parents=True)
+        scan_source(staging / "browser-scan.ply")
+        from pc_system.reference_import import import_reference_version
+        scan_asset(tmp_path, model_id="scan-readonly")
+        import_reference_version(tmp_path, **import_request(staging / "browser-scan.ply", model_id="scan-readonly", version_id="v1"))
+    case = None if mode in {"empty", "reference"} else prepare_decision_case(tmp_path, mode="passed" if mode == "slow" else mode)
     app = create_app(tmp_path, run_mode="production", api_key="phase15d-test-service-key",
         principal_bindings={role + "-token": {"actor_id": role + "-browser", "roles": [role]}
                             for role in ("operator", "expert", "auditor")},
@@ -69,6 +77,23 @@ def open_workbench(new_context, browser_server):
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(browser_server["url"] + "/workbench/" + ("model-matching-lab.html" if professional else "model-decisions.html"))
+        return page
+    yield open_page
+    for context in contexts:
+        context.close()
+    assert errors == [], f"页面 JavaScript 异常：{errors}"
+
+
+@pytest.fixture
+def open_reference_library(new_context, browser_server):
+    contexts, errors = [], []
+    def open_page(role="expert", model_id=None):
+        context = new_context(extra_http_headers={"Authorization":"Bearer " + role + "-token"}, viewport={"width":1440,"height":1050})
+        contexts.append(context)
+        page = context.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        suffix = "" if model_id is None else "?model=" + model_id
+        page.goto(browser_server["url"] + "/workbench/model-reference-library.html" + suffix)
         return page
     yield open_page
     for context in contexts:
