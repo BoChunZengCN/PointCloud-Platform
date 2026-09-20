@@ -3,17 +3,26 @@
 import copy
 import hashlib
 import json
+from pathlib import Path
+
+import numpy as np
 
 from phase15b2_support import EXPERT, FEATURE_V1, MAPPING_V1, SCORING_V1
-from phase15c_support import DeterministicRegistrationEngine, REGISTRATION_V1
+from phase15c_support import REGISTRATION_V1
 from phase15d_support import OPERATOR
 
 from pc_system.model_feature_index import build_model_feature_index, read_index_entries
+from pc_system.model_import import import_model_version, load_model_version
 from pc_system.model_index_release import release_model_feature_index
 from pc_system.model_library import create_model_asset
-from pc_system.model_match_decision import decide_model_match, load_decision_context
-from pc_system.model_registration import register_model_candidate
+from pc_system.model_match_decision import (
+    decide_model_match,
+    load_decision_bundle,
+    load_decision_context,
+)
+from pc_system.model_registration import load_model_registration, register_model_candidate
 from pc_system.model_registration_config import publish_registration_config
+from pc_system.model_registration_engine import EngineDescription
 from pc_system.model_registration_input import load_registration_input
 from pc_system.model_release import load_current_model_release, release_model_version
 from pc_system.model_retrieval import load_model_retrieval, retrieve_model_candidates
@@ -35,7 +44,7 @@ FEATURE_V11 = {
     "config_id": "integration-retrieval-v11",
     "scanned_sampling": {
         "algorithm": "sha256_point_subset_v1",
-        "point_count": 16,
+        "point_count": 64,
         "random_seed": 20260903,
     },
 }
@@ -77,8 +86,139 @@ def _sha256_tree(root, immutable_roots):
     return {
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for immutable_root in immutable_roots
-        for path in (root / immutable_root).rglob("*") if path.is_file()
+        for path in (
+            [root / immutable_root]
+            if (root / immutable_root).is_file()
+            else (root / immutable_root).rglob("*")
+        )
+        if path.is_file()
     }
+
+
+def _snapshot_immutable_groups(root, groups):
+    snapshot = {name: _sha256_tree(root, roots) for name, roots in groups.items()}
+    assert all(snapshot.values()), "每类历史工件都必须在冻结时已有真实字节"
+    return snapshot
+
+
+def _nearest_neighbor_distances(source_points, target_points):
+    """用输入坐标计算最近邻距离；不得接受配准引擎伪造的残差数组。"""
+    source = np.asarray(source_points, dtype=np.float64)
+    target = np.asarray(target_points, dtype=np.float64)
+    return np.sqrt(((source[:, None, :] - target[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+
+
+def _transform_points(points, matrix):
+    values = np.asarray(points, dtype=np.float64)
+    homogeneous = np.column_stack((values, np.ones(len(values))))
+    return (np.asarray(matrix, dtype=np.float64) @ homogeneous.T).T[:, :3]
+
+
+class GeometryEvidenceRegistrationEngine:
+    """仅供工程夹具使用：从冻结的真实点坐标计算平移和双向最近邻证据。"""
+
+    def describe(self):
+        return EngineDescription("deterministic-test", "geometry-evidence-v1", False)
+
+    def preprocess(self, model_points, object_points, _config):
+        return {
+            "model_points": np.asarray(model_points, dtype=np.float64),
+            "object_points": np.asarray(object_points, dtype=np.float64),
+        }
+
+    @staticmethod
+    def _matrix(prepared):
+        translation = (
+            prepared["object_points"].mean(axis=0)
+            - prepared["model_points"].mean(axis=0)
+        )
+        return [
+            [1.0, 0.0, 0.0, float(translation[0])],
+            [0.0, 1.0, 0.0, float(translation[1])],
+            [0.0, 0.0, 1.0, float(translation[2])],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+
+    @staticmethod
+    def _metrics(prepared, matrix):
+        transformed = _transform_points(prepared["model_points"], matrix)
+        observed = _nearest_neighbor_distances(prepared["object_points"], transformed)
+        model = _nearest_neighbor_distances(transformed, prepared["object_points"])
+        return observed, model
+
+    def coarse_register(self, prepared, hypotheses, _config):
+        matrix = self._matrix(prepared)
+        observed, model = self._metrics(prepared, matrix)
+        rmse = float(np.sqrt(np.mean(np.square(np.concatenate((observed, model))))))
+        return [{
+            "hypothesis_id": hypotheses[0]["hypothesis_id"],
+            "source": hypotheses[0]["source"],
+            "matrix": matrix,
+            "score": 1.0 / (1.0 + rmse),
+            "coarse_metrics": {"rmse_m": rmse, "fitness": float(np.mean(observed <= 0.03))},
+        }]
+
+    def fine_register(self, prepared, coarse_results, _config):
+        coarse = coarse_results[0]
+        observed, model = self._metrics(prepared, coarse["matrix"])
+        rmse = float(np.sqrt(np.mean(np.square(np.concatenate((observed, model))))))
+        return [{
+            **coarse,
+            "score": 1.0 / (1.0 + rmse),
+            "fine_metrics": {"rmse_m": rmse, "fitness": float(np.mean(observed <= 0.03))},
+            "symmetry_equivalent": False,
+        }]
+
+    def nearest_neighbor_evidence(self, prepared, transform, _config):
+        observed, model = self._metrics(prepared, transform)
+        return {
+            "observed_to_model_distances_m": observed.tolist(),
+            "model_to_observed_distances_m": model.tolist(),
+            "normal_cosines": None,
+        }
+
+
+def _legacy_mesh_reader(_path):
+    return {
+        "vertices": [[0, 0, 0], [1000, 0, 0], [0, 1000, 0]],
+        "faces": [[0, 1, 2]],
+    }
+
+
+def _prepare_legacy_cad_fixture(root):
+    """独立旧 CAD 工件；不可与扫描夹具根目录混用。"""
+    create_model_asset(
+        root,
+        model_id="legacy-cad-pump",
+        display_name="旧 CAD 泵",
+        category_id="pump",
+        manufacturer="工程夹具",
+        model_number="LEGACY-CAD",
+        keywords=[],
+        tags=[],
+        principal=EXPERT,
+        operation_id="legacy-cad-asset",
+        request_id="legacy-cad-asset-request",
+        idempotency_key="legacy-cad-asset-idem",
+    )
+    version = import_model_version(
+        root,
+        model_id="legacy-cad-pump",
+        version_id="v1",
+        source_path=Path(__file__).parent / "fixtures" / "models" / "minimal.obj",
+        declared_unit="mm",
+        license_name="工程夹具旧 CAD 授权",
+        provenance={},
+        principal=EXPERT,
+        operation_id="legacy-cad-import",
+        request_id="legacy-cad-import-request",
+        idempotency_key="legacy-cad-import-idem",
+        mesh_reader=_legacy_mesh_reader,
+    )
+    roots = ["models/legacy-cad-pump/versions/v1"]
+    snapshot = _sha256_tree(root, roots)
+    assert snapshot
+    return version, roots, snapshot
 
 
 def _create_and_release_scan(root, *, model_id, version_id, points, sequence, supersedes_version_id=None):
@@ -225,6 +365,25 @@ def _retrieve(root, *, retrieval_run_id, sequence):
 
 def test_scanned_reference_engineering_fixture_covers_import_to_immutable_binding_and_history(tmp_path):
     """错误地复制模板、跳过核验/发布、错排 Top-K 或漂移绑定都会使该全链失败。"""
+    legacy_root = tmp_path / "independent-legacy-cad"
+    legacy_root.mkdir()
+    legacy_version, legacy_roots, legacy_before = _prepare_legacy_cad_fixture(legacy_root)
+    history_groups = {
+        "扫描版本": ["models/scan-positive/versions/v1", "models/scan-negative/versions/v1"],
+        "扫描核验": ["models/scan-positive/reviews/v1", "models/scan-negative/reviews/v1"],
+        "扫描发布": [
+            "models/scan-positive/releases/release-scan-positive-v1",
+            "models/scan-negative/releases/release-scan-negative-v1",
+        ],
+        "扫描表达": ["models/scan-positive/representations/v1", "models/scan-negative/representations/v1"],
+        "扫描特征": ["models/scan-positive/features/v1", "models/scan-negative/features/v1"],
+        "索引": ["models/feature_indexes/integration-index-v1"],
+        "索引发布": ["models/feature_index_releases/integration-index-release-v1"],
+        "候选": ["reports/model_retrieval/independent-scene/scene-release-1/obj-001/integration-retrieval-v1"],
+        "配准": ["reports/model_registrations/independent-scene/scene-release-1/obj-001/integration-registration-v1"],
+        "人工决定": ["reports/model_match_decisions/independent-scene/scene-release-1/obj-001/integration-decision-v1/decision.json"],
+        "绑定": ["reports/model_match_decisions/independent-scene/scene-release-1/obj-001/integration-decision-v1/binding.json"],
+    }
     for model_id, display_name, model_number in (
         ("scan-positive", "工程扫描正例泵", "ENG-POS"),
         ("scan-negative", "工程扫描相似负例", "ENG-NEG"),
@@ -268,6 +427,9 @@ def test_scanned_reference_engineering_fixture_covers_import_to_immutable_bindin
             request_id=f"request-release-{model_id}-v1",
             idempotency_key=f"idem-release-{model_id}-v1",
         )
+    released_history = _snapshot_immutable_groups(
+        tmp_path, {name: history_groups[name] for name in ("扫描版本", "扫描核验", "扫描发布")}
+    )
 
     publish_retrieval_config(
         tmp_path,
@@ -289,6 +451,9 @@ def test_scanned_reference_engineering_fixture_covers_import_to_immutable_bindin
     assert [(entry["model_id"], entry["representation_type"]) for entry in entries] == [
         ("scan-negative", "scanned_reference"), ("scan-positive", "scanned_reference"),
     ]
+    indexed_history = _snapshot_immutable_groups(
+        tmp_path, {name: history_groups[name] for name in ("扫描表达", "扫描特征", "索引", "索引发布")}
+    )
 
     retrieval = _retrieve(tmp_path, retrieval_run_id="integration-retrieval-v1", sequence="v1")
     assert [candidate["model_id"] for candidate in retrieval["candidates"]] == [
@@ -327,7 +492,7 @@ def test_scanned_reference_engineering_fixture_covers_import_to_immutable_bindin
         retrieval_run_id="integration-retrieval-v1",
         candidate_rank=1,
         config_id=registration_config["config_id"],
-        engine_resolver=lambda _name: DeterministicRegistrationEngine(),
+        engine_resolver=lambda _name: GeometryEvidenceRegistrationEngine(),
         principal=EXPERT,
         operation_id="register-integration-v1",
         request_id="request-register-integration-v1",
@@ -356,23 +521,40 @@ def test_scanned_reference_engineering_fixture_covers_import_to_immutable_bindin
     )
     assert frozen["candidate_evidence"]["representation_type"] == "scanned_reference"
     assert registration["gate_status"] == "passed"
-    assert registration["residual_metrics"]["observed_to_model_coverage"] == 1.0
-    assert registration["residual_metrics"]["model_to_observed_coverage"] == 1.0
+    transformed_model = _transform_points(
+        frozen["model_points"], registration["rigid_transform_4x4"]
+    )
+    observed_points = np.asarray(frozen["object_points"], dtype=np.float64)
+    observed_to_model = _nearest_neighbor_distances(observed_points, transformed_model)
+    model_to_observed = _nearest_neighbor_distances(transformed_model, observed_points)
+    np.testing.assert_allclose(
+        registration["rigid_transform_4x4"],
+        [[1.0, 0.0, 0.0, 1.9], [0.0, 1.0, 0.0, 2.525],
+         [0.0, 0.0, 1.0, 3.27], [0.0, 0.0, 0.0, 1.0]],
+        atol=0.001,
+    )
+    assert (model_to_observed <= 0.03).mean() == 1.0
+    assert (observed_to_model <= 0.03).mean() == 1.0
+    metrics = registration["residual_metrics"]
+    assert metrics["observed_to_model_coverage"] == float((observed_to_model <= 0.03).mean())
+    assert metrics["model_to_observed_coverage"] == float((model_to_observed <= 0.03).mean())
+    assert np.isclose(
+        metrics["inlier_rmse_m"],
+        np.sqrt(np.mean(np.square(np.concatenate((observed_to_model, model_to_observed))))),
+    )
+    assert np.isclose(
+        metrics["chamfer_distance_m"],
+        (observed_to_model.mean() + model_to_observed.mean()) / 2.0,
+    )
+    assert decided["decision"]["decision"] == "confirmed"
+    assert decided["binding"]["binding_id"] == "integration-binding-v1"
+    assert decided["binding"]["model_id"] == "scan-positive"
+    assert decided["binding"]["registration_id"] == registration["registration_id"]
     frozen_binding = decided["binding"]
 
-    immutable_roots = [
-        "models/scan-positive/versions/v1",
-        "models/scan-positive/reviews/v1",
-        "models/scan-positive/releases/release-scan-positive-v1",
-        "models/scan-positive/representations/v1",
-        "models/scan-positive/features/v1",
-        "models/scan-negative/versions/v1",
-        "models/scan-negative/reviews/v1",
-        "models/scan-negative/releases/release-scan-negative-v1",
-        "models/scan-negative/representations/v1",
-        "models/scan-negative/features/v1",
-    ]
-    before_history = _sha256_tree(tmp_path, immutable_roots)
+    workflow_history = _snapshot_immutable_groups(
+        tmp_path, {name: history_groups[name] for name in ("候选", "配准", "人工决定", "绑定")}
+    )
     _create_and_release_scan(
         tmp_path, model_id="scan-positive", version_id="v2",
         points=_reference_points(variant="positive", offset=0.23), sequence="v2", supersedes_version_id="v1",
@@ -404,8 +586,26 @@ def test_scanned_reference_engineering_fixture_covers_import_to_immutable_bindin
     assert load_current_model_release(tmp_path, "scan-positive")["version_id"] == "v1"
     assert load_decision_context(tmp_path, **identity)["current_binding"] == frozen_binding
     assert load_registration_input(tmp_path, candidate_rank=1, principal=EXPERT, **identity) == frozen
+    assert load_model_registration(
+        tmp_path,
+        asset_id="independent-scene",
+        source_id="scene-release-1",
+        instance_id="obj-001",
+        registration_id="integration-registration-v1",
+    )["report_fingerprint"] == registration["report_fingerprint"]
+    assert load_decision_bundle(
+        tmp_path,
+        asset_id="independent-scene",
+        source_id="scene-release-1",
+        instance_id="obj-001",
+        decision_id="integration-decision-v1",
+    )["binding"] == frozen_binding
     assert _retrieve(tmp_path, retrieval_run_id="integration-retrieval-v3", sequence="v3")["candidates"][0]["model_id"] == "scan-positive"
-    assert _sha256_tree(tmp_path, immutable_roots) == before_history
-    assert not list(tmp_path.rglob("*.obj"))
-    assert not list(tmp_path.rglob("*.stl"))
-    assert all("cad_mesh" not in path.parts for path in tmp_path.rglob("*"))
+    for history in (released_history, indexed_history, workflow_history):
+        for name, before in history.items():
+            assert _sha256_tree(tmp_path, history_groups[name]) == before
+    assert load_model_version(legacy_root, "legacy-cad-pump", "v1") == legacy_version
+    assert _sha256_tree(legacy_root, legacy_roots) == legacy_before
+    assert not list((tmp_path / "models").rglob("*.obj"))
+    assert not list((tmp_path / "models").rglob("*.stl"))
+    assert all("cad_mesh" not in path.parts for path in (tmp_path / "models").rglob("*"))

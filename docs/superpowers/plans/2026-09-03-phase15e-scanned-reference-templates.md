@@ -196,7 +196,7 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 - [x] 写独立扫描正例与不同型号负例的验收入口；没有真实用户扫描时，工程夹具单独标记，不伪造业务真实验收结论。
 - [x] 全链回归核验、发布、索引、检索、配准、绑定/回滚，以及历史文件指纹不变；确认没有 `cad_mesh` 占位文件。
 - [x] 全仓门禁：`python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider` 使用短根 `t9b`，`1335 passed, 1 skipped, 2 warnings`（662.65 秒）；Chrome 浏览器门禁使用短根 `t9c`，`16 passed`（95.58 秒）；`compileall`、全部 `frontend/*.js` 的 `node --check` 和 `git diff --check` 通过。
-- [x] 独立最终复审：范围为 `5385ade..HEAD`，只返回严重/重要问题与验证证据；小问题列后续债务；必要修复最多一个意图明确的提交。受“不得派子代理”限制，本任务执行者完成范围自审；未发现严重或重要问题。
+- [x] 独立最终复审：范围为 `5385ade..HEAD`，只返回严重/重要问题与验证证据；小问题列后续债务；必要修复最多一个意图明确的提交。首轮发现两项重要证据缺口：固定配准桩未消费真实扫描几何，且 SHA 快照仅覆盖上游、建立过晚。复审修复轮 1/2 已以测试夹具闭环，不改生产语义、质量阈值或旧 CAD 契约。
 - [x] 提交：`feat: complete scanned reference template workflow`。报告工程验收与真实样本验收的分别状态；未经新授权不推送、不合并、不打标签。
 
 ## 验证证据与设计复审结论
@@ -220,6 +220,7 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 - 任务 6 最终定向复审：原重要问题裁定 `ADDRESSED`，未发现新的严重或重要问题，结论 `Ready: Yes`。主流程重新运行 Task 6、Phase 15C 配准与 Phase 15D 决策/绑定聚焦集，`114 passed in 182.05s`；定向 `compileall` 与 `git diff --check` 通过。没有修改质量阈值、绑定 1.0、API、CLI 或页面。
 - 任务 7 初版提交 `8f52b5d`；独立复审发现 5 项重要问题，其中游标不可伪造要求经威胁边界复核后收窄为“原游标跨筛选/角色直接复用必须拒绝，当前 principal 始终决定响应可见性”，避免为只读目录引入未批准的密钥或持久化体系。其余 4 项通过修复提交闭环：历史已核验版本可同时属于 published/publishable；显式空、null、未知来源不会降级 CAD；扫描输入/冲突/恢复错误得到稳定 HTTP 映射；旧公开扫描详情完整消费超过 100 项的分页。
 - 任务 7 定向复审：5 项原发现均裁定 `ADDRESSED`，未发现新的严重或重要问题，结论 `Approved`。主流程重新运行 Task 7 与 Phase 15A、15B-2、15D、15E 直接受影响测试，`230 passed in 205.62s`；定向编译及差异检查通过。符号链接能力受限时，当前组合测试会连带跳过部分同文件断言，记录为 Task 9 前的测试整理小项，不阻塞本任务。
+- 任务 9 复审修复轮 1/2：短根 `C:\\t9rf` 的 RED 显示旧 `DeterministicRegistrationEngine` 固定 `[1, 2, 3]` 矩阵对真实冻结坐标的 observed→model 覆盖率为 `0.0`；未更改生产门槛。GREEN 改为 64 点扫描夹具及测试内几何适配器，以输入点质心求刚体平移、以输入点求双向最近邻残差；`C:\\t9rg` 的 `tests/test_phase15e_integration.py` 通过（`1 passed`，14.95 秒）。同一用例分阶段冻结并在 v2/回滚后逐类核验扫描版本、核验、发布、表达、特征、索引/索引发布、候选、配准、决定、绑定 SHA；公开入口重读旧配准与绑定，独立旧 CAD `.obj` 夹具字节不变。最终短根 `C:\\t9rb` 的集成、旧 CAD 字节和资料聚焦集为 `4 passed`（15.45 秒）；`compileall -q src tests` 与 `git diff --check` 均以退出码 0 完成。仅本地提交；不推送、不合并。
 
 ### 任务 2 边界调整：LAZ 点数的独立完整性保证
 
