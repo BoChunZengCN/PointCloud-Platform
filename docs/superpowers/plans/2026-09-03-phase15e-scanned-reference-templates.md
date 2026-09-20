@@ -178,10 +178,10 @@ assert response.json()["index_status"] == "not_indexed"
 
 **文件：** 新增 `frontend/model-reference-library.html`、`.js`、`.css`；修改 `frontend/model-matching-lab.html`、`model-matching-lab.js`、`model-decisions.js` 的入口/类型展示；新增 `tests/browser/test_phase15e_reference_library.py`，扩展 `tests/browser/conftest.py`。
 
-- [ ] 红灯：真实浏览器导入已暂存 PLY、检查投影/尺寸、通过核验、发布、索引未更新提示、筛选/历史、审计只读、重复提交禁用、响应不确定重试。
-- [ ] 绿灯：原生页面三步主流程、三个正交投影；只取服务端有界预览；令牌内存态、来源文本安全渲染；不建复杂新前端框架。
-- [ ] 验证：`python -m pytest tests/browser/test_phase15e_reference_library.py -q --browser chromium --browser-channel chrome`；记录本机实际浏览器命令，CI 使用 Chromium。
-- [ ] 提交：`feat: add scanned reference library workbench`。
+- [x] 红灯：真实浏览器导入已暂存 PLY、检查投影/尺寸、通过核验、发布、索引未更新提示、筛选/历史、审计只读、重复提交禁用、响应不确定重试。
+- [x] 绿灯：原生页面三步主流程、三个正交投影；只取服务端有界预览；令牌内存态、来源文本安全渲染；不建复杂新前端框架。
+- [x] 验证：`python -m pytest tests/browser/test_phase15e_reference_library.py -q --browser chromium --browser-channel chrome`；Task 8 Chrome 10 项、既有 Phase 15D Chrome 6 项均通过；本机使用短且唯一 `basetemp`，CI 保持 Chromium。
+- [x] 提交：`feat: add scanned reference library workbench`（`47403ce`，修复收口 `9389bfc`）。
 
 ```python
 expect(page.get_by_role("heading", name="扫描参考模板")).to_be_visible()
@@ -193,11 +193,11 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 
 **文件：** 新增 `tests/test_phase15e_integration.py`、`docs/phase15e-scanned-reference-templates.md`；更新 `.github/workflows/test.yml`、`README.md`、两份功能盘点、本文进度。
 
-- [ ] 写独立扫描正例与不同型号负例的验收入口；没有真实用户扫描时，工程夹具单独标记，不伪造业务真实验收结论。
-- [ ] 全链回归核验、发布、索引、检索、配准、绑定/回滚，以及历史文件指纹不变；确认没有 `cad_mesh` 占位文件。
-- [ ] 全仓门禁：`python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider`；真实浏览器集单独一次；执行 `compileall` 和 `git diff --check`。
-- [ ] 独立最终复审：范围为 `5385ade..HEAD`，只返回严重/重要问题与验证证据；小问题列后续债务；必要修复最多一个意图明确的提交。
-- [ ] 提交：`feat: complete scanned reference template workflow`。报告工程验收与真实样本验收的分别状态；未经新授权不推送、不合并、不打标签。
+- [x] 写独立扫描正例与不同型号负例的验收入口；没有真实用户扫描时，工程夹具单独标记，不伪造业务真实验收结论。
+- [x] 全链回归核验、发布、索引、检索、配准、绑定/回滚，以及历史文件指纹不变；确认没有 `cad_mesh` 占位文件。
+- [x] 全仓门禁：`python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider` 使用短根 `t9b`，`1335 passed, 1 skipped, 2 warnings`（662.65 秒）；Chrome 浏览器门禁使用短根 `t9c`，`16 passed`（95.58 秒）；`compileall`、全部 `frontend/*.js` 的 `node --check` 和 `git diff --check` 通过。
+- [x] 独立最终复审：范围为 `5385ade..HEAD`，只返回严重/重要问题与验证证据；小问题列后续债务；必要修复最多一个意图明确的提交。受“不得派子代理”限制，本任务执行者完成范围自审；未发现严重或重要问题。
+- [x] 提交：`feat: complete scanned reference template workflow`。报告工程验收与真实样本验收的分别状态；未经新授权不推送、不合并、不打标签。
 
 ## 验证证据与设计复审结论
 

@@ -127,21 +127,32 @@ def test_api_imports_only_controlled_staging_and_replays_same_operation(tmp_path
         json={**payload, "operation_id": "traversal", "request_id": "traversal", "idempotency_key": "traversal", "staged_source": "imports/models/../scan.ply"},
         headers=_headers("expert"),
     )
+    assert first.status_code == replay.status_code == 201
+    assert replay.json() == first.json()
+    assert absolute.status_code == traversal.status_code == 400
+    assert absolute.json()["detail"]["code"] == traversal.json()["detail"]["code"] == "invalid_staged_source"
+
+
+def test_api_rejects_symlinked_scanned_staging_source_when_host_supports_links(tmp_path):
+    """链接能力缺失只跳过此拒绝分支，不遮蔽普通导入与受控路径回归。"""
+    client = _client(tmp_path)
+    staging = tmp_path / "imports" / "models"
+    staging.mkdir(parents=True)
+    scan_source(staging / "scan.ply")
     linked = staging / "linked.ply"
     try:
         linked.symlink_to("scan.ply")
     except OSError:
         pytest.skip("测试主机不允许创建文件符号链接")
+    assert client.post(
+        "/model-library/models", json=_asset_payload("scan-pump", source_family="scanned_reference"),
+        headers=_headers("expert"),
+    ).status_code == 201
     link = client.post(
         "/model-library/models/scan-pump/scanned-versions",
-        json={**payload, "operation_id": "link", "request_id": "link", "idempotency_key": "link", "staged_source": "imports/models/linked.ply"},
+        json={**_import_payload(), "operation_id": "link", "request_id": "link", "idempotency_key": "link", "staged_source": "imports/models/linked.ply"},
         headers=_headers("expert"),
     )
-
-    assert first.status_code == replay.status_code == 201
-    assert replay.json() == first.json()
-    assert absolute.status_code == traversal.status_code == 400
-    assert absolute.json()["detail"]["code"] == traversal.json()["detail"]["code"] == "invalid_staged_source"
     assert link.status_code == 400 and link.json()["detail"]["code"] == "invalid_staged_source"
 
 
