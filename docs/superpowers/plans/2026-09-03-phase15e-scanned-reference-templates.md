@@ -233,3 +233,11 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 用户在收到推荐边界后授权“继续执行开发”：首版支持 LAS/PLY；LAZ 只开放已证明可交叉校验点数的子集，其余明确拒绝并提示先转换为 LAS。具体子集见规格第 4.1 节。代价是部分合法 LAZ 不能直接导入，导入、版本、审计架构无需重构。
 
 依据：[laspy 官方读取源码](https://laspy.readthedocs.io/en/latest/_modules/laspy/lasreader.html)、[LAZ 格式规范第 11.6–11.7 节](https://portal.ogc.org/files/?artifact_id=110135&version=2)，以及真实文件回归。点格式 6/7/8、分层点数/层字节/块表破坏、50,064 点跨块末块均已有回归；不以“请求多读一点”作为独立证据。本期未推送或合并。
+
+### Phase 15E 整体终审兼容修复：旧 CAD 特征证据
+
+整体终审发现一项重要兼容性缺口并中断收口：基线 `5385ade` 发布的真实 CAD 模型特征 `1.0` 的 `source` 未固定 `representation_type`；当前读取时无条件加入该字段，导致历史工件在重新核验来源和 feature ID 后以 `feature_integrity_error`（`Feature evidence differs`）拒绝。
+
+按严格 TDD，新增回归仅在真实发布阶段模拟升级前 CAD `source`（先确认当前类型为 `cad_sampled` 后移除该字段），保留真实文件和审计；恢复当前读取函数后，修复前确定性出现 `Feature evidence differs`。修复只在模型特征 `schema_version: "1.0"`、清单来源键集合精确等于升级前 CAD 七字段、且当前表达显式为 `cad_sampled` 时，将当前来源投影回这七字段后再做既有严格比较和 feature ID 重算。新 CAD 带类型、扫描参考、对象特征与 `1.1` 继续使用完整新证据，未调整生产阈值、持久化、索引或匹配模块。
+
+验证：新增回归 `1 passed`；`tests/test_phase15b2_feature_store.py` 为 `6 passed`；`tests/test_phase15b2_feature_index.py` 与 `tests/test_phase15b2_e2e.py` 为 `14 passed`；`tests/test_phase15e_reference_index.py` 为 `29 passed`；`tests/test_phase15e_reference_matching.py` 在短临时根 `$env:TEMP\l15h` 为 `5 passed`。工作树深路径下后者的三个失败均在索引发布预置覆盖率门禁，短根复核后消失，记录为 Windows 深路径测试环境噪音，不扩大修复。`compileall -q src tests` 通过；提交前继续运行 `git diff --check`。

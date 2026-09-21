@@ -48,6 +48,15 @@ _MANIFEST_FIELDS = {
     "generated_at",
     "status",
 }
+_LEGACY_CAD_SOURCE_FIELDS = {
+    "model_id",
+    "version_id",
+    "representation_id",
+    "source_manifest_fingerprint",
+    "source_geometry_fingerprint",
+    "representation_geometry_fingerprint",
+    "representation_fingerprint",
+}
 _MAX_FEATURE_BYTES = 16 * 1024 * 1024
 
 
@@ -299,6 +308,22 @@ def _reload_source(root: Path, feature_type: str, source: dict) -> tuple[dict, l
     return _object_source(query)
 
 
+def _legacy_cad_source_projection(manifest: dict, feature_type: str, source: dict) -> dict:
+    """仅兼容升级前 1.0 CAD 特征来源的精确字段集合。"""
+    manifest_source = manifest["source"]
+    if (
+        feature_type != "model"
+        or manifest["schema_version"] != "1.0"
+        or type(manifest_source) is not dict
+        or set(manifest_source) != _LEGACY_CAD_SOURCE_FIELDS
+        or source.get("representation_type") != "cad_sampled"
+    ):
+        return source
+    if not _LEGACY_CAD_SOURCE_FIELDS.issubset(source):
+        return source
+    return {key: source[key] for key in _LEGACY_CAD_SOURCE_FIELDS}
+
+
 def _validate_audit(root: Path, manifest: dict, owner: dict) -> None:
     try:
         snapshot = read_verified_operation_snapshot(root, manifest["operation_id"])
@@ -359,6 +384,7 @@ def load_feature(
     try:
         config = load_retrieval_config(root, manifest["feature_config_id"])
         current_source, points = _reload_source(root, feature_type, manifest["source"])
+        current_source = _legacy_cad_source_projection(manifest, feature_type, current_source)
         features = extract_geometric_features(points, config["feature_config"])
     except ModelMatchingError as exc:
         if exc.code == "operation_busy":

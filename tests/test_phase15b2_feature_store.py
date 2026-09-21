@@ -222,3 +222,26 @@ def test_source_or_owner_tampering_invalidates_feature(tmp_path):
     with pytest.raises(ModelMatchingError) as source_error:
         load_feature(tmp_path, feature_type="model", identity=identity)
     assert source_error.value.code == "feature_integrity_error"
+
+
+def test_legacy_cad_feature_source_loads_after_representation_type_upgrade(tmp_path, monkeypatch):
+    prepared = _prepare(tmp_path)
+    current_model_source = feature_store._model_source
+
+    def legacy_cad_model_source(*args):
+        source, points = current_model_source(*args)
+        assert source["representation_type"] == "cad_sampled"
+        return (
+            {key: value for key, value in source.items() if key != "representation_type"},
+            points,
+        )
+
+    monkeypatch.setattr(feature_store, "_model_source", legacy_cad_model_source)
+    feature = publish_model_feature(tmp_path, **_model_request(prepared))
+    monkeypatch.setattr(feature_store, "_model_source", current_model_source)
+
+    assert load_feature(
+        tmp_path,
+        feature_type="model",
+        identity=_model_identity(feature, prepared),
+    ) == feature
