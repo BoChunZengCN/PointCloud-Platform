@@ -108,6 +108,81 @@ def test_filters_and_real_release_history(open_reference_library):
     expect(page.locator("#publication-note")).to_contain_text("release-history-v2")
 
 
+@pytest.mark.parametrize("browser_server", ["reference-pagination"], indirect=True)
+def test_catalog_uses_bounded_cursor_pages_and_resets_history_for_scope_changes(open_reference_library):
+    """第 51 项必须通过服务端游标可达，切换查询范围不能复用旧页历史。"""
+    page = _open(open_reference_library, model_id="scan-readonly")
+    page.get_by_role("button", name="全部", exact=True).click()
+
+    expect(page.locator("#catalog button")).to_have_count(50)
+    expect(page.get_by_role("button", name="下一页", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="下一页", exact=True).click()
+    expect(page.locator("#catalog button")).to_have_count(1)
+    expect(page.locator("#catalog button").filter(has_text="扫描泵 · v1")).to_have_count(1)
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_enabled()
+
+    page.get_by_role("button", name="待核验", exact=True).click()
+    expect(page.locator("#catalog button")).to_have_count(50)
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="下一页", exact=True).click()
+    page.locator("#model-id").fill("other-model")
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+
+    page.locator("#model-id").fill("scan-readonly")
+    page.get_by_role("button", name="全部", exact=True).click()
+    page.get_by_role("button", name="下一页", exact=True).click()
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_enabled()
+    page.locator("#token").fill("auditor-token")
+    page.get_by_role("button", name="连接", exact=True).click()
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+
+
+@pytest.mark.parametrize("browser_server", ["reference-pagination-slow"], indirect=True)
+def test_stale_catalog_response_cannot_overwrite_new_model_scope(open_reference_library):
+    """旧页响应到达时，不能覆盖输入期间已切换的模型范围。"""
+    page = _open(open_reference_library, model_id="scan-readonly")
+    page.locator("#model-id").fill("other-model")
+
+    expect(page.locator("#catalog button")).to_have_count(0)
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+
+
+@pytest.mark.parametrize("browser_server", ["reference-history"], indirect=True)
+def test_professional_detail_shows_frozen_evidence_and_clears_it_across_versions_and_roles(open_reference_library):
+    """可编辑导入表单不是历史证据；详情只渲染服务端冻结的专业投影。"""
+    expert = _open(open_reference_library, "expert", "scan-readonly")
+    expert.get_by_role("button", name="全部", exact=True).click()
+    expert.locator("#catalog button").filter(has_text="扫描泵 · v1").click()
+    expect(expert.locator("#professional-evidence")).to_contain_text("自有扫描授权")
+    expect(expert.locator("#professional-evidence")).to_contain_text("夹具扫描")
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史核验原因 v1")
+    expert.locator("#catalog button").filter(has_text="扫描泵 · v2").click()
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史许可 v2")
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史预处理 v2")
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史核验原因 v2")
+    expect(expert.locator("#professional-evidence")).not_to_contain_text("自有扫描授权")
+
+    expert.locator("#catalog button").filter(has_text="扫描泵 · v3").click()
+    expect(expert.locator("#professional-evidence")).to_be_visible()
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史许可 v3")
+    expect(expert.locator("#professional-evidence")).to_contain_text("历史预处理 v3")
+    expect(expert.locator("#professional-evidence")).to_contain_text("尚未核验")
+    expect(expert.locator("#professional-evidence")).not_to_contain_text("历史核验原因 v2")
+
+    auditor = _open(open_reference_library, "auditor", "scan-readonly")
+    auditor.get_by_role("button", name="全部", exact=True).click()
+    auditor.locator("#catalog button").filter(has_text="扫描泵 · v2").click()
+    expect(auditor.locator("#professional-evidence")).to_contain_text("历史许可 v2")
+    for button in auditor.locator("[data-write]").all():
+        expect(button).to_be_disabled()
+
+    expert.locator("#token").fill("operator-token")
+    expert.get_by_role("button", name="连接", exact=True).click()
+    expect(expert.locator("#professional-evidence")).to_be_hidden()
+    expect(expert.locator("#professional-evidence")).to_have_text("")
+
+
 @pytest.mark.parametrize("browser_server", ["reference"], indirect=True)
 def test_auditor_is_readonly_and_token_stays_out_of_storage(open_reference_library):
     page = _open(open_reference_library, "auditor", "scan-readonly")
@@ -117,6 +192,8 @@ def test_auditor_is_readonly_and_token_stays_out_of_storage(open_reference_libra
     expect(page.locator("#quality-summary")).to_contain_text("自动质量")
     for button in page.locator("[data-write]").all():
         expect(button).to_be_disabled()
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
     assert page.evaluate("Object.keys(localStorage).length + Object.keys(sessionStorage).length") == 0
     assert "token" not in page.url
 
@@ -201,6 +278,8 @@ def test_slow_write_disables_connection_filters_catalog_and_all_writes(open_refe
         expect(button).to_be_disabled()
     for button in page.locator("#catalog button").all():
         expect(button).to_be_disabled()
+    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
     for button in page.locator("[data-write]").all():
         expect(button).to_be_disabled()
     expect(page.locator("#detail-title")).to_contain_text("slow-v2")

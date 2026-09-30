@@ -39,16 +39,19 @@ def browser_server(tmp_path, request):
             from pc_system.model_release import release_model_version
             from pc_system.reference_review import review_reference_version
             for version_id in ("v2", "v3", "v4"):
+                request = import_request(
+                    staging / "browser-scan.ply",
+                    model_id="scan-readonly",
+                    version_id=version_id,
+                    operation_id=f"import-history-{version_id}",
+                    request_id=f"req-history-{version_id}",
+                    idempotency_key=f"idem-history-{version_id}",
+                )
+                request["license_name"] = f"历史许可 {version_id}"
+                request["provenance"] = {"source": f"历史来源 {version_id}", "preprocessing": f"历史预处理 {version_id}"}
                 import_reference_version(
                     tmp_path,
-                    **import_request(
-                        staging / "browser-scan.ply",
-                        model_id="scan-readonly",
-                        version_id=version_id,
-                        operation_id=f"import-history-{version_id}",
-                        request_id=f"req-history-{version_id}",
-                        idempotency_key=f"idem-history-{version_id}",
-                    ),
+                    **request,
                 )
             for sequence, version_id in enumerate(("v1", "v2"), 1):
                 review_reference_version(
@@ -56,7 +59,7 @@ def browser_server(tmp_path, request):
                     model_id="scan-readonly",
                     version_id=version_id,
                     decision="approved",
-                    reason="历史夹具已核验",
+                    reason=f"历史核验原因 {version_id}",
                     acknowledgements=["single_object", "metadata_and_rights", "coverage_limitations"],
                     principal=EXPERT,
                     operation_id=f"review-history-{version_id}",
@@ -89,7 +92,21 @@ def browser_server(tmp_path, request):
                 request_id="req-review-history-v4",
                 idempotency_key="idem-review-history-v4",
             )
-    case = None if mode in {"empty", "reference", "reference-history", "reference-slow"} else prepare_decision_case(
+        if mode in {"reference-pagination", "reference-pagination-slow"}:
+            for sequence in range(50):
+                version_id = f"v{sequence:03d}"
+                import_reference_version(
+                    tmp_path,
+                    **import_request(
+                        staging / "browser-scan.ply",
+                        model_id="scan-readonly",
+                        version_id=version_id,
+                        operation_id=f"import-page-{version_id}",
+                        request_id=f"req-page-{version_id}",
+                        idempotency_key=f"idem-page-{version_id}",
+                    ),
+                )
+    case = None if mode in {"empty", "reference", "reference-history", "reference-slow", "reference-pagination", "reference-pagination-slow"} else prepare_decision_case(
         tmp_path, mode="passed" if mode in {"slow", "reference-labels"} else mode
     )
     app = create_app(tmp_path, run_mode="production", api_key="phase15d-test-service-key",
@@ -106,6 +123,12 @@ def browser_server(tmp_path, request):
         @app.middleware("http")
         async def reference_latency(request, call_next):
             if request.method == "POST":
+                await asyncio.sleep(1)
+            return await call_next(request)
+    if mode == "reference-pagination-slow":
+        @app.middleware("http")
+        async def reference_catalog_latency(request, call_next):
+            if request.method == "GET" and request.url.path.endswith("/scanned-versions"):
                 await asyncio.sleep(1)
             return await call_next(request)
     app.mount("/workbench", StaticFiles(directory=Path(__file__).resolve().parents[2] / "frontend"), name="workbench")

@@ -241,3 +241,11 @@ expect(page.get_by_role("button", name="确认通过")).to_be_disabled()
 按严格 TDD，新增回归仅在真实发布阶段模拟升级前 CAD `source`（先确认当前类型为 `cad_sampled` 后移除该字段），保留真实文件和审计；恢复当前读取函数后，修复前确定性出现 `Feature evidence differs`。修复只在模型特征 `schema_version: "1.0"`、清单来源键集合精确等于升级前 CAD 七字段、且当前表达显式为 `cad_sampled` 时，将当前来源投影回这七字段后再做既有严格比较和 feature ID 重算。新 CAD 带类型、扫描参考、对象特征与 `1.1` 继续使用完整新证据，未调整生产阈值、持久化、索引或匹配模块。
 
 验证：新增回归 `1 passed`；`tests/test_phase15b2_feature_store.py` 为 `6 passed`；`tests/test_phase15b2_feature_index.py` 与 `tests/test_phase15b2_e2e.py` 为 `14 passed`；`tests/test_phase15e_reference_index.py` 为 `29 passed`；`tests/test_phase15e_reference_matching.py` 在短临时根 `$env:TEMP\l15h` 为 `5 passed`。工作树深路径下后者的三个失败均在索引发布预置覆盖率门禁，短根复核后消失，记录为 Windows 深路径测试环境噪音，不扩大修复。`compileall -q src tests` 通过；提交前继续运行 `git diff --check`。
+
+### Phase 15E 整体终审边界修复：恢复、分页与专业证据
+
+- [x] RED：完成态和冻结后运行态的同身份 API 重放在删除 `imports/models` 暂存源后均为 `400`；分页页面缺少第 51 项入口；专业详情缺少冻结证据容器。
+- [x] GREEN：API 只在受验证的同操作、同请求、同调用者审计快照存在时让领域服务从冻结副本恢复，首次请求仍严格验证受控普通文件；页面使用服务端 `next_cursor` 逐页读取、范围切换清空历史、过期响应隔离且 pending 禁用控件；专家/审计员只读显示冻结证据，业务角色裁剪并在降级时清屏。没有更改领域持久化、角色、阈值或检索/配准模块。
+- [x] 定向验证：API 恢复与路径拒绝 `4 passed`；API 文件的非长例部分 `16 passed`；浏览器第 51 项/重置、旧响应、专业证据/降级及 pending 控件四项分别通过；所有前端 JS `node --check`、`compileall -q src tests`、`git diff --check` 通过。
+- [x] 主控制器持久会话终态：完整 `tests/test_phase15e_api.py` 为 `17 passed, 2 warnings`（94.18 秒）；Task 8 Chrome 全文件为 `13 passed`（124.44 秒）；Phase 15D Chrome 为 `6 passed`（58.87 秒）。差异自审新增“待核验版本必须显示冻结证据”回归，RED 为证据区隐藏，GREEN 后已纳入上述 Task 8 全文件门禁。
+- [x] 最终提交全仓门禁：`tests --ignore=tests/browser` 使用短临时根，`1338 passed, 1 skipped, 2 warnings`（676.27 秒）；跳过与警告仍为可选 Open3D 和既有依赖弃用，不新增失败。

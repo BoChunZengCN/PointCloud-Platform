@@ -6,6 +6,7 @@
     modelId:null, versionId:null, row:null, role:"unverified", token:"",
     readBusy:0, catalogSequence:0, detailSequence:0, writeBusy:false,
     pending:null, warningCodes:[], detailTarget:null,
+    catalogStatus:"all", catalogCursor:null, catalogHistory:[], nextCursor:null,
   };
   const writeControls = () => document.querySelectorAll("[data-write]");
   const uuid = () => crypto.randomUUID();
@@ -78,6 +79,9 @@
       button.disabled = blockedByPending || state.readBusy > 0;
     });
     $("connect").disabled = blockedByPending || state.readBusy > 0;
+    $("previous-page").disabled = blockedByPending || state.readBusy > 0 || state.catalogHistory.length === 0;
+    $("next-page").disabled = blockedByPending || state.readBusy > 0 || state.nextCursor === null;
+    $("page-status").textContent = `第 ${state.catalogHistory.length + 1} 页`;
     $("retry").hidden = state.pending === null;
     $("retry").disabled = state.writeBusy || state.pending === null;
   }
@@ -136,6 +140,8 @@
     $("detail-title").textContent = "";
     ["states", "point-count", "dimensions", "risk-summary", "source-summary", "quality-summary"].forEach(id => { $(id).textContent = ""; });
     $("publication-note").replaceChildren();
+    $("professional-evidence").replaceChildren();
+    $("professional-evidence").hidden = true;
     $("risk-acknowledgements").replaceChildren();
     $("index-link").hidden = true;
     BASE_ACKNOWLEDGEMENTS.forEach(id => { $(id).checked = false; });
@@ -168,6 +174,40 @@
     }));
   }
 
+  function renderProfessionalEvidence(row) {
+    const evidence = $("professional-evidence");
+    evidence.replaceChildren();
+    if (!row.license || !row.provenance || !row.quality) {
+      evidence.hidden = true;
+      return;
+    }
+    const line = (label, value) => {
+      const item = document.createElement("p");
+      item.append(node(`${label}：${value}`));
+      return item;
+    };
+    const quality = row.quality;
+    const rejected = Array.isArray(quality.rejection_codes) ? quality.rejection_codes.join("、") : "无";
+    const metrics = quality.metrics && typeof quality.metrics === "object" ? quality.metrics : {};
+    evidence.append(
+      node("冻结专业证据", "h4"),
+      line("许可", row.license),
+      line("来源与预处理", JSON.stringify(row.provenance)),
+      line("质量拒绝码", rejected),
+      line("质量关键指标", JSON.stringify(metrics)),
+    );
+    if (row.review) {
+      evidence.append(
+        line("核验决定", row.review.decision),
+        line("核验原因", row.review.reason),
+        line("核验确认项", Array.isArray(row.review.acknowledgements) ? row.review.acknowledgements.join("、") : ""),
+      );
+    } else {
+      evidence.append(line("核验状态", "尚未核验"));
+    }
+    evidence.hidden = false;
+  }
+
   function renderDetail(row, modelId) {
     state.row = row;
     state.versionId = row.version_id;
@@ -178,6 +218,7 @@
     $("risk-summary").textContent = `风险：${(row.risk_summary || []).join("、") || "无"}`;
     $("source-summary").textContent = row.source ? `来源：${row.source.format}；${row.source.path}` : "来源：业务安全摘要";
     $("quality-summary").textContent = row.quality ? `自动质量：${row.quality.status}` : "自动质量：业务安全摘要";
+    renderProfessionalEvidence(row);
     if (row.preview) {
       $("point-count").textContent = String(row.preview.source_point_count);
       $("dimensions").textContent = row.dimensions_m.map(value => `${Number(value).toFixed(6)} m`).join(" × ");
@@ -205,7 +246,15 @@
     renderControls();
   }
 
-  async function loadCatalog(status="all", {duringWrite=false}={}) {
+  function resetCatalogHistory({clearCatalog=false}={}) {
+    state.catalogCursor = null;
+    state.catalogHistory = [];
+    state.nextCursor = null;
+    if (clearCatalog) $("catalog").replaceChildren();
+    renderControls();
+  }
+
+  async function loadCatalog(status=state.catalogStatus, {duringWrite=false, cursor=state.catalogCursor, history=state.catalogHistory}={}) {
     if (!state.modelId) {
       message("请输入模型 ID 后创建并导入，或选择已有模型。");
       return;
@@ -216,9 +265,15 @@
     state.readBusy += 1;
     renderControls();
     try {
-      const data = await api(`/model-library/models/${encodeURIComponent(modelId)}/scanned-versions?status=${encodeURIComponent(status)}`);
+      const query = new URLSearchParams({status});
+      if (cursor !== null) query.set("cursor", cursor);
+      const data = await api(`/model-library/models/${encodeURIComponent(modelId)}/scanned-versions?${query.toString()}`);
       if (sequence !== state.catalogSequence || modelId !== state.modelId) return;
       setRole(data.viewer_role);
+      state.catalogStatus = status;
+      state.catalogCursor = cursor;
+      state.catalogHistory = history;
+      state.nextCursor = data.next_cursor || null;
       const buttons = data.items.map(row => {
         const button = document.createElement("button");
         button.append(
@@ -378,7 +433,22 @@
   });
 
   document.querySelectorAll("[data-status]").forEach(button => {
-    button.addEventListener("click", () => loadCatalog(button.dataset.status));
+    button.addEventListener("click", () => {
+      resetCatalogHistory();
+      loadCatalog(button.dataset.status, {cursor:null, history:[]});
+    });
+  });
+  $("next-page").addEventListener("click", () => {
+    if (state.nextCursor === null) return;
+    loadCatalog(state.catalogStatus, {
+      cursor:state.nextCursor,
+      history:[...state.catalogHistory, state.catalogCursor],
+    });
+  });
+  $("previous-page").addEventListener("click", () => {
+    if (!state.catalogHistory.length) return;
+    const history = state.catalogHistory.slice(0, -1);
+    loadCatalog(state.catalogStatus, {cursor:state.catalogHistory.at(-1), history});
   });
   $("retry").addEventListener("click", runPending);
   [...BASE_ACKNOWLEDGEMENTS, "review-reason"].forEach(id => $(id).addEventListener("input", renderControls));
@@ -387,14 +457,16 @@
     if (nextModelId !== state.modelId) {
       state.catalogSequence += 1;
       clearProfessionalDetail({render:false});
-      $("catalog").replaceChildren();
+      resetCatalogHistory({clearCatalog:true});
     }
     state.modelId = nextModelId;
     renderControls();
   });
   $("connect").addEventListener("click", async () => {
     if (state.writeBusy || state.pending || state.readBusy) return;
-    clearProfessionalDetail();
+    state.catalogSequence += 1;
+    clearProfessionalDetail({render:false});
+    resetCatalogHistory({clearCatalog:true});
     state.token = $("token").value.trim();
     $("token").value = "";
     state.readBusy += 1;
@@ -403,7 +475,7 @@
       const session = await api("/model-library/reference-session");
       setRole(session.viewer_role);
       message("已连接。", "ok");
-      if (state.modelId) await loadCatalog();
+      if (state.modelId) await loadCatalog(state.catalogStatus, {cursor:null, history:[]});
     } catch (error) {
       state.token = "";
       clearProfessionalDetail({render:false});

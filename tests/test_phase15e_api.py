@@ -133,6 +133,56 @@ def test_api_imports_only_controlled_staging_and_replays_same_operation(tmp_path
     assert absolute.json()["detail"]["code"] == traversal.json()["detail"]["code"] == "invalid_staged_source"
 
 
+def test_api_completed_scanned_import_replays_after_staged_source_is_removed(tmp_path):
+    """完成响应丢失后，原操作只能读取已验证冻结副本，不能再依赖暂存文件。"""
+    client = _client(tmp_path)
+    staging = tmp_path / "imports" / "models"
+    staging.mkdir(parents=True)
+    scan_source(staging / "scan.ply")
+    assert client.post(
+        "/model-library/models", json=_asset_payload("scan-pump", source_family="scanned_reference"),
+        headers=_headers("expert"),
+    ).status_code == 201
+    payload = _import_payload()
+
+    first = client.post("/model-library/models/scan-pump/scanned-versions", json=payload, headers=_headers("expert"))
+    (staging / "scan.ply").unlink()
+    replay = client.post("/model-library/models/scan-pump/scanned-versions", json=payload, headers=_headers("expert"))
+
+    assert first.status_code == replay.status_code == 201
+    assert replay.json() == first.json()
+
+
+def test_api_running_scanned_import_recovers_from_frozen_source_after_staged_source_is_removed(tmp_path, monkeypatch):
+    """中断于冻结源之后的同身份重放不得重新验证或读取已删除的暂存文件。"""
+    import pc_system.reference_import as reference_import
+
+    client = _client(tmp_path)
+    staging = tmp_path / "imports" / "models"
+    staging.mkdir(parents=True)
+    scan_source(staging / "scan.ply")
+    assert client.post(
+        "/model-library/models", json=_asset_payload("scan-pump", source_family="scanned_reference"),
+        headers=_headers("expert"),
+    ).status_code == 201
+    payload = _import_payload()
+    actual_decode = reference_import.decode_reference_file
+    monkeypatch.setattr(
+        reference_import,
+        "decode_reference_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("模拟冻结后中断")),
+    )
+
+    interrupted = client.post("/model-library/models/scan-pump/scanned-versions", json=payload, headers=_headers("expert"))
+    (staging / "scan.ply").unlink()
+    monkeypatch.setattr(reference_import, "decode_reference_file", actual_decode)
+    recovered = client.post("/model-library/models/scan-pump/scanned-versions", json=payload, headers=_headers("expert"))
+
+    assert interrupted.status_code == 503
+    assert recovered.status_code == 201
+    assert recovered.json()["version_id"] == "v1"
+
+
 def test_api_rejects_symlinked_scanned_staging_source_when_host_supports_links(tmp_path):
     """链接能力缺失只跳过此拒绝分支，不遮蔽普通导入与受控路径回归。"""
     client = _client(tmp_path)

@@ -447,7 +447,8 @@ def _path_entry_is_link_or_reparse(info: os.stat_result) -> bool:
     )
 
 
-def _staged_model_source(project_root: Path, relative: object) -> Path:
+def _staged_model_source_candidate(project_root: Path, relative: object) -> Path:
+    """规范化受控暂存标识，但不观察其当前文件系统状态。"""
     if type(relative) is not str:
         raise ModelMatchingError(
             "invalid_staged_source", "Staged model source must be an exact string."
@@ -471,7 +472,21 @@ def _staged_model_source(project_root: Path, relative: object) -> Path:
     candidate = root.joinpath(*parts)
     staging = root / "imports" / "models"
     try:
-        current = root
+        candidate.relative_to(staging)
+    except ValueError as exc:
+        raise ModelMatchingError(
+            "invalid_staged_source",
+            "Model source must be a regular file inside imports/models.",
+        ) from exc
+    return candidate
+
+
+def _staged_model_source(project_root: Path, relative: object) -> Path:
+    candidate = _staged_model_source_candidate(project_root, relative)
+    staging = Path(project_root) / "imports" / "models"
+    try:
+        current = Path(project_root)
+        parts = str(relative).split("/")
         for index, part in enumerate(parts):
             current = current / part
             info = current.lstat()
@@ -492,6 +507,43 @@ def _staged_model_source(project_root: Path, relative: object) -> Path:
             "Model source must be a regular file inside imports/models.",
         ) from exc
     return candidate
+
+
+def _scanned_reference_replay_source(
+    project_root: Path,
+    relative: object,
+    *,
+    principal: Principal,
+    operation_id: str,
+    request_id: str,
+) -> Path:
+    """仅让同身份的已有扫描导入从其冻结副本恢复。
+
+    新操作仍完整验证受控暂存普通文件。路径已不可用时，先核验审计
+    快照的操作类型、调用者和请求身份；领域服务随后以请求指纹决定是否
+    是同一冻结请求，绝不把这个分支当作替换来源的权限通道。
+    """
+    candidate = _staged_model_source_candidate(project_root, relative)
+    try:
+        return _staged_model_source(project_root, relative)
+    except ModelMatchingError as source_error:
+        try:
+            snapshot = read_verified_operation_snapshot(project_root, operation_id)
+        except ModelMatchingError as audit_error:
+            # 审计读取器将尚未创建的操作目录归为持久化读取失败；此时
+            # 绝不能把新操作升级为恢复，仍保留原始路径拒绝。
+            if audit_error.code in {"operation_not_found", "audit_persistence_error"}:
+                raise source_error
+            raise
+        operation = snapshot["operation"]
+        if (
+            operation.get("operation_type") != "reference_version.import"
+            or operation.get("actor_id") != principal.actor_id
+            or operation.get("request_id") != request_id
+            or operation.get("status") not in {"running", "completed"}
+        ):
+            raise source_error
+        return candidate
 
 
 async def _phase15_json_object(request: Request, *, reject_duplicate_fields: bool = False) -> dict:
@@ -961,7 +1013,14 @@ def create_app(
             _capture_payload(payload, text_fields | {"provenance", "supersedes_version_id"}),
             text_fields=text_fields, object_fields={"provenance"}, optional_text_fields={"supersedes_version_id"},
         )
-        source_path = phase15_action(_staged_model_source, project_root, values["staged_source"])
+        source_path = phase15_action(
+            _scanned_reference_replay_source,
+            project_root,
+            values["staged_source"],
+            principal=principal,
+            operation_id=values["operation_id"],
+            request_id=values["request_id"],
+        )
         return phase15_action(
             import_reference_version, project_root, model_id=model_id, version_id=values["version_id"], source_path=source_path,
             declared_unit=values["declared_unit"], license_name=values["license"], provenance=values["provenance"],
