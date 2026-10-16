@@ -156,10 +156,10 @@ scan_to_cad/
 - 配置/策略 ID 不可覆盖；只允许专家写，操作必须审计。读取时重新规范化和比对指纹，不接受 NaN、未知字段、布尔伪装数字或无界阈值。
 - 首版工程默认配置与策略通过显式种子命令发布，不在代码中隐式替换用户选定版本。
 
-- [ ] 红灯：Poisson/BPA 合法配置；未知算法和参数混用拒绝；负/非有限/过大上限拒绝；重复发布幂等；同 ID 不同内容冲突；非专家拒绝且有拒绝审计；策略不能把硬错误配置为自动通过。
-- [ ] 绿灯：实现规范化、指纹、不可变写入和审计事件 `mesh.config_published`、`mesh.quality_policy_published`。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_mesh_reconstruction_config.py tests/test_phase15a_identity.py tests/test_phase15a_audit.py -p no:cacheprovider`；编译和差异检查。
-- [ ] 提交：`feat: publish versioned mesh reconstruction policies`。
+- [x] 红灯：配置模块缺失时新增测试收集失败；随后所有者—审计绑定与生产策略上下文分别观察到精确失败。覆盖两算法互斥、非有限/超限、幂等、同 ID 冲突、权限审计和硬门禁不可改写。
+- [x] 绿灯：实现规范化、指纹、不可变写入、所有者绑定及审计事件 `mesh.config_published`、`mesh.quality_policy_published`；生产策略额外固定设备、点间距、预处理、对象族和审批人。
+- [x] 验证：新增测试 15 项与可信身份/审计聚焦集共 `141 passed in 3.46s`；定向 compileall 和差异检查通过。
+- [x] 提交：`feat: publish versioned mesh reconstruction policies`；提交 SHA 以 Git 历史为准。
 
 ## 任务 3：工作器契约、Open3D 适配器与结果完整性
 
