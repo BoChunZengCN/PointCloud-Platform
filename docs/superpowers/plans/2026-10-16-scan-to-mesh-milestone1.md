@@ -140,10 +140,10 @@ scan_to_cad/
 - 快照规范排序、有限双精度、至少 3 个唯一非共线点；计算点集、证据和总快照指纹。调用者不得传路径。
 - 本任务只返回内存快照，不写运行目录、不调用工作器。
 
-- [ ] 红灯：`test_phase14_snapshot_contains_only_requested_reviewed_object`、`test_phase14_snapshot_rejects_missing_empty_noise_or_mixed_object`、`test_phase15e_snapshot_requires_completed_approved_review`、`test_phase15e_snapshot_rejects_tampered_review_evidence`、`test_snapshot_is_deterministic_and_meter_based`。
-- [ ] 绿灯：实现两类显式适配器和统一快照；错误码至少包含 `mesh_source_not_found`、`mesh_source_not_reviewed`、`mesh_source_object_invalid`、`mesh_source_integrity_error`、`mesh_source_limit_exceeded`。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_scan_to_mesh_source.py tests/test_phase14_correction_releases.py tests/test_phase15e_reference_review.py -p no:cacheprovider`，随后 `python -m compileall -q src/pc_system/scan_to_mesh_source.py` 与 `git diff --check`。
-- [ ] 提交：`feat: freeze reviewed scan-to-mesh sources`。
+- [x] 红灯：上述来源测试首次收集因 `scan_to_mesh_errors` 模块不存在而失败，确认测试确实约束新功能；随后补齐缺失/空/噪声/未确认/混合对象分支。
+- [x] 绿灯：实现两类显式适配器和统一快照；稳定错误码包含 `mesh_source_not_found`、`mesh_source_not_reviewed`、`mesh_source_object_invalid`、`mesh_source_integrity_error`、`mesh_source_limit_exceeded`。
+- [x] 验证：新增测试 9 项通过；连同 Phase 14 发布与 Phase 15E 核验聚焦集共 `40 passed in 7.86s`。定向 compileall 与 `git diff --check` 通过。
+- [x] 提交：`feat: freeze reviewed scan-to-mesh sources`；提交 SHA 以 Git 历史为准。
 
 ## 任务 2：版本化网格配置与质量策略
 
