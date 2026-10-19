@@ -14,6 +14,7 @@ scanned-reference = ["laspy>=2.5,<3", "lazrs>=0.8.2,<0.9", "pyproj>=3.6,<4"]
 api = ["fastapi", "uvicorn"]
 models = ["trimesh>=4,<5"]
 registration = ["open3d>=0.19,<1"]
+mesh-reconstruction = ["open3d>=0.19,<1"]
 browser-test = ["pytest-playwright>=0.7,<1", "uvicorn>=0.30,<1"]
 test = [
   "pytest>=8,<9",

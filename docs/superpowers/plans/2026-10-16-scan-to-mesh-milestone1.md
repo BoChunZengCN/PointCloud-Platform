@@ -106,7 +106,7 @@ scan_to_cad/
     worker_result.json
     raw_mesh.ply
     repaired_mesh.ply
-    preview_mesh.ply
+    preview_mesh.glb
     mesh_metrics.json
     quality_report.json
     run_manifest.json
@@ -168,15 +168,15 @@ scan_to_cad/
 **工作器契约：**
 
 - 输入 `worker_request.json` 固定来源快照指纹、配置指纹、工作器 schema、资源上限和工作目录内输入点工件；不含可执行路径或 Shell 文本。
-- 工作器写入唯一尝试目录，返回 `worker_result.json`，列出原始/修复/预览 PLY 及指标的相对标识、字节数、SHA-256、顶点数、面数、算法和工作器版本。
+- 工作器写入唯一尝试目录，返回 `worker_result.json`，列出原始/修复 PLY、预览 GLB 及指标的固定相对标识、字节数、SHA-256、顶点数、面数、算法和工作器版本。
 - Open3D 适配器显式执行所选算法；保守修复仅移除重复/退化元素、小型孤立组件及非流形重复，不做无证据大范围补洞。算法失败不切换。
-- 核心通过打开后的普通文件句柄验证大小与 SHA-256，并验证 PLY/JSON 声明、有限坐标和顶点/面上限；验证期间不信任路径再次解析结果。
+- 核心通过打开后的普通文件句柄验证大小与 SHA-256，并验证 PLY/GLB/JSON 声明、有限坐标和顶点/面上限；验证期间不信任路径再次解析结果。
 
-- [ ] 红灯：确定性假工作器的有效清单；路径穿越、绝对路径、符号链接/重解析点、非普通文件、声明字节/hash 不符、NaN 指标、超限顶点/面、未知工件、算法不一致全部拒绝（覆盖最终复审重点 3）。
-- [ ] 红灯：可选 Open3D 小球面 Poisson 与圆柱面 BPA 冒烟；缺依赖时稳定 `mesh_worker_unavailable`，不得静默改用假工作器或另一算法。
-- [ ] 绿灯：实现协议、独立工作器入口和受控适配器；核心模块不导入 Open3D。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_mesh_worker_contract.py -p no:cacheprovider`；安装可选依赖的环境再运行 `uv run --extra test --extra mesh-reconstruction pytest -q tests/test_mesh_open3d_worker.py -p no:cacheprovider`；编译、JavaScript 无变更、差异检查。
-- [ ] 提交：`feat: add bounded Open3D mesh worker contract`。
+- [x] 红灯：确定性假工作器的有效清单；路径穿越、绝对路径、符号链接/重解析点、非普通文件、声明字节/hash 不符、NaN 指标、超限顶点/面、未知工件、算法不一致全部拒绝；额外验证来源点工件被改写、重新计算请求指纹混合算法参数、GLB 头/长度/访问器计数不一致（覆盖最终复审重点 3）。
+- [x] 红灯：可选 Open3D 小球面 Poisson 与 BPA 冒烟用例已建立；缺依赖时稳定 `mesh_worker_unavailable`，不得静默改用假工作器或另一算法。有界小组件删除先观察到辅助函数缺失，再实现确定性预算规则。
+- [x] 绿灯：实现版本化请求/结果协议、独立工作器入口、受控子进程适配器、Poisson/BPA 显式分支、保守修复、固定 GLB 2.0 预览及核心完整性验证；核心模块不导入 Open3D。
+- [x] 验证：工作器契约、Open3D 适配层及配置聚焦集 `34 passed, 2 skipped in 0.65s`；跳过项为当前环境未安装 Open3D 的两算法真实冒烟，缺依赖错误路径已实际通过。定向编译与差异检查通过。
+- [x] 提交：`feat: add bounded Open3D mesh worker contract`。
 
 ## 任务 4：网格运行、质量门禁与确定性恢复
 
