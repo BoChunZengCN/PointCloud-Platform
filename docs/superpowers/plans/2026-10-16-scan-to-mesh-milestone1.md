@@ -207,10 +207,10 @@ scan_to_cad/
 - 每个运行只有一份不可变最终决定；驳回必须有原因。发布记录固定 run 清单、决定、来源、配置、策略和网格工件指纹。
 - `activate`、`replace`、`rollback` 均创建新发布记录；当前头按 `expected_current_release_id` 比较更新。回滚指向历史已验证发布，不改写历史记录。
 
-- [ ] 红灯：passed 自动/人工策略分支；缺确认；一次最终决定；rejected 强发；并发决定；并发发布头只有一个赢家；错误 expected head；回滚到历史；发布后审计中断恢复。覆盖最终复审重点 5。
-- [ ] 绿灯：实现 `mesh.review_recorded`、`mesh.release_created`、`mesh.release_head_changed` 和一致读取；任何失败不得改变当前头。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_mesh_release.py tests/test_mesh_reconstruction.py tests/test_phase15b1_model_release.py -p no:cacheprovider`；编译与差异检查。
-- [ ] 提交：`feat: review and release immutable mesh versions`。
+- [x] 红灯：覆盖 passed 的自动/人工策略、review_required 缺少风险确认、rejected 强制批准、一次最终决定、错误 expected head、activate/replace/rollback、运行中发布候选恢复、completed 响应丢失，以及已完成但未投影后继阻断旧头（覆盖最终复审重点 5）。
+- [x] 绿灯：实现不可变决定与发布 bundle、`mesh.review_recorded`、`mesh.release_created`、`mesh.release_head_changed`、对象级内核锁和 CAS 当前头；回滚创建新记录并指向唯一历史非回滚发布，任何 stale 或未确定状态都不改写当前头。
+- [x] 验证：决定/发布、网格运行及既有模型发布聚焦集 `48 passed in 9.39s`；定向编译与差异检查通过。
+- [x] 提交：`feat: review and release immutable mesh versions`。
 
 ## 任务 6：目录投影、API 与 CLI
 
