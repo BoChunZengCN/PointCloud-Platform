@@ -192,10 +192,10 @@ scan_to_cad/
 - 工作器开始前持久化 owner、来源快照、请求和审计开始事件；工作器成功后先验证工件，再发布清单/commit，最后补齐业务事件和 completed 审计。
 - 工件完整且 worker 结果已提交时，同一操作重试不得重新执行工作器，只补齐质量、清单或审计；结果是否完整无法证明时返回 `publication_recovery_required`，不删除、不接管、不猜测。
 
-- [ ] 红灯：三个质量状态、显式算法失败、来源/配置/策略指纹篡改、工件发布各边界中断、completed 响应丢失、同操作重放、不同身份并发、未确定目录状态。覆盖最终复审重点 4。
-- [ ] 绿灯：实现资源锁、不可变 run 包、`mesh.run_started`、`mesh.worker_completed`、`mesh.quality_checked`、`mesh.run_completed` 事件和安全读取。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_mesh_quality.py tests/test_mesh_reconstruction.py tests/test_scan_to_mesh_source.py tests/test_mesh_worker_contract.py -p no:cacheprovider`；编译与差异检查。
-- [ ] 提交：`feat: create recoverable scan-to-mesh runs`。
+- [x] 红灯：覆盖 passed/review_required/rejected、显式算法失败、来源/配置/策略快照篡改、质量报告发布中断、结果落盘后的审计中断、completed 响应丢失、同操作重放、不同操作接管、无所有者非空目录和已提交工件篡改；额外验证质量报告与工作器原始指标指纹完全一致（覆盖最终复审重点 4）。
+- [x] 绿灯：实现内核资源锁、不可变 owner/来源/配置/策略快照、固定工作器请求与工件、质量报告、run manifest、commit 完成边界，以及 `mesh.run_started`、`mesh.worker_completed`、`mesh.quality_checked`、`mesh.run_completed` 事件和安全读取；同一所有者恢复不重复执行工作器。
+- [x] 验证：质量、运行恢复、来源与工作器契约聚焦集 `62 passed in 2.23s`；定向编译与差异检查通过。
+- [x] 提交：`feat: create recoverable scan-to-mesh runs`。
 
 ## 任务 5：专家决定、不可变网格发布与回滚
 
