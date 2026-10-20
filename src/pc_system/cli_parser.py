@@ -612,6 +612,106 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--candidate-rank", type=int, required=transition)
         if name == "restore-model-binding":
             command.add_argument("--restores-binding-id", required=True)
+
+    mesh_config = subparsers.add_parser(
+        "mesh-config-publish", help="发布不可变网格重建配置。"
+    )
+    mesh_config.add_argument("--project-root", required=True, type=Path)
+    mesh_config.add_argument("--config-id", required=True)
+    mesh_config.add_argument("--config", required=True, type=Path)
+    mesh_config.add_argument("--actor", required=True)
+    mesh_config.add_argument("--operation-id", required=True)
+    mesh_config.add_argument("--request-id", required=True)
+    mesh_config.add_argument("--idempotency-key", required=True)
+
+    mesh_policy = subparsers.add_parser(
+        "mesh-policy-publish", help="发布不可变网格质量策略。"
+    )
+    mesh_policy.add_argument("--project-root", required=True, type=Path)
+    mesh_policy.add_argument("--policy-id", required=True)
+    mesh_policy.add_argument("--policy", required=True, type=Path)
+    mesh_policy.add_argument("--actor", required=True)
+    mesh_policy.add_argument("--operation-id", required=True)
+    mesh_policy.add_argument("--request-id", required=True)
+    mesh_policy.add_argument("--idempotency-key", required=True)
+
+    mesh_run = subparsers.add_parser(
+        "scan-to-mesh-run", help="从可信点云来源创建网格重建运行。"
+    )
+    mesh_run.add_argument("--project-root", required=True, type=Path)
+    mesh_run.add_argument("--run-id", required=True)
+    mesh_run.add_argument(
+        "--source-kind",
+        required=True,
+    )
+    mesh_run.add_argument("--asset-id")
+    mesh_run.add_argument("--source-release-id")
+    mesh_run.add_argument("--instance-id")
+    mesh_run.add_argument("--model-id")
+    mesh_run.add_argument("--version-id")
+    mesh_run.add_argument("--config-id", required=True)
+    mesh_run.add_argument("--policy-id", required=True)
+    mesh_run.add_argument("--actor", required=True)
+    mesh_run.add_argument("--operation-id", required=True)
+    mesh_run.add_argument("--request-id", required=True)
+    mesh_run.add_argument("--idempotency-key", required=True)
+
+    mesh_list = subparsers.add_parser(
+        "scan-to-mesh-list", help="按角色读取网格运行目录。"
+    )
+    mesh_list.add_argument("--project-root", required=True, type=Path)
+    mesh_list.add_argument("--actor", required=True)
+    mesh_list.add_argument(
+        "--role", choices=["operator", "expert", "auditor"], default="operator"
+    )
+    mesh_list.add_argument(
+        "--status",
+        default="all",
+    )
+    mesh_list.add_argument("--cursor")
+    mesh_list.add_argument("--limit", type=int, default=50)
+
+    mesh_show = subparsers.add_parser(
+        "scan-to-mesh-show", help="按角色读取单个网格运行。"
+    )
+    mesh_show.add_argument("--project-root", required=True, type=Path)
+    mesh_show.add_argument("--run-id", required=True)
+    mesh_show.add_argument("--actor", required=True)
+    mesh_show.add_argument(
+        "--role", choices=["operator", "expert", "auditor"], default="operator"
+    )
+
+    mesh_decide = subparsers.add_parser(
+        "scan-to-mesh-decide", help="记录网格运行的专家最终决定。"
+    )
+    mesh_decide.add_argument("--project-root", required=True, type=Path)
+    mesh_decide.add_argument("--run-id", required=True)
+    mesh_decide.add_argument("--decision", required=True, choices=["approve", "reject"])
+    mesh_decide.add_argument("--reason", required=True)
+    mesh_decide.add_argument(
+        "--acknowledgement", dest="acknowledgements", action="append", default=[]
+    )
+    mesh_decide.add_argument("--actor", required=True)
+    mesh_decide.add_argument("--operation-id", required=True)
+    mesh_decide.add_argument("--request-id", required=True)
+    mesh_decide.add_argument("--idempotency-key", required=True)
+
+    mesh_release = subparsers.add_parser(
+        "mesh-release", help="发布、替换或回滚不可变网格版本。"
+    )
+    mesh_release.add_argument("--project-root", required=True, type=Path)
+    mesh_release.add_argument("--object-key", required=True)
+    mesh_release.add_argument("--run-id", required=True)
+    mesh_release.add_argument("--release-id", required=True)
+    mesh_release.add_argument(
+        "--action", required=True, choices=["activate", "replace", "rollback"]
+    )
+    mesh_release.add_argument("--reason", required=True)
+    mesh_release.add_argument("--expected-current-release-id")
+    mesh_release.add_argument("--actor", required=True)
+    mesh_release.add_argument("--operation-id", required=True)
+    mesh_release.add_argument("--request-id", required=True)
+    mesh_release.add_argument("--idempotency-key", required=True)
     return parser
 
 

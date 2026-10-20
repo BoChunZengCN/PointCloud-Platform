@@ -232,10 +232,10 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 **CLI：** `mesh-config-publish`、`mesh-policy-publish`、`scan-to-mesh-run`、`scan-to-mesh-list`、`scan-to-mesh-show`、`scan-to-mesh-decide`、`mesh-release`。CLI/API 只传来源身份、配置 ID、策略 ID、操作身份和业务决定。
 
-- [ ] 红灯：专家写、操作员/审计员裁剪读、未认证拒绝审计；分页游标绑定筛选；重复字段/未知字段/非法来源拒绝；API 与 CLI 同错误码和同领域投影；不得回传本机路径、工作器日志或完整点集。
-- [ ] 绿灯：薄适配层调用领域接口；将新增稳定错误码映射为 400/403/404/409/422/500/503；不在路由复制状态机。
-- [ ] 验证：`uv run --extra test pytest -q tests/test_scan_to_mesh_api.py tests/test_scan_to_mesh_cli.py tests/test_phase15e_api.py tests/test_phase15e_cli.py -p no:cacheprovider`；编译与差异检查。
-- [ ] 提交：`feat: expose scan-to-mesh API and CLI`。
+- [x] 红灯：已覆盖专家写、操作员/审计员裁剪读、未认证拒绝审计；HMAC 游标绑定角色与筛选；重复字段、未知字段、非法来源和不安全 JSON 拒绝；API/CLI 同错误码、同领域投影；响应不含本机路径、工作器日志或完整点集。
+- [x] 绿灯：目录层统一实现角色投影与稳定分页；API/CLI 薄适配层只调用任务 2、4、5 领域接口；新增稳定错误码按 400/403/404/409/422/500/503 映射，路由不复制状态机。
+- [x] 验证：Task 6 与既有 Phase 15E API/CLI 聚焦回归 `23 passed in 58.85s`；7 个直接变更 Python 文件定向编译与差异检查通过。
+- [x] 提交：`feat: expose scan-to-mesh API and CLI`；提交 SHA 以 Git 历史为准。
 
 ## 任务 7：专家网格工作台与真实浏览器验收
 

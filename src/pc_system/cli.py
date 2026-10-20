@@ -66,6 +66,15 @@ from pc_system.commands.phase15 import (
     run_show_model_retrieval,
     run_show_model_registration,
 )
+from pc_system.commands.scan_to_mesh import (
+    run_create_mesh_run,
+    run_decide_mesh_run,
+    run_list_mesh_runs,
+    run_publish_mesh_config,
+    run_publish_mesh_policy,
+    run_release_mesh,
+    run_show_mesh_run,
+)
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -94,6 +103,8 @@ def main(
     open3d_runner: Open3DRunner = open3d_subprocess_runner,
     fls_runner: FlsRunner = fls_subprocess_runner,
     gaussian_runner: GaussianRunner = gaussian_subprocess_runner,
+    mesh_worker=None,
+    scan_to_mesh_cursor_secret: bytes | None = None,
 ) -> int:
     """CLI 入口，返回进程退出码。
 
@@ -102,7 +113,14 @@ def main(
 
     args = build_parser().parse_args(argv)
     try:
-        for field in (
+        scan_to_mesh_mutations = {
+            "mesh-config-publish",
+            "mesh-policy-publish",
+            "scan-to-mesh-run",
+            "scan-to-mesh-decide",
+            "mesh-release",
+        }
+        identifier_fields = () if args.command in scan_to_mesh_mutations else (
             "asset_id",
             "benchmark_id",
             "candidate_evaluation_id",
@@ -122,7 +140,8 @@ def main(
             "slice_name",
             "segment_name",
             "splat_name",
-        ):
+        )
+        for field in identifier_fields:
             value = getattr(args, field, None)
             if value:
                 validate_identifier(value, field)
@@ -535,6 +554,88 @@ def main(
                 source_id=args.source_id,
                 instance_id=args.instance_id,
                 registration_id=args.registration_id,
+            )
+        if args.command == "mesh-config-publish":
+            return run_publish_mesh_config(
+                args.project_root,
+                config_id=args.config_id,
+                config_path=args.config,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "mesh-policy-publish":
+            return run_publish_mesh_policy(
+                args.project_root,
+                policy_id=args.policy_id,
+                policy_path=args.policy,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "scan-to-mesh-run":
+            return run_create_mesh_run(
+                args.project_root,
+                run_id=args.run_id,
+                source_kind=args.source_kind,
+                asset_id=args.asset_id,
+                source_release_id=args.source_release_id,
+                instance_id=args.instance_id,
+                model_id=args.model_id,
+                version_id=args.version_id,
+                config_id=args.config_id,
+                policy_id=args.policy_id,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+                worker=mesh_worker,
+                cursor_secret=scan_to_mesh_cursor_secret,
+            )
+        if args.command == "scan-to-mesh-list":
+            return run_list_mesh_runs(
+                args.project_root,
+                actor=args.actor,
+                role=args.role,
+                status=args.status,
+                cursor=args.cursor,
+                limit=args.limit,
+                cursor_secret=scan_to_mesh_cursor_secret,
+            )
+        if args.command == "scan-to-mesh-show":
+            return run_show_mesh_run(
+                args.project_root,
+                run_id=args.run_id,
+                actor=args.actor,
+                role=args.role,
+            )
+        if args.command == "scan-to-mesh-decide":
+            return run_decide_mesh_run(
+                args.project_root,
+                run_id=args.run_id,
+                decision=args.decision,
+                reason=args.reason,
+                acknowledgements=args.acknowledgements,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
+            )
+        if args.command == "mesh-release":
+            return run_release_mesh(
+                args.project_root,
+                object_key=args.object_key,
+                run_id=args.run_id,
+                release_id=args.release_id,
+                action=args.action,
+                reason=args.reason,
+                expected_current_release_id=args.expected_current_release_id,
+                actor=args.actor,
+                operation_id=args.operation_id,
+                request_id=args.request_id,
+                idempotency_key=args.idempotency_key,
             )
         if args.command in {"list-model-decision-items", "show-model-decision-item", "decide-model-match",
                             "list-model-bindings", "supersede-model-binding", "restore-model-binding"}:

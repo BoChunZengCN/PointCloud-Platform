@@ -61,6 +61,17 @@ from pc_system.model_registration_config import (
     publish_registration_config,
 )
 from pc_system.model_registration_open3d import resolve_registration_engine
+from pc_system.mesh_reconstruction import create_mesh_run
+from pc_system.mesh_release import decide_mesh_run, release_mesh_run
+from pc_system.scan_to_mesh_catalog import (
+    list_mesh_config_catalog,
+    list_mesh_policy_catalog,
+    list_mesh_release_catalog,
+    list_mesh_run_catalog,
+    load_mesh_run_catalog,
+    mesh_session,
+)
+from pc_system.scan_to_mesh_errors import ScanToMeshError
 from pc_system.model_retrieval import (
     load_model_retrieval,
     retrieve_model_candidates,
@@ -239,6 +250,11 @@ _PHASE15_NOT_FOUND = {
     "model_registration_not_found",
     "reference_catalog_not_found",
     "reference_version_not_ready",
+    "mesh_config_not_found",
+    "mesh_policy_not_found",
+    "mesh_run_not_found",
+    "mesh_decision_not_found",
+    "mesh_release_not_found",
 }
 _PHASE15_CONFLICT = {
     "decision_conflict", "binding_exists", "binding_stale", "binding_chain_invalid",
@@ -263,6 +279,8 @@ _PHASE15_CONFLICT = {
     "reference_review_required",
     "reference_source_changed",
     "reference_version_owned",
+    "mesh_decision_conflict",
+    "mesh_release_conflict",
 }
 _PHASE15_SERVICE_UNAVAILABLE = {
     "audit_persistence_error",
@@ -282,6 +300,8 @@ _PHASE15_SERVICE_UNAVAILABLE = {
     "reference_reader_unavailable",
     "reference_review_failed",
     "reference_storage_limit",
+    "mesh_worker_unavailable",
+    "mesh_worker_failed",
 }
 _PHASE15_BAD_REQUEST = {
     "decision_not_allowed", "decision_reason_invalid", "registration_not_eligible",
@@ -318,6 +338,20 @@ _PHASE15_BAD_REQUEST = {
     "no_candidate_models",
     "registration_config_invalid",
     "registration_input_incomplete",
+    "mesh_config_invalid",
+    "mesh_policy_invalid",
+    "mesh_quality_invalid",
+    "mesh_run_invalid",
+    "mesh_release_invalid",
+    "mesh_worker_request_invalid",
+    "scan_to_mesh_catalog_invalid",
+}
+_PHASE15_UNPROCESSABLE = {
+    "mesh_decision_acknowledgement_required",
+    "mesh_decision_not_allowed",
+    "mesh_release_not_allowed",
+    "mesh_quality_rejected",
+    "mesh_review_required",
 }
 _REPARSE_POINT = 0x400
 MAX_PHASE15_REQUEST_BODY_BYTES = 1024 * 1024
@@ -332,6 +366,8 @@ def _phase15_http_error(exc: ModelMatchingError) -> HTTPException:
         status_code = 409
     elif exc.code in _PHASE15_SERVICE_UNAVAILABLE:
         status_code = 503
+    elif exc.code in _PHASE15_UNPROCESSABLE:
+        status_code = 422
     elif exc.code in _PHASE15_BAD_REQUEST:
         status_code = 400
     else:
@@ -728,6 +764,8 @@ def create_app(
     run_mode: str | None = None,
     principal_bindings: dict | None = None,
     registration_engine_resolver=resolve_registration_engine,
+    mesh_worker=None,
+    scan_to_mesh_cursor_secret: bytes | None = None,
 ) -> FastAPI:
     """创建最小 API 应用。"""
 
@@ -866,6 +904,219 @@ def create_app(
                 )
                 raise _phase15_http_error(persistence_error) from audit_exc
             raise _phase15_http_error(denied) from exc
+
+    def scan_to_mesh_principal(
+        request: Request, *, route: str, writable: bool = False
+    ) -> Principal:
+        return require_phase15_principal(
+            request,
+            route=route,
+            allowed_roles={"expert"} if writable else {"operator", "expert", "auditor"},
+        )
+
+    def mesh_source_ref(source_kind: str, source_ref: dict) -> dict:
+        allowed = {
+            "phase14_correction_release": {"asset_id", "release_id", "instance_id"},
+            "phase15e_scanned_reference": {"model_id", "version_id"},
+        }
+        fields = allowed.get(source_kind)
+        if (
+            fields is None
+            or set(source_ref) != fields
+            or any(type(source_ref[field]) is not str or not source_ref[field] for field in fields)
+        ):
+            raise ScanToMeshError(
+                "mesh_run_invalid", "点云来源身份与来源类型不匹配。"
+            )
+        return {field: source_ref[field] for field in sorted(fields)}
+
+    @app.get("/scan-to-mesh/session")
+    def scan_to_mesh_session(request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/session"
+        )
+        return phase15_action(mesh_session, principal=principal)
+
+    @app.get("/scan-to-mesh/configs")
+    def scan_to_mesh_configs(request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/configs"
+        )
+        return phase15_action(
+            list_mesh_config_catalog, project_root, principal=principal
+        )
+
+    @app.get("/scan-to-mesh/quality-policies")
+    def scan_to_mesh_policies(request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/quality-policies"
+        )
+        return phase15_action(
+            list_mesh_policy_catalog, project_root, principal=principal
+        )
+
+    @app.post("/scan-to-mesh/runs")
+    async def scan_to_mesh_create_run(request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="POST /scan-to-mesh/runs", writable=True
+        )
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        captured = _require_payload_shape(
+            payload,
+            text_fields={
+                "run_id",
+                "source_kind",
+                "config_id",
+                "policy_id",
+                "operation_id",
+                "request_id",
+                "idempotency_key",
+            },
+            object_fields={"source_ref"},
+        )
+        if mesh_worker is None:
+            raise _phase15_http_error(
+                ScanToMeshError("mesh_worker_unavailable", "未配置网格重建工作器。")
+            )
+        phase15_action(
+            create_mesh_run,
+            project_root,
+            run_id=captured["run_id"],
+            source_kind=captured["source_kind"],
+            source_ref=phase15_action(
+                mesh_source_ref, captured["source_kind"], captured["source_ref"]
+            ),
+            config_id=captured["config_id"],
+            policy_id=captured["policy_id"],
+            worker=mesh_worker,
+            principal=principal,
+            operation_id=captured["operation_id"],
+            request_id=captured["request_id"],
+            idempotency_key=captured["idempotency_key"],
+        )
+        return phase15_action(
+            load_mesh_run_catalog,
+            project_root,
+            captured["run_id"],
+            principal=principal,
+        )
+
+    @app.get("/scan-to-mesh/runs")
+    def scan_to_mesh_runs(
+        request: Request,
+        status: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/runs"
+        )
+        return phase15_action(
+            list_mesh_run_catalog,
+            project_root,
+            principal=principal,
+            status=status,
+            cursor=cursor,
+            limit=limit,
+            cursor_secret=scan_to_mesh_cursor_secret,
+        )
+
+    @app.get("/scan-to-mesh/runs/{run_id}")
+    def scan_to_mesh_run_detail(run_id: str, request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/runs/{run_id}"
+        )
+        return phase15_action(
+            load_mesh_run_catalog, project_root, run_id, principal=principal
+        )
+
+    @app.post("/scan-to-mesh/runs/{run_id}/decision", status_code=201)
+    async def scan_to_mesh_decision(run_id: str, request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request,
+            route="POST /scan-to-mesh/runs/{run_id}/decision",
+            writable=True,
+        )
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        captured = _require_payload_shape(
+            payload,
+            text_fields={
+                "decision", "reason", "operation_id", "request_id", "idempotency_key"
+            },
+            list_fields={"acknowledgements"},
+        )
+        phase15_action(
+            decide_mesh_run,
+            project_root,
+            run_id=run_id,
+            decision=captured["decision"],
+            reason=captured["reason"],
+            acknowledgements=captured["acknowledgements"],
+            principal=principal,
+            operation_id=captured["operation_id"],
+            request_id=captured["request_id"],
+            idempotency_key=captured["idempotency_key"],
+        )
+        return phase15_action(
+            load_mesh_run_catalog, project_root, run_id, principal=principal
+        )
+
+    @app.post("/scan-to-mesh/objects/{object_key}/releases", status_code=201)
+    async def scan_to_mesh_release(object_key: str, request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request,
+            route="POST /scan-to-mesh/objects/{object_key}/releases",
+            writable=True,
+        )
+        payload = await _phase15_json_object(request, reject_duplicate_fields=True)
+        required = {
+            "run_id", "release_id", "action", "reason", "expected_current_release_id",
+            "operation_id", "request_id", "idempotency_key",
+        }
+        if set(payload) != required:
+            raise _phase15_http_error(
+                _invalid_request("Request body fields do not match the route schema.")
+            )
+        captured = _require_payload_shape(
+            payload,
+            text_fields=required - {"expected_current_release_id"},
+            optional_text_fields={"expected_current_release_id"},
+        )
+        release = phase15_action(
+            release_mesh_run,
+            project_root,
+            object_key=object_key,
+            run_id=captured["run_id"],
+            release_id=captured["release_id"],
+            action=captured["action"],
+            reason=captured["reason"],
+            expected_current_release_id=captured["expected_current_release_id"],
+            principal=principal,
+            operation_id=captured["operation_id"],
+            request_id=captured["request_id"],
+            idempotency_key=captured["idempotency_key"],
+        )
+        catalog = phase15_action(
+            list_mesh_release_catalog,
+            project_root,
+            object_key,
+            principal=principal,
+        )
+        return next(
+            item for item in catalog["items"] if item["release_id"] == release["release_id"]
+        )
+
+    @app.get("/scan-to-mesh/objects/{object_key}/releases")
+    def scan_to_mesh_releases(object_key: str, request: Request) -> dict:
+        principal = scan_to_mesh_principal(
+            request, route="GET /scan-to-mesh/objects/{object_key}/releases"
+        )
+        return phase15_action(
+            list_mesh_release_catalog,
+            project_root,
+            object_key,
+            principal=principal,
+        )
 
     @app.get("/health")
     def health() -> dict:
