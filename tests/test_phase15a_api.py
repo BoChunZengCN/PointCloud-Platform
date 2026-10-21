@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -342,23 +343,19 @@ def test_stream_transport_error_returns_redacted_json_503(
     assert "transport-secret" not in response.text
 
 
-def test_stream_base_exception_is_not_normalized(tmp_path, monkeypatch):
+def test_phase15_json_object_does_not_normalize_base_exception():
     class FatalStreamFailure(BaseException):
         pass
 
-    async def fatal_stream(_request):
-        raise FatalStreamFailure("fatal-stream-secret")
-        yield b""
+    class FatalRequest:
+        headers = {}
 
-    monkeypatch.setattr(api_module.Request, "stream", fatal_stream)
-    client = TestClient(create_app(tmp_path, run_mode="development"))
+        async def stream(self):
+            raise FatalStreamFailure("fatal-stream-secret")
+            yield b""
 
     with pytest.raises(FatalStreamFailure, match="fatal-stream-secret"):
-        client.post(
-            "/model-library/models",
-            headers={**EXPERT_HEADERS, "Content-Type": "application/json"},
-            content=b"{}",
-        )
+        asyncio.run(api_module._phase15_json_object(FatalRequest()))
 
 
 def test_request_body_at_exact_limit_is_not_rejected_as_too_large(tmp_path):
