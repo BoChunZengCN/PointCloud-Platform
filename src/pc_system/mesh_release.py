@@ -599,12 +599,45 @@ def release_mesh_run(
     if replayed and operation["status"] == "failed":
         recorded = operation.get("error") or {}
         raise _error(recorded.get("code", "mesh_release_invalid"), recorded.get("message", "网格发布失败。"))
-    try:
-        require_any_role(principal, {"expert"})
-    except ModelMatchingError as exc:
-        error = _error("permission_denied", "只有专家可以发布网格版本。")
-        _fail_running(root, operation_id, error)
-        raise error from exc
+    if principal.source == "system":
+        try:
+            automated_run = load_mesh_run(root, run_id)
+            automated_decision = load_mesh_decision(root, run_id)
+            automated_policy = _read_canonical(
+                root
+                / "scan_to_cad"
+                / "mesh_runs"
+                / run_id
+                / "policy_snapshot.json"
+            )
+            allowed_automated_release = (
+                automated_run["status"] == "passed"
+                and automated_decision["decision"] == "approve"
+                and automated_decision["automated"]
+                and automated_policy["decisions"]["auto_publish_passed"]
+            )
+        except (KeyError, TypeError, FileNotFoundError) as exc:
+            error = _error(
+                "mesh_release_integrity_error", "自动发布证据字段无效。"
+            )
+            _fail_running(root, operation_id, error)
+            raise error from exc
+        except ScanToMeshError as error:
+            _fail_running(root, operation_id, error)
+            raise
+        if not allowed_automated_release:
+            error = _error(
+                "permission_denied", "系统主体只能发布策略允许的自动通过网格。"
+            )
+            _fail_running(root, operation_id, error)
+            raise error
+    else:
+        try:
+            require_any_role(principal, {"expert"})
+        except ModelMatchingError as exc:
+            error = _error("permission_denied", "只有专家或受控自动发布主体可以发布网格版本。")
+            _fail_running(root, operation_id, error)
+            raise error from exc
     try:
         with model_resource_lock(root, "mesh-release", object_key):
             _object_directory(root, object_key, create=True)
@@ -720,3 +753,75 @@ def release_mesh_run(
         error = _scan_error(exc)
         _fail_running(root, operation_id, error)
         raise error from exc
+
+
+def auto_release_passed_mesh_run(
+    project_root: Path,
+    *,
+    run_id: str,
+    release_id: str,
+    reason: str,
+    principal: Principal,
+    operation_id: str,
+    request_id: str,
+    idempotency_key: str,
+) -> dict:
+    """确定性创建或恢复策略允许的自动网格发布。"""
+
+    if principal.source != "system":
+        raise _error("permission_denied", "自动发布只接受系统主体。")
+    root = Path(project_root)
+    run_id = _identifier(run_id, "run_id")
+    release_id = _identifier(release_id, "release_id")
+    reason = _reason(reason)
+    run = load_mesh_run(root, run_id)
+    object_key = mesh_object_key(run)
+    candidate_path = _release_directory(root, object_key, release_id) / "release.json"
+    try:
+        candidate = _read_canonical(candidate_path)
+    except FileNotFoundError:
+        candidate = None
+    if candidate is not None:
+        try:
+            if (
+                candidate["object_key"] != object_key
+                or candidate["release_id"] != release_id
+                or candidate["run_id"] != run_id
+                or candidate["operation_id"] != operation_id
+                or candidate["reason"] != reason
+                or candidate["action"] not in {"activate", "replace"}
+            ):
+                raise ValueError("candidate identity differs")
+            action = candidate["action"]
+            expected_current_release_id = candidate["previous_release_id"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _error(
+                "mesh_release_integrity_error", "自动发布候选内容无效。"
+            ) from exc
+        operation = load_operation(root, operation_id)
+        if operation["status"] == "completed":
+            release = _load_release_bundle(root, object_key, release_id)
+            try:
+                load_current_mesh_release(root, object_key)
+            except ScanToMeshError as exc:
+                if exc.code != "mesh_release_integrity_error":
+                    raise
+            else:
+                return release
+    else:
+        current = load_current_mesh_release(root, object_key)
+        action = "activate" if current is None else "replace"
+        expected_current_release_id = None if current is None else current["release_id"]
+    return release_mesh_run(
+        root,
+        object_key=object_key,
+        run_id=run_id,
+        release_id=release_id,
+        action=action,
+        reason=reason,
+        expected_current_release_id=expected_current_release_id,
+        principal=principal,
+        operation_id=operation_id,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )

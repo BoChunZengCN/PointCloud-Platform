@@ -3,7 +3,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from pc_system import mesh_reconstruction
+from pc_system import mesh_reconstruction, mesh_release
 from pc_system.api import create_app
 from pc_system.mesh_reconstruction_config import (
     publish_mesh_config,
@@ -22,7 +22,7 @@ def _headers(role="expert"):
     return {"X-Actor-ID": f"mesh-{role}", "X-Actor-Roles": role}
 
 
-def _prepare(root, monkeypatch):
+def _prepare(root, monkeypatch, *, policy=None, source_factory=None):
     publish_mesh_config(
         root,
         config_id="mesh-poisson-v1",
@@ -35,16 +35,18 @@ def _prepare(root, monkeypatch):
     publish_mesh_quality_policy(
         root,
         policy_id="mesh-quality-v1",
-        policy=QUALITY_POLICY,
+        policy=QUALITY_POLICY if policy is None else policy,
         principal=EXPERT,
         operation_id="publish-policy-1",
         request_id="request-policy-1",
         idempotency_key="idem-policy-1",
     )
+    if source_factory is None:
+        source_factory = lambda **_kwargs: copy.deepcopy(_source_snapshot())
     monkeypatch.setattr(
         mesh_reconstruction,
         "freeze_mesh_source",
-        lambda *args, **kwargs: copy.deepcopy(_source_snapshot()),
+        lambda *args, **kwargs: source_factory(**kwargs),
     )
 
 
@@ -65,12 +67,12 @@ def _run_payload(run_id="mesh-run-1", sequence="1"):
     }
 
 
-def _client(root):
+def _client(root, worker=None):
     return TestClient(
         create_app(
             root,
             run_mode="development",
-            mesh_worker=FakeWorker(),
+            mesh_worker=FakeWorker() if worker is None else worker,
             scan_to_mesh_cursor_secret=b"test-only-cursor-secret",
         )
     )
@@ -241,3 +243,170 @@ def test_api_rejects_untrusted_and_malformed_mesh_requests_with_stable_errors(tm
     assert invalid_source.json()["detail"]["code"] == "mesh_run_invalid"
     assert missing.status_code == 404
     assert missing.json()["detail"]["code"] == "mesh_run_not_found"
+
+
+def test_api_exposes_bounded_verified_preview_and_frozen_quality_evidence(tmp_path, monkeypatch):
+    """页面只能获得有界几何投影，不能下载原始工件或读取本机路径。"""
+    _prepare(tmp_path, monkeypatch)
+    worker = FakeWorker()
+    client = _client(tmp_path, worker)
+    assert client.post(
+        "/scan-to-mesh/runs", headers=_headers("expert"), json=_run_payload()
+    ).status_code == 200
+
+    detail = client.get(
+        "/scan-to-mesh/runs/mesh-run-1", headers=_headers("expert")
+    )
+    preview = client.get(
+        "/scan-to-mesh/runs/mesh-run-1/preview", headers=_headers("auditor")
+    )
+    denied = client.get(
+        "/scan-to-mesh/runs/mesh-run-1/preview", headers=_headers("operator")
+    )
+
+    assert detail.status_code == preview.status_code == 200
+    assert detail.json()["quality"] == {
+        "status": "passed",
+        "summary_zh": "网格质量门禁通过。",
+        "reasons": [],
+        "derived": {
+            "boundary_edge_fraction": 0.0,
+            "degenerate_face_fraction": 0.0,
+            "non_manifold_edge_fraction": 0.0,
+        },
+        "metrics": {
+            "component_count": 1,
+            "largest_component_fraction": 1.0,
+            "mesh_to_point_coverage": 1.0,
+            "point_to_mesh_p95_m": 0.002,
+            "raw_triangle_count": 4,
+            "raw_vertex_count": 4,
+            "repair_max_displacement_m": 0.0,
+            "repaired_triangle_count": 4,
+            "repaired_vertex_count": 4,
+        },
+        "quality_report_fingerprint": detail.json()["quality"]["quality_report_fingerprint"],
+    }
+    body = preview.json()
+    assert body["viewer_role"] == "auditor"
+    assert body["coordinate_unit"] == "m"
+    assert body["source"] == {
+        "point_count": 4,
+        "points": [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]],
+    }
+    assert body["raw_mesh"]["triangle_count"] == 4
+    assert body["repaired_mesh"]["triangle_count"] == 4
+    assert len(body["raw_mesh"]["triangles"]) == 4
+    assert len(body["repaired_mesh"]["triangles"]) == 4
+    encoded = json.dumps(body, ensure_ascii=False)
+    assert "raw_mesh.ply" not in encoded
+    assert "preview_mesh.glb" not in encoded
+    assert str(tmp_path) not in encoded
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "permission_denied"
+
+
+def test_api_auto_publishes_passed_run_only_when_frozen_policy_allows(tmp_path, monkeypatch):
+    """自动发布必须形成系统决定、不可变发布和可重放当前头。"""
+    policy = copy.deepcopy(QUALITY_POLICY)
+    policy["decisions"]["auto_publish_passed"] = True
+
+    def phase15e_source(**kwargs):
+        source = copy.deepcopy(_source_snapshot())
+        payload = {
+            **{key: value for key, value in source.items() if key != "fingerprint"},
+            "source_kind": kwargs["source_kind"],
+            "source_identity": {**kwargs["source_ref"], "category_id": "pipe"},
+        }
+        payload["fingerprint"] = mesh_reconstruction._digest(payload)
+        return payload
+
+    _prepare(
+        tmp_path,
+        monkeypatch,
+        policy=policy,
+        source_factory=phase15e_source,
+    )
+    client = _client(tmp_path)
+    payload = {
+        **_run_payload(),
+        "source_kind": "phase15e_scanned_reference",
+        "source_ref": {"model_id": "scan-pipe", "version_id": "v1"},
+    }
+
+    first = client.post(
+        "/scan-to-mesh/runs", headers=_headers("expert"), json=payload
+    )
+    replay = client.post(
+        "/scan-to-mesh/runs", headers=_headers("expert"), json=payload
+    )
+
+    assert first.status_code == replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["status"] == "passed"
+    assert first.json()["decision"]["decision"] == "approve"
+    assert first.json()["decision"]["automated"] is True
+    assert first.json()["publication_status"] == "current"
+    assert len(first.json()["release_history"]) == 1
+    assert first.json()["release_history"][0]["created_by"] == "scan-to-mesh-auto"
+    operator = client.get("/scan-to-mesh/runs", headers=_headers("operator"))
+    assert [item["run_id"] for item in operator.json()["items"]] == ["mesh-run-1"]
+
+
+def test_api_auto_publish_retry_recovers_committed_release_projection(
+    tmp_path, monkeypatch
+):
+    """自动发布已提交但当前头写入中断时，同一创建请求必须原位恢复。"""
+    policy = copy.deepcopy(QUALITY_POLICY)
+    policy["decisions"]["auto_publish_passed"] = True
+
+    def phase15e_source(**kwargs):
+        source = copy.deepcopy(_source_snapshot())
+        payload = {
+            **{key: value for key, value in source.items() if key != "fingerprint"},
+            "source_kind": kwargs["source_kind"],
+            "source_identity": {**kwargs["source_ref"], "category_id": "pipe"},
+        }
+        payload["fingerprint"] = mesh_reconstruction._digest(payload)
+        return payload
+
+    _prepare(
+        tmp_path,
+        monkeypatch,
+        policy=policy,
+        source_factory=phase15e_source,
+    )
+    real_write_projection = mesh_release._write_projection
+    failed = False
+
+    def fail_once(root, release):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise mesh_release._error(
+                "publication_recovery_required",
+                "模拟当前版本头写入中断。",
+            )
+        return real_write_projection(root, release)
+
+    monkeypatch.setattr(mesh_release, "_write_projection", fail_once)
+    client = _client(tmp_path)
+    payload = {
+        **_run_payload(),
+        "source_kind": "phase15e_scanned_reference",
+        "source_ref": {"model_id": "scan-pipe", "version_id": "v1"},
+    }
+
+    interrupted = client.post(
+        "/scan-to-mesh/runs", headers=_headers("expert"), json=payload
+    )
+    recovered = client.post(
+        "/scan-to-mesh/runs", headers=_headers("expert"), json=payload
+    )
+
+    assert interrupted.status_code == 503
+    assert interrupted.json()["detail"]["code"] == "publication_recovery_required"
+    assert recovered.status_code == 200
+    assert recovered.json()["publication_status"] == "current"
+    assert recovered.json()["decision"]["automated"] is True
+    assert len(recovered.json()["release_history"]) == 1

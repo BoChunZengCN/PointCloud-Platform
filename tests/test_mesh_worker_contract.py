@@ -9,6 +9,7 @@ import pytest
 
 from pc_system.mesh_reconstruction_config import build_mesh_config
 from pc_system.mesh_worker_contract import (
+    load_bounded_mesh_preview,
     load_mesh_worker_input,
     load_mesh_worker_request,
     prepare_mesh_worker_request,
@@ -260,6 +261,27 @@ def test_valid_worker_manifest_ply_and_glb_are_verified(tmp_path):
     assert verified == expected
     assert request["input"]["path"] == "source_points.json"
     assert request["limits"]["maximum_triangles"] == 100
+
+
+def test_browser_preview_is_bounded_and_contains_no_artifact_paths(tmp_path):
+    request = prepare_mesh_worker_request(
+        tmp_path, source_snapshot=_source_snapshot(), config=_config()
+    )
+    _valid_result(tmp_path, request)
+
+    preview = load_bounded_mesh_preview(
+        tmp_path,
+        maximum_source_points=2,
+        maximum_triangles_per_layer=2,
+    )
+
+    assert preview["source"]["point_count"] == 4
+    assert len(preview["source"]["points"]) == 2
+    assert preview["raw_mesh"]["triangle_count"] == 4
+    assert preview["repaired_mesh"]["triangle_count"] == 4
+    assert len(preview["raw_mesh"]["triangles"]) == 2
+    assert len(preview["repaired_mesh"]["triangles"]) == 2
+    assert "path" not in json.dumps(preview)
 
 
 @pytest.mark.parametrize(

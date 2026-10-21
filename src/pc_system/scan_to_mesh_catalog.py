@@ -7,7 +7,7 @@ import json
 import stat
 from pathlib import Path
 
-from pc_system.mesh_reconstruction import load_mesh_run
+from pc_system.mesh_reconstruction import _quality_report, _read_canonical, load_mesh_run
 from pc_system.mesh_reconstruction_config import (
     list_mesh_configs,
     list_mesh_quality_policies,
@@ -20,6 +20,7 @@ from pc_system.mesh_release import (
 )
 from pc_system.model_matching_audit import load_operation
 from pc_system.model_matching_identity import Principal, require_any_role
+from pc_system.mesh_worker_contract import load_bounded_mesh_preview
 from pc_system.scan_to_mesh_errors import ScanToMeshError
 
 
@@ -129,6 +130,41 @@ def _safe_artifacts(artifacts: dict) -> dict:
     return result
 
 
+def _quality_evidence(root: Path, run: dict) -> dict:
+    directory = root / "scan_to_cad" / "mesh_runs" / run["run_id"]
+    metrics = _read_canonical(directory / "mesh_metrics.json")
+    policy = _read_canonical(directory / "policy_snapshot.json")
+    quality = _read_canonical(directory / "quality_report.json")
+    rebuilt = _quality_report(metrics, policy, quality["metrics_fingerprint"])
+    if (
+        rebuilt != quality
+        or quality["quality_report_fingerprint"]
+        != run["quality_report_fingerprint"]
+    ):
+        raise ScanToMeshError(
+            "mesh_run_integrity_error", "网格质量证据与运行清单不一致。"
+        )
+    metric_fields = (
+        "raw_vertex_count",
+        "raw_triangle_count",
+        "repaired_vertex_count",
+        "repaired_triangle_count",
+        "component_count",
+        "largest_component_fraction",
+        "mesh_to_point_coverage",
+        "point_to_mesh_p95_m",
+        "repair_max_displacement_m",
+    )
+    return {
+        "status": quality["status"],
+        "summary_zh": quality["summary_zh"],
+        "reasons": quality["reasons"],
+        "derived": quality["derived"],
+        "metrics": {field: metrics[field] for field in metric_fields},
+        "quality_report_fingerprint": quality["quality_report_fingerprint"],
+    }
+
+
 def _decision(root: Path, run_id: str) -> dict | None:
     try:
         return load_mesh_decision(root, run_id)
@@ -218,10 +254,7 @@ def _professional_run(root: Path, context: dict, *, role: str) -> dict:
         "policy_id": run["policy_id"],
         "policy_fingerprint": run["policy_fingerprint"],
         "manifest_fingerprint": run["manifest_fingerprint"],
-        "quality": {
-            "status": run["status"],
-            "quality_report_fingerprint": run["quality_report_fingerprint"],
-        },
+        "quality": _quality_evidence(root, run),
         "artifacts": _safe_artifacts(run["artifacts"]),
         "decision": context["decision"],
         "publication_status": context["publication_status"],
@@ -390,6 +423,37 @@ def load_mesh_run_catalog(
             raise ScanToMeshError("mesh_run_not_found", "当前已发布网格运行不存在。")
         return {"viewer_role": role, **_business_run(context)}
     return _professional_run(project_root, context, role=role)
+
+
+def load_mesh_run_preview(
+    root: Path, run_id: str, *, principal: Principal
+) -> dict:
+    role = _viewer_role(principal)
+    if role == "operator":
+        raise ScanToMeshError(
+            "permission_denied", "业务角色不能读取专业网格几何预览。"
+        )
+    project_root = Path(root)
+    run = load_mesh_run(project_root, run_id)
+    preview = load_bounded_mesh_preview(
+        project_root / "scan_to_cad" / "mesh_runs" / run_id
+    )
+    if preview["source_snapshot_fingerprint"] != run["source_snapshot_fingerprint"]:
+        raise ScanToMeshError(
+            "mesh_run_integrity_error", "网格预览与来源快照不一致。"
+        )
+    for key in ("raw_mesh", "repaired_mesh"):
+        expected = run["artifacts"][key]
+        actual = preview[key]
+        if (
+            actual["vertex_count"] != expected["vertex_count"]
+            or actual["triangle_count"] != expected["triangle_count"]
+        ):
+            raise ScanToMeshError(
+                "mesh_run_integrity_error", "网格预览与运行清单不一致。"
+            )
+    preview.pop("source_snapshot_fingerprint")
+    return {"viewer_role": role, "run_id": run_id, **preview}
 
 
 def list_mesh_release_catalog(

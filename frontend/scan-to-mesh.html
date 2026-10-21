@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>点云转网格工作台 · 点云平台</title>
+    <link rel="stylesheet" href="scan-to-mesh.css" />
+  </head>
+  <body>
+    <main>
+      <nav aria-label="主导航">
+        <a href="index.html">项目驾驶舱</a>
+        <a href="model-reference-library.html">扫描参考模板</a>
+        <a aria-current="page" href="scan-to-mesh.html">点云转网格</a>
+      </nav>
+
+      <header>
+        <p class="eyebrow">可信来源 · 三态质量门禁 · 不可变发布</p>
+        <h1>点云转网格工作台</h1>
+        <p id="role-note">尚未连接；所有写操作已禁用。</p>
+      </header>
+
+      <details class="connection">
+        <summary>连接与身份</summary>
+        <label>API 访问令牌
+          <input id="token" type="password" autocomplete="off" placeholder="仅保留于当前页面内存" />
+        </label>
+        <button id="connect" type="button">连接</button>
+      </details>
+
+      <div class="status-row">
+        <p id="message" role="status" aria-live="polite">请先连接服务。</p>
+        <button id="retry" type="button" hidden>重试原操作</button>
+      </div>
+
+      <section class="panel" aria-labelledby="create-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">新建运行</p><h2 id="create-title">选择可信单对象来源</h2></div>
+          <span class="scope-note">不接受路径、URL 或未核验点云</span>
+        </div>
+        <div class="form-grid">
+          <label>运行 ID<input id="run-id" autocomplete="off" /></label>
+          <label>来源类型
+            <select id="source-kind">
+              <option value="phase14_correction_release">Phase 14 分割纠正发布</option>
+              <option value="phase15e_scanned_reference">Phase 15E 扫描参考版本</option>
+            </select>
+          </label>
+          <div id="phase14-source" class="source-fields">
+            <label>资产 ID<input id="asset-id" /></label>
+            <label>纠正发布 ID<input id="source-release-id" /></label>
+            <label>对象实例 ID<input id="instance-id" /></label>
+          </div>
+          <div id="phase15e-source" class="source-fields" hidden>
+            <label>模型 ID<input id="model-id" /></label>
+            <label>扫描版本 ID<input id="version-id" /></label>
+          </div>
+          <label>网格配置<select id="config-id"></select></label>
+          <label>质量策略<select id="policy-id"></select></label>
+        </div>
+        <button id="create-run" data-write type="button">创建网格运行</button>
+      </section>
+
+      <section class="panel" aria-labelledby="runs-title">
+        <div class="section-heading"><div><p class="eyebrow">运行目录</p><h2 id="runs-title">待处理与历史运行</h2></div></div>
+        <div class="filters" aria-label="运行筛选">
+          <button type="button" data-status="all">全部</button>
+          <button type="button" data-status="pending">待处理</button>
+          <button type="button" data-status="processed">已处理</button>
+          <button type="button" data-status="review_required">需复核</button>
+          <button type="button" data-status="rejected">已拒绝</button>
+          <button type="button" data-status="published">已发布</button>
+        </div>
+        <div class="workspace-grid">
+          <aside id="run-list" aria-label="网格运行清单"></aside>
+          <article id="detail" hidden>
+            <div class="detail-heading">
+              <div><p class="eyebrow">运行详情</p><h3 id="detail-title"></h3></div>
+              <span id="status-chip" class="status-chip"></span>
+            </div>
+
+            <section id="business-summary" class="summary-card"></section>
+
+            <div id="professional-detail" hidden>
+              <section class="evidence-grid" aria-label="冻结质量证据">
+                <article><h4>来源与配置</h4><p id="source-summary"></p><p id="configuration-summary"></p></article>
+                <article><h4>质量结论</h4><p id="quality-summary"></p><div id="quality-metrics"></div></article>
+                <article><h4>发布状态</h4><p id="publication-summary"></p><p id="decision-summary"></p></article>
+                <article><h4>审计摘要</h4><p id="audit-summary"></p></article>
+              </section>
+
+              <section class="preview-card" aria-labelledby="preview-title">
+                <div class="section-heading"><div><p class="eyebrow">有界辅助预览</p><h4 id="preview-title">点云与网格叠加</h4></div><span>不替代完整性或精度证明</span></div>
+                <canvas id="mesh-preview" width="820" height="430" aria-label="点云、原始网格与修复网格叠加预览"></canvas>
+                <div id="preview-legend" class="legend">
+                  <label><input id="show-points" type="checkbox" checked />来源点云</label>
+                  <label><input id="show-raw" type="checkbox" checked />原始网格</label>
+                  <label><input id="show-repaired" type="checkbox" checked />修复网格</label>
+                </div>
+              </section>
+
+              <section id="decision-controls" class="action-card">
+                <h4>专家最终决定</h4>
+                <div id="risk-acknowledgements" class="risk-list"></div>
+                <label>决定原因<textarea id="decision-reason" maxlength="2000"></textarea></label>
+                <div class="button-row">
+                  <button id="approve" data-write type="button">批准网格</button>
+                  <button id="reject" data-write class="danger" type="button">驳回网格</button>
+                </div>
+              </section>
+
+              <section id="release-controls" class="action-card">
+                <h4>发布、替换与回滚</h4>
+                <div class="form-grid compact">
+                  <label>动作
+                    <select id="release-action">
+                      <option value="activate">首次发布</option>
+                      <option value="replace">替换当前版本</option>
+                      <option value="rollback">回滚到此运行</option>
+                    </select>
+                  </label>
+                  <label>发布 ID<input id="release-id" /></label>
+                  <label class="wide">发布原因<textarea id="release-reason" maxlength="2000"></textarea></label>
+                </div>
+                <button id="release" data-write type="button">发布网格</button>
+                <div id="release-history" class="history" aria-label="发布历史"></div>
+              </section>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+    <script src="scan-to-mesh.js"></script>
+  </body>
+</html>

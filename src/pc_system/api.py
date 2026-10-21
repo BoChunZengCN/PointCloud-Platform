@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import stat as stat_module
@@ -61,14 +62,20 @@ from pc_system.model_registration_config import (
     publish_registration_config,
 )
 from pc_system.model_registration_open3d import resolve_registration_engine
+from pc_system.mesh_reconstruction import _read_canonical as read_mesh_document
 from pc_system.mesh_reconstruction import create_mesh_run
-from pc_system.mesh_release import decide_mesh_run, release_mesh_run
+from pc_system.mesh_release import (
+    auto_release_passed_mesh_run,
+    decide_mesh_run,
+    release_mesh_run,
+)
 from pc_system.scan_to_mesh_catalog import (
     list_mesh_config_catalog,
     list_mesh_policy_catalog,
     list_mesh_release_catalog,
     list_mesh_run_catalog,
     load_mesh_run_catalog,
+    load_mesh_run_preview,
     mesh_session,
 )
 from pc_system.scan_to_mesh_errors import ScanToMeshError
@@ -978,7 +985,7 @@ def create_app(
             raise _phase15_http_error(
                 ScanToMeshError("mesh_worker_unavailable", "未配置网格重建工作器。")
             )
-        phase15_action(
+        run = phase15_action(
             create_mesh_run,
             project_root,
             run_id=captured["run_id"],
@@ -994,6 +1001,50 @@ def create_app(
             request_id=captured["request_id"],
             idempotency_key=captured["idempotency_key"],
         )
+        policy = phase15_action(
+            read_mesh_document,
+            project_root
+            / "scan_to_cad"
+            / "mesh_runs"
+            / captured["run_id"]
+            / "policy_snapshot.json",
+        )
+        if (
+            run["status"] == "passed"
+            and policy["decisions"]["auto_publish_passed"]
+        ):
+            automatic = Principal(
+                "scan-to-mesh-auto", frozenset(), "system"
+            )
+            identity = hashlib.sha256(
+                run["manifest_fingerprint"].encode("ascii")
+            ).hexdigest()
+            decision_operation = f"mesh-auto-review-{identity[:32]}"
+            phase15_action(
+                decide_mesh_run,
+                project_root,
+                run_id=captured["run_id"],
+                decision="approve",
+                reason="冻结质量策略允许自动通过。",
+                acknowledgements=[],
+                principal=automatic,
+                operation_id=decision_operation,
+                request_id=f"request-{decision_operation}",
+                idempotency_key=f"idem-{decision_operation}",
+            )
+            release_id = f"mesh-auto-release-{identity[:32]}"
+            release_operation = f"mesh-auto-publish-{identity[:32]}"
+            phase15_action(
+                auto_release_passed_mesh_run,
+                project_root,
+                run_id=captured["run_id"],
+                release_id=release_id,
+                reason="冻结质量策略允许自动发布。",
+                principal=automatic,
+                operation_id=release_operation,
+                request_id=f"request-{release_operation}",
+                idempotency_key=f"idem-{release_operation}",
+            )
         return phase15_action(
             load_mesh_run_catalog,
             project_root,
@@ -1028,6 +1079,17 @@ def create_app(
         )
         return phase15_action(
             load_mesh_run_catalog, project_root, run_id, principal=principal
+        )
+
+    @app.get("/scan-to-mesh/runs/{run_id}/preview")
+    def scan_to_mesh_run_preview(run_id: str, request: Request) -> dict:
+        principal = require_phase15_principal(
+            request,
+            route="GET /scan-to-mesh/runs/{run_id}/preview",
+            allowed_roles={"expert", "auditor"},
+        )
+        return phase15_action(
+            load_mesh_run_preview, project_root, run_id, principal=principal
         )
 
     @app.post("/scan-to-mesh/runs/{run_id}/decision", status_code=201)

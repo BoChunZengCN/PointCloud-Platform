@@ -225,6 +225,7 @@ GET  /scan-to-mesh/quality-policies
 POST /scan-to-mesh/runs
 GET  /scan-to-mesh/runs
 GET  /scan-to-mesh/runs/{run_id}
+GET  /scan-to-mesh/runs/{run_id}/preview
 POST /scan-to-mesh/runs/{run_id}/decision
 POST /scan-to-mesh/objects/{object_key}/releases
 GET  /scan-to-mesh/objects/{object_key}/releases
@@ -243,10 +244,10 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 **页面范围：** 来源类型和对象选择、配置/策略选择、创建运行、待处理/已处理列表、状态筛选、质量证据、点云/原始网格/修复网格叠加预览、风险确认、批准/驳回、发布/替换/回滚。普通角色只显示业务摘要；专家操作明确二次确认；不实现 CAD 面板。
 
-- [ ] 红灯：真实 Chrome 完成 Phase 14 创建运行→review_required→批准→发布；Phase 15E passed 自动发布；rejected 无批准按钮；待处理/已处理筛选；重复提交按钮禁用；响应不确定后使用同操作身份重试；审计角色只读；页面无本机路径和工作器日志。
-- [ ] 绿灯：原生页面接入任务 6 API；网格预览只读取服务端有界预览，不下载原始大工件；文本以 `textContent` 安全展示。
-- [ ] 验证：`uv run --extra test --extra browser-test pytest -q tests/browser/test_scan_to_mesh_workbench.py tests/browser/test_phase15e_reference_library.py --browser chromium -p no:cacheprovider`；`node --check frontend/scan-to-mesh.js` 与 `git diff --check`。
-- [ ] 提交：`feat: add expert scan-to-mesh workbench`。
+- [x] 红灯：真实 Chrome 已覆盖 Phase 14 创建运行→review_required→批准→发布、Phase 15E passed 自动发布、rejected 不可批准、待处理/已处理筛选、活动请求禁重复提交、响应不确定后同操作身份重试、审计只读以及页面不泄露本机路径/工作器日志。
+- [x] 绿灯：原生页面接入任务 6 API；新增经角色授权和完整性校验的有界点云/原始网格/修复网格预览；自动发布具备确定性决定、发布及中断恢复；页面文本以 `textContent` 安全展示。
+- [x] 验证：后端聚焦集 `31 passed`，新增有界预览契约文件复验 `17 passed`，发布/API 最终复验 `15 passed`；Task 7 真实 Chrome 验收 `6 passed`；受影响 Phase 15E 页面回归 `12 passed, 1 deselected`（排除已独立复现的 Phase 15B2 既有索引基线故障）；`node --check`、定向 `compileall` 与 `git diff --check` 通过。
+- [x] 提交：`feat: add expert scan-to-mesh workbench`；提交 SHA 以 Git 历史为准。
 
 ## 任务 8：第一里程碑集成验收、中文资料与发布就绪门禁
 

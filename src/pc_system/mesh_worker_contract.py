@@ -479,7 +479,8 @@ def _parse_ascii_ply(
     declared_triangles: int,
     maximum_vertices: int,
     maximum_triangles: int,
-) -> None:
+    preview_triangle_limit: int | None = None,
+) -> list[list[list[float]]] | None:
     if declared_vertices > maximum_vertices or declared_triangles > maximum_triangles:
         raise _error("mesh_worker_limit_exceeded", "网格顶点或三角面超过上限。")
     try:
@@ -504,7 +505,18 @@ def _parse_ascii_ply(
             values = line.split()
             if len(values) != 3 or any(not math.isfinite(float(value)) for value in values):
                 raise ValueError("invalid vertex")
-        for line in body[declared_vertices:]:
+        selected_positions = set()
+        if preview_triangle_limit is not None:
+            if type(preview_triangle_limit) is not int or preview_triangle_limit < 1:
+                raise ValueError("invalid preview triangle limit")
+            selected_positions = {
+                (index * declared_triangles) // min(
+                    preview_triangle_limit, declared_triangles
+                )
+                for index in range(min(preview_triangle_limit, declared_triangles))
+            }
+        selected_faces = []
+        for position, line in enumerate(body[declared_vertices:]):
             values = line.split()
             if len(values) != 4 or values[0] != "3":
                 raise ValueError("invalid face")
@@ -513,8 +525,84 @@ def _parse_ascii_ply(
                 index < 0 or index >= declared_vertices for index in indices
             ):
                 raise ValueError("invalid face index")
+            if position in selected_positions:
+                selected_faces.append(indices)
+        if preview_triangle_limit is None:
+            return None
+        referenced = {index for face in selected_faces for index in face}
+        vertices = {
+            index: [float(value) for value in body[index].split()]
+            for index in referenced
+        }
+        return [[vertices[index] for index in face] for face in selected_faces]
     except (UnicodeError, ValueError, OverflowError) as exc:
         raise _error("mesh_worker_artifact_invalid", "ASCII PLY 网格无效。") from exc
+
+
+def _bounded_sample(values: list, maximum_items: int) -> list:
+    if len(values) <= maximum_items:
+        return values
+    return [
+        values[(index * len(values)) // maximum_items]
+        for index in range(maximum_items)
+    ]
+
+
+def load_bounded_mesh_preview(
+    workspace: Path,
+    *,
+    maximum_source_points: int = 4096,
+    maximum_triangles_per_layer: int = 2048,
+) -> dict:
+    """从已验证工件生成不含路径的有界浏览器几何投影。"""
+
+    if (
+        type(maximum_source_points) is not int
+        or not 1 <= maximum_source_points <= 4096
+        or type(maximum_triangles_per_layer) is not int
+        or not 1 <= maximum_triangles_per_layer <= 2048
+    ):
+        raise _error("mesh_worker_limit_exceeded", "网格预览上限无效。")
+    workspace = Path(workspace)
+    request, points_document = load_mesh_worker_input(workspace)
+    result = validate_mesh_worker_result(workspace, request)
+    maximum_bytes = request["limits"]["maximum_artifact_bytes"]
+    layers = {}
+    for key, filename in (
+        ("raw_mesh", "raw_mesh.ply"),
+        ("repaired_mesh", "repaired_mesh.ply"),
+    ):
+        descriptor = result["artifacts"][key]
+        payload = _descriptor_payload(
+            workspace,
+            descriptor,
+            expected_path=filename,
+            maximum_bytes=maximum_bytes,
+        )
+        triangles = _parse_ascii_ply(
+            payload,
+            declared_vertices=descriptor["vertex_count"],
+            declared_triangles=descriptor["triangle_count"],
+            maximum_vertices=request["limits"]["maximum_vertices"],
+            maximum_triangles=request["limits"]["maximum_triangles"],
+            preview_triangle_limit=maximum_triangles_per_layer,
+        )
+        layers[key] = {
+            "vertex_count": descriptor["vertex_count"],
+            "triangle_count": descriptor["triangle_count"],
+            "triangles": triangles,
+        }
+    return {
+        "coordinate_unit": "m",
+        "source_snapshot_fingerprint": request["source_snapshot_fingerprint"],
+        "source": {
+            "point_count": len(points_document["points"]),
+            "points": _bounded_sample(
+                points_document["points"], maximum_source_points
+            ),
+        },
+        **layers,
+    }
 
 
 def _parse_glb(

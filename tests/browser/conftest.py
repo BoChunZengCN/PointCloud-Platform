@@ -1,6 +1,7 @@
 """真实生产模式 API 与静态工作台的本地浏览器验收夹具。"""
 
 import asyncio
+import copy
 import socket
 import threading
 import time
@@ -12,17 +13,25 @@ from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import expect
 
 from pc_system.api import create_app
+from pc_system import mesh_reconstruction
+from pc_system.mesh_reconstruction_config import (
+    publish_mesh_config,
+    publish_mesh_quality_policy,
+)
 from phase15c_support import DeterministicRegistrationEngine
 from phase15d_support import prepare_decision_case
 from phase15e_support import EXPERT, import_request, scan_asset, scan_source
+from test_mesh_reconstruction import FakeWorker, _metrics, _source_snapshot
+from test_mesh_reconstruction_config import POISSON_CONFIG, QUALITY_POLICY
 
 
 expect.set_options(timeout=15000)
 
 
 @pytest.fixture
-def browser_server(tmp_path, request):
+def browser_server(tmp_path, request, monkeypatch):
     mode = getattr(request, "param", "passed")
+    mesh_modes = {"mesh-review", "mesh-auto", "mesh-rejected", "mesh-slow"}
     if mode.startswith("reference") and mode != "reference-labels":
         staging = tmp_path / "imports" / "models"
         staging.mkdir(parents=True)
@@ -106,13 +115,60 @@ def browser_server(tmp_path, request):
                         idempotency_key=f"idem-page-{version_id}",
                     ),
                 )
-    case = None if mode in {"empty", "reference", "reference-history", "reference-slow", "reference-pagination", "reference-pagination-slow"} else prepare_decision_case(
+    case = None if mode in {"empty", "reference", "reference-history", "reference-slow", "reference-pagination", "reference-pagination-slow"} | mesh_modes else prepare_decision_case(
         tmp_path, mode="passed" if mode in {"slow", "reference-labels"} else mode
     )
+    mesh_worker = None
+    if mode in mesh_modes:
+        policy = copy.deepcopy(QUALITY_POLICY)
+        policy["decisions"]["auto_publish_passed"] = mode == "mesh-auto"
+        publish_mesh_config(
+            tmp_path,
+            config_id="mesh-poisson-v1",
+            config=POISSON_CONFIG,
+            principal=EXPERT,
+            operation_id="browser-mesh-config",
+            request_id="browser-mesh-config-request",
+            idempotency_key="browser-mesh-config-idem",
+        )
+        publish_mesh_quality_policy(
+            tmp_path,
+            policy_id="mesh-quality-v1",
+            policy=policy,
+            principal=EXPERT,
+            operation_id="browser-mesh-policy",
+            request_id="browser-mesh-policy-request",
+            idempotency_key="browser-mesh-policy-idem",
+        )
+
+        def browser_source(*_args, source_kind, source_ref, **_kwargs):
+            source = copy.deepcopy(_source_snapshot())
+            payload = {
+                **{key: value for key, value in source.items() if key != "fingerprint"},
+                "source_kind": source_kind,
+                "source_identity": {
+                    **source_ref,
+                    "class_id": "pipe",
+                },
+            }
+            payload["fingerprint"] = mesh_reconstruction._digest(payload)
+            return payload
+
+        monkeypatch.setattr(mesh_reconstruction, "freeze_mesh_source", browser_source)
+        coverage = {
+            "mesh-review": 0.85,
+            "mesh-slow": 0.85,
+            "mesh-auto": 1.0,
+            "mesh-rejected": 0.70,
+        }[mode]
+        mesh_worker = FakeWorker(
+            metrics=_metrics(mesh_to_point_coverage=coverage)
+        )
     app = create_app(tmp_path, run_mode="production", api_key="phase15d-test-service-key",
         principal_bindings={role + "-token": {"actor_id": role + "-browser", "roles": [role]}
                             for role in ("operator", "expert", "auditor")},
-        registration_engine_resolver=lambda _: DeterministicRegistrationEngine("passed"))
+        registration_engine_resolver=lambda _: DeterministicRegistrationEngine("passed"),
+        mesh_worker=mesh_worker)
     if mode == "slow":
         @app.middleware("http")
         async def latency(request, call_next):
@@ -129,6 +185,12 @@ def browser_server(tmp_path, request):
         @app.middleware("http")
         async def reference_catalog_latency(request, call_next):
             if request.method == "GET" and request.url.path.endswith("/scanned-versions"):
+                await asyncio.sleep(1)
+            return await call_next(request)
+    if mode == "mesh-slow":
+        @app.middleware("http")
+        async def mesh_latency(request, call_next):
+            if request.method == "POST" and request.url.path == "/scan-to-mesh/runs":
                 await asyncio.sleep(1)
             return await call_next(request)
     app.mount("/workbench", StaticFiles(directory=Path(__file__).resolve().parents[2] / "frontend"), name="workbench")
@@ -185,6 +247,24 @@ def open_reference_library(new_context, browser_server):
         suffix = "" if model_id is None else "?model=" + model_id
         page.goto(browser_server["url"] + "/workbench/model-reference-library.html" + suffix)
         return page
+    yield open_page
+    for context in contexts:
+        context.close()
+    assert errors == [], f"页面 JavaScript 异常：{errors}"
+
+
+@pytest.fixture
+def open_scan_to_mesh(new_context, browser_server):
+    contexts, errors = [], []
+
+    def open_page():
+        context = new_context(viewport={"width": 1440, "height": 1100})
+        contexts.append(context)
+        page = context.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(browser_server["url"] + "/workbench/scan-to-mesh.html")
+        return page
+
     yield open_page
     for context in contexts:
         context.close()
