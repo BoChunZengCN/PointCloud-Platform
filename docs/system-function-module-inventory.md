@@ -225,6 +225,7 @@ LAS/LAZ or FLS source
 | Phase 15C 刚性配准 / Rigid registration | 已完成 / Done | 候选证据冻结、FPFH/RANSAC/FGR、多尺度 ICP、双向指标、三态门禁和审计恢复；不自动绑定。 | rigid transform, quality gate, registration report |
 | Phase 15D 人工决策与绑定 | 已完成并通过 PR #9 合并 | 确认、候选拒绝、无匹配、不可变绑定替换/恢复、审计与并发，以及业务/专业双页面。 | match decision, binding |
 | Phase 15E 实物参考模板 | 工程范围已完成；真实样本验收未完成 | 扫描资产无需 CAD 网格即可完成标准化、质量、不可变版本、核验、发布/回滚、统一表达/索引、检索、刚性配准、人工绑定、API/CLI 与工作台；旧 CAD/历史工件只读兼容。工程夹具不代表现场准确率；新增 CAD 关联、同资产双表达、自学习和自动调参后置。 | reference template, review, release, representation, index, binding |
+| 点云转网格第一里程碑 | 工程实现已完成；本地验证中 | 可信单对象来源、Poisson/BPA 显式配置、Open3D 工作器、网格质量三态、专家决定、不可变发布/回滚、API/CLI 与专家工作台；真实样本精度和 B-rep/STEP 尚未验收或实现。 | mesh run, quality, decision, release |
 | Phase 15F 受控优化 / Controlled optimization | 已规划 / Planned | Champion/Challenger、审批、推广、回滚与审计。 | experiment report |
 
 ```powershell
@@ -285,13 +286,14 @@ python -m pc_system.cli show-model-retrieval --project-root .\workspace --asset-
 | 模型决策 | `frontend/model-decisions.html` | 自动待办、业务确认、拒绝、无匹配和处理历史。 |
 | 专业匹配 | `frontend/model-matching-lab.html` | 配准证据、专家重新配准、版本替换/恢复和只读审计。 |
 | 扫描参考模板 | `frontend/model-reference-library.html` | 扫描版本导入、核验、发布、索引提示、来源标识和只读审计。 |
+| 点云转网格专家工作台 | `frontend/scan-to-mesh.html` | 网格运行、质量复核、发布/回滚、待处理与历史清单。 |
 | 设计候选 / Design options | `frontend/design-options/` | UI 风格候选页面。 |
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. Phase 15D：已通过 PR #9 合并至 `main`（`5385ade`）；参见 [人工决策与绑定操作说明](phase15d-human-decisions-bindings.md)。
-2. Phase 15E：收集真实业务扫描正/负例及设备、单位、预处理与人工真值，分别记录 Top-K、双向残差、覆盖率和人工绑定结论；工程夹具不得替代该验收。
-3. Phase 15F：实现受控参数优化、审批、推广和回滚。
+1. 点云转网格第一里程碑：完成本地门禁与最终复审后提交；参见[中文操作说明](scan-to-mesh-milestone1.md)。
+2. Phase 15E 与点云转网格：收集真实业务扫描正/负例及设备、单位、预处理与人工真值，分别记录检索/配准、网格质量和人工结论；工程夹具不得替代该验收。
+3. 第二层 B-rep/STEP 与 Phase 15F 受控参数优化分别设计和验收。
 
 
 

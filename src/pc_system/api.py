@@ -64,6 +64,7 @@ from pc_system.model_registration_config import (
 from pc_system.model_registration_open3d import resolve_registration_engine
 from pc_system.mesh_reconstruction import _read_canonical as read_mesh_document
 from pc_system.mesh_reconstruction import create_mesh_run
+from pc_system.mesh_worker_deployment import resolve_admin_mesh_worker
 from pc_system.mesh_release import (
     auto_release_passed_mesh_run,
     decide_mesh_run,
@@ -790,6 +791,8 @@ def create_app(
     if resolved_run_mode == "production" and not resolved_api_key:
         raise ValueError("PC_SYSTEM_API_KEY is required in production mode.")
     resolved_principal_bindings = _freeze_principal_bindings(principal_bindings)
+    if mesh_worker is None:
+        mesh_worker = resolve_admin_mesh_worker()
     cors_origins = [] if resolved_run_mode == "production" else ["*"]
     app = FastAPI(title="Point Cloud Platform API", version="0.1.0")
     app.add_middleware(

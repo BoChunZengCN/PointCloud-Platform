@@ -253,18 +253,20 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 **文件：** 新增 `tests/test_scan_to_mesh_integration.py`、`docs/scan-to-mesh-milestone1.md`；更新 `README.md`、现有功能盘点文档、`.github/workflows/test.yml` 和本计划验证记录。
 
+**实施前设计补充（2026-10-22）：** 任务 3 已实现外部工作器适配器，但普通 CLI 与 `uvicorn` 启动尚未解析管理员部署配置，导致工程验收通过后仍无法从常规入口创建网格运行。任务 8 增加最小部署接线：仅从进程环境读取一对管理员设置的绝对普通文件路径（Python 可执行文件、固定工作器脚本），构成无 Shell 的固定命令元组；显式注入的测试/宿主工作器优先。两项均未设置时保持 `mesh_worker_unavailable`，只设置一项或路径无效时启动失败。请求体、CLI 业务参数和项目工件不得指定命令；结果仍按既有工件完整性验证。威胁边界是部署管理员可信、业务请求不可信，工作器凭证及二进制更新属于部署管理。本补充不改输入、质量、审计或发布语义。
+
 **验收内容：**
 
 - 工程夹具端到端覆盖 Phase 14 和 Phase 15E 两类来源、Poisson/BPA 显式配置、三态门禁、人工决定、发布、历史和回滚；保存关键上游与发布 SHA 快照，证明旧 Phase 14/15E/模型库工件未被修改。
 - CI 核心任务运行假工作器的完整契约和状态机；独立可选任务安装 `mesh-reconstruction` 并执行 Open3D 小型集成测试；浏览器任务执行工作台流程。
 - 中文说明明确安装、管理员工作器配置、发布配置/策略、CLI/API 用法、错误码、恢复操作、资源限制、真实精度未验收和第二层尚未实现。
 
-- [ ] 聚焦集成：`uv run --extra test pytest -q tests/test_scan_to_mesh_integration.py -p no:cacheprovider`。
-- [ ] 全仓非浏览器门禁（本阶段只运行一次）：`uv run --extra test pytest -q tests --ignore=tests/browser -p no:cacheprovider`。
-- [ ] 浏览器门禁（本阶段只运行一次）：`uv run --extra test --extra browser-test pytest -q tests/browser --browser chromium -p no:cacheprovider`。
-- [ ] 可选 Open3D 门禁：`uv run --extra test --extra mesh-reconstruction pytest -q tests/test_mesh_open3d_worker.py -p no:cacheprovider`。
-- [ ] 静态门禁：`python -m compileall -q src workers tests`、全部受影响 JS 的 `node --check`、`git diff --check`、精确暂存差异检查。
-- [ ] 最终复审：范围为规格/计划基线提交到实现 HEAD，只报告严重/重要问题；五个“最终复审重点”逐项给出测试证据。最多一轮复审修复提交；若同类重要问题第二轮仍存在，停止补丁并重新设计。
+- [x] 聚焦集成：Task 8 新增测试 `6 passed`；独立复审补强旧发布工件 SHA 复验与真实固定子进程入口后，网格受影响模块回归 `104 passed, 2 skipped, 1 warning`。跳过项为本机未安装 Open3D 的真实算法小样本。
+- [ ] 全仓非浏览器门禁：首次收集发现 `workers` 导入路径缺失并修复；复验首个失败为 `1135 passed, 3 skipped` 后 Phase 15D 扫描候选夹具触发 `model_index_coverage_rejected`。同一测试在未修改的 `main` 检出上单独复现，属于既有基线故障；本任务不更改旧索引门槛。
+- [ ] 浏览器门禁：本机缺少 Playwright 自带 Chromium，改用已安装 Chrome；结果 `19 passed, 6 errors`，6 个错误均为旧 Phase 15D/15E 页面夹具的同一索引覆盖率故障。新增网格工作台 6 个场景全部通过。
+- [x] 可选 Open3D 契约：`3 passed, 2 skipped`；真实 Open3D 小样本仍待安装可选依赖后执行，不能记作真实算法已通过。
+- [x] 静态门禁：`compileall`、`node --check frontend/scan-to-mesh.js`、`git diff --check` 通过；中文说明的配置/策略 JSON 经实际构建器校验通过。精确暂存差异待提交前复核。
+- [x] 最终复审：独立只读复审未发现生产逻辑严重或重要缺陷；提出两项重要验收证据缺口（旧发布 SHA、真实固定子进程），已各补一项测试并通过聚焦复验。旧索引基线故障不归入本次新缺陷。
 - [ ] 提交：`feat: complete scan-to-mesh milestone one`。未经用户新授权，不推送、不合并、不发布标签。
 
 ## 计划自检
@@ -279,4 +281,4 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 基线：`origin/main` 的 `054c9bf`。规格提交：`1f17342`。实施分支：`codex/scan-to-cad-design`，工作树：`.worktrees/phase15e-scanned-reference`。
 
-当前状态：计划待用户确认。确认后从任务 1 开始，不越过红灯测试，也不提前推送或合并。
+2026-10-22 状态：任务 1–7 已完成并通过 PR #10 进入 `main`。任务 8 的集成、部署接线、中文资料与 CI 配置已在本地分支实现；全仓和全浏览器发布就绪门禁仍受已在 `main` 复现的旧索引覆盖率夹具故障阻塞，真实 Open3D 小样本因本机缺少依赖而跳过。不得把这两项描述为全绿，也不因此扩大本次功能范围。任务 8 完成复审和提交后，推送/合并须另获用户授权。
