@@ -75,6 +75,7 @@ from pc_system.commands.scan_to_mesh import (
     run_release_mesh,
     run_show_mesh_run,
 )
+from pc_system.mesh_worker_deployment import resolve_admin_mesh_worker
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
     run_export_delivery_package,
@@ -576,6 +577,8 @@ def main(
                 idempotency_key=args.idempotency_key,
             )
         if args.command == "scan-to-mesh-run":
+            if mesh_worker is None:
+                mesh_worker = resolve_admin_mesh_worker()
             return run_create_mesh_run(
                 args.project_root,
                 run_id=args.run_id,

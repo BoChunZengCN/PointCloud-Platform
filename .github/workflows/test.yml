@@ -3,6 +3,7 @@ name: test
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   pytest:
@@ -14,7 +15,8 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[test,scanned-reference]"
-      - run: python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider
+      - name: 后端与点云转网格集成验收
+        run: python -m pytest tests --ignore=tests/browser -q -p no:cacheprovider
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -25,9 +27,23 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[test,browser-test,scanned-reference]"
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest tests/browser -q --browser chromium --tracing retain-on-failure --screenshot only-on-failure --output test-results -p no:cacheprovider
+      - name: 浏览器工作台验收
+        run: python -m pytest tests/browser -q --browser chromium --tracing retain-on-failure --screenshot only-on-failure --output test-results -p no:cacheprovider
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: phase15e-browser-failure
           path: test-results/
+  mesh-open3d:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: 安装可选 Open3D 工作器依赖
+        run: python -m pip install -e ".[test,mesh-reconstruction]"
+      - name: 真实 Open3D 小型集成验收
+        run: python -m pytest tests/test_mesh_open3d_worker.py -q -p no:cacheprovider
