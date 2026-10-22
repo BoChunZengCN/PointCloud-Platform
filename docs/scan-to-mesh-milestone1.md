@@ -110,3 +110,5 @@ python -m pc_system.cli mesh-release --project-root .\workspace --object-key <�
 ## 验证方式与未完成项
 
 核心工程验收使用真实 Phase 14/15E 冻结工件、两种显式算法配置与确定性假工作器覆盖三态、审批、发布、历史和回滚，并对上游文件做 SHA-256 前后比对。可选 Open3D 测试使用小球面点云执行真实 Poisson/Ball Pivoting；GitHub Actions 的 `workflow_dispatch` 提供独立 `mesh-open3d` 作业。浏览器任务执行专家工作台流程。工程通过后仍须另做真实管道、法兰、罐体和梁柱样本的人工真值及误差验收。
+
+Windows 本地运行全仓测试时，建议指定**短且未使用过**的 `--basetemp` 目录，例如 `C:\Users\<用户名>\AppData\Local\Temp\t8f`。扫描参考表达、特征 ID 和 pytest 用例名叠加后可能超过 Windows 路径长度；此时底层临时文件写入失败可被索引覆盖率报告间接呈现，不能据此降低生产覆盖率阈值。浏览器测试若未安装 Playwright 自带 Chromium，可在已安装 Chrome 的环境中使用 `--browser chromium --browser-channel chrome`；CI 仍安装并使用受控的 Chromium。

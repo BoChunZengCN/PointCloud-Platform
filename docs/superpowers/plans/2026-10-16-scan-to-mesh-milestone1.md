@@ -246,7 +246,7 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 - [x] 红灯：真实 Chrome 已覆盖 Phase 14 创建运行→review_required→批准→发布、Phase 15E passed 自动发布、rejected 不可批准、待处理/已处理筛选、活动请求禁重复提交、响应不确定后同操作身份重试、审计只读以及页面不泄露本机路径/工作器日志。
 - [x] 绿灯：原生页面接入任务 6 API；新增经角色授权和完整性校验的有界点云/原始网格/修复网格预览；自动发布具备确定性决定、发布及中断恢复；页面文本以 `textContent` 安全展示。
-- [x] 验证：后端聚焦集 `31 passed`，新增有界预览契约文件复验 `17 passed`，发布/API 最终复验 `15 passed`；Task 7 真实 Chrome 验收 `6 passed`；受影响 Phase 15E 页面回归 `12 passed, 1 deselected`（排除已独立复现的 Phase 15B2 既有索引基线故障）；`node --check`、定向 `compileall` 与 `git diff --check` 通过。
+- [x] 验证：后端聚焦集 `31 passed`，新增有界预览契约文件复验 `17 passed`，发布/API 最终复验 `15 passed`；Task 7 真实 Chrome 验收 `6 passed`；受影响 Phase 15E 页面回归当时为 `12 passed, 1 deselected`。2026-10-22 复盘确认被排除用例的索引覆盖率错误由 Windows 测试临时路径过长触发，并非生产索引阈值缺陷；`node --check`、定向 `compileall` 与 `git diff --check` 通过。
 - [x] 提交：`feat: add expert scan-to-mesh workbench`；提交 SHA 以 Git 历史为准。
 
 ## 任务 8：第一里程碑集成验收、中文资料与发布就绪门禁
@@ -261,13 +261,13 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 - CI 核心任务运行假工作器的完整契约和状态机；独立可选任务安装 `mesh-reconstruction` 并执行 Open3D 小型集成测试；浏览器任务执行工作台流程。
 - 中文说明明确安装、管理员工作器配置、发布配置/策略、CLI/API 用法、错误码、恢复操作、资源限制、真实精度未验收和第二层尚未实现。
 
-- [x] 聚焦集成：Task 8 新增测试 `6 passed`；独立复审补强旧发布工件 SHA 复验与真实固定子进程入口后，网格受影响模块回归 `104 passed, 2 skipped, 1 warning`。跳过项为本机未安装 Open3D 的真实算法小样本。
-- [ ] 全仓非浏览器门禁：首次收集发现 `workers` 导入路径缺失并修复；复验首个失败为 `1135 passed, 3 skipped` 后 Phase 15D 扫描候选夹具触发 `model_index_coverage_rejected`。同一测试在未修改的 `main` 检出上单独复现，属于既有基线故障；本任务不更改旧索引门槛。
-- [ ] 浏览器门禁：本机缺少 Playwright 自带 Chromium，改用已安装 Chrome；结果 `19 passed, 6 errors`，6 个错误均为旧 Phase 15D/15E 页面夹具的同一索引覆盖率故障。新增网格工作台 6 个场景全部通过。
-- [x] 可选 Open3D 契约：`3 passed, 2 skipped`；真实 Open3D 小样本仍待安装可选依赖后执行，不能记作真实算法已通过。
+- [x] 聚焦集成：Task 8 新增测试 `6 passed`；独立复审补强旧发布工件 SHA 复验与真实固定子进程入口后，网格受影响模块回归 `104 passed, 2 skipped, 1 warning`。随后安装 Open3D 0.20.0，真实算法小样本单独复验通过。
+- [x] 全仓非浏览器门禁：最初的 `model_index_coverage_rejected` 经追踪为 Windows 测试临时路径过长，扫描特征临时文件创建失败后被聚合为覆盖率不足；用短路径复验原失败用例通过，生产阈值和持久化规则未改。短路径首轮唯一失败为本任务遗漏 Phase 15D 文档链接；恢复后聚焦 `2 passed`，安装 Open3D 后最终全仓 `1445 passed, 1 warning`，无跳过。
+- [x] 浏览器门禁：本机缺少 Playwright 自带 Chromium，改用已安装 Chrome 和短测试临时路径；完整浏览器集 `25 passed`，包括新增网格工作台全部 6 个场景。
+- [x] 可选 Open3D 契约：安装 Open3D 0.20.0 后，小样本真实 Poisson/Ball Pivoting 测试 `5 passed`，无跳过。
 - [x] 静态门禁：`compileall`、`node --check frontend/scan-to-mesh.js`、`git diff --check` 通过；中文说明的配置/策略 JSON 经实际构建器校验通过。精确暂存差异待提交前复核。
-- [x] 最终复审：独立只读复审未发现生产逻辑严重或重要缺陷；提出两项重要验收证据缺口（旧发布 SHA、真实固定子进程），已各补一项测试并通过聚焦复验。旧索引基线故障不归入本次新缺陷。
-- [ ] 提交：`feat: complete scan-to-mesh milestone one`。未经用户新授权，不推送、不合并、不发布标签。
+- [x] 最终复审：独立只读复审未发现生产逻辑严重或重要缺陷；提出两项重要验收证据缺口（旧发布 SHA、真实固定子进程），已各补一项测试并通过聚焦复验。后续追踪进一步澄清：索引覆盖率报错由 Windows 临时路径长度引起，文档链接遗漏属于本任务回归并已修复。
+- [x] 提交：`6e07ee9 feat: complete scan-to-mesh milestone one`。2026-10-22 用户已批准在门禁通过后推送、创建 PR 并合并；最终全仓复验已通过，提交文档修订前仍须检查精确暂存差异。
 
 ## 计划自检
 
@@ -281,4 +281,4 @@ GET  /scan-to-mesh/objects/{object_key}/releases
 
 基线：`origin/main` 的 `054c9bf`。规格提交：`1f17342`。实施分支：`codex/scan-to-cad-design`，工作树：`.worktrees/phase15e-scanned-reference`。
 
-2026-10-22 状态：任务 1–7 已完成并通过 PR #10 进入 `main`。任务 8 的集成、部署接线、中文资料与 CI 配置已在本地分支实现；全仓和全浏览器发布就绪门禁仍受已在 `main` 复现的旧索引覆盖率夹具故障阻塞，真实 Open3D 小样本因本机缺少依赖而跳过。不得把这两项描述为全绿，也不因此扩大本次功能范围。任务 8 完成复审和提交后，推送/合并须另获用户授权。
+2026-10-22 状态：任务 1–7 已通过 PR #10 进入 `main`，任务 8 的集成、部署接线、中文资料与 CI 配置已在本地提交 `6e07ee9`。起初在 `main` 也复现的索引覆盖率错误，后经原始异常追踪确认是相同 Windows 长临时路径环境造成；缩短 pytest `--basetemp` 后原用例通过。修复本次遗漏的 Phase 15D 文档链接后，最终后端 `1445 passed`、浏览器 `25 passed`、真实 Open3D 小样本 `5 passed`；均以对应命令的退出码 0 为准。用户已授权通过门禁后推送、创建 PR 与合并，真实工业样本精度验收和第二层 CAD 重建不在本轮。

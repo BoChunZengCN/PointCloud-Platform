@@ -291,7 +291,7 @@ python -m pc_system.cli show-model-retrieval --project-root .\workspace --asset-
 
 ## 当前后续建议 / Recommended Next Iterations
 
-1. 点云转网格第一里程碑：完成本地门禁与最终复审后提交；参见[中文操作说明](scan-to-mesh-milestone1.md)。
+1. Phase 15D 人工决策与绑定已完成；参见[人工决策与绑定操作说明](phase15d-human-decisions-bindings.md)。点云转网格第一里程碑参见[中文操作说明](scan-to-mesh-milestone1.md)。
 2. Phase 15E 与点云转网格：收集真实业务扫描正/负例及设备、单位、预处理与人工真值，分别记录检索/配准、网格质量和人工结论；工程夹具不得替代该验收。
 3. 第二层 B-rep/STEP 与 Phase 15F 受控参数优化分别设计和验收。
 
