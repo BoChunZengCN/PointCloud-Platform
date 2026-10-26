@@ -376,6 +376,25 @@ async function renderShowcase(registry, selectedAssetId = selectedAssetIdFromUrl
   renderViewerTasks(asset);
   renderShowcaseLinks(asset, deliveryStatus);
   renderInitialEmbeddedViewer(asset, deliveryStatus);
+  void refreshFullPreviewEntry(asset.asset_id);
+}
+
+async function refreshFullPreviewEntry(assetId) {
+  const link = document.getElementById("full-las-nav");
+  if (!link) return;
+  link.hidden = true;
+  try {
+    const response = await fetch("/api/full-previews", { cache: "no-store" });
+    if (!response.ok) return;
+    const catalog = await response.json();
+    const published = catalog.previews?.find((item) => item.asset_id === assetId) || catalog.previews?.[0];
+    if (!published?.run_id) return;
+    link.href = `full-las-preview.html?asset_id=${encodeURIComponent(published.asset_id)}`;
+    link.textContent = `完整点云分层预览 · ${published.asset_id}`;
+    link.hidden = false;
+  } catch (_error) {
+    // 旧的静态展示模式没有本机完整预览服务时，入口保持隐藏。
+  }
 }
 
 function textElement(tagName, text) {
