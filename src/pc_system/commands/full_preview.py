@@ -8,6 +8,7 @@ from pc_system.full_preview_publication import (
     list_preview_versions,
     prepare_full_preview,
 )
+from pc_system.full_preview_server import create_preview_server
 
 
 def _display(result) -> dict:
@@ -35,4 +36,21 @@ def run_list_full_preview_versions(project_root: Path, asset_id: str) -> int:
 def run_activate_full_preview_version(project_root: Path, asset_id: str, run_id: str) -> int:
     result = activate_preview_version(project_root, asset_id, run_id)
     print(json.dumps(_display(result), ensure_ascii=False))
+    return 0
+
+
+def run_serve_full_preview(
+    project_root: Path, frontend_root: Path, viewer_root: Path, port: int
+) -> int:
+    server = create_preview_server(
+        project_root, frontend_root, "127.0.0.1", port, viewer_root=viewer_root
+    )
+    try:
+        print(f"完整点云本机预览：http://127.0.0.1:{server.server_port}/frontend/viewer.html", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+    finally:
+        server.server_close()
     return 0

@@ -732,6 +732,14 @@ def build_parser() -> argparse.ArgumentParser:
     full_activate.add_argument("--project-root", required=True, type=Path)
     full_activate.add_argument("--asset-id", required=True)
     full_activate.add_argument("--run-id", required=True)
+
+    full_serve = subparsers.add_parser(
+        "serve-full-preview", help="在 127.0.0.1 启动完整点云只读预览服务。"
+    )
+    full_serve.add_argument("--project-root", required=True, type=Path)
+    full_serve.add_argument("--frontend-root", required=True, type=Path)
+    full_serve.add_argument("--viewer-root", required=True, type=Path)
+    full_serve.add_argument("--port", type=int, default=8765)
     return parser
 
 
