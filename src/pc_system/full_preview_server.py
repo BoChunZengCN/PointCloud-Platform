@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from pc_system.full_preview_publication import get_active_preview, list_preview_versions
+from pc_system.full_preview_dependencies import verify_viewer_bundle
 from pc_system.identifiers import validate_identifier
 
 _RANGE = re.compile(r"^bytes=(\d+)-(\d+)$")
@@ -71,6 +72,8 @@ def create_preview_server(
     viewer_root = _safe_root(viewer_root) if viewer_root is not None else None
     if viewer_root is not None and not viewer_root.is_dir():
         raise ValueError("Potree 查看器静态目录不存在。")
+    if viewer_root is not None:
+        verify_viewer_bundle(viewer_root)
 
     class PreviewHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # noqa: A002
@@ -101,7 +104,10 @@ def create_preview_server(
             self.end_headers()
             with path.open("rb") as handle:
                 while chunk := handle.read(64 * 1024):
-                    self.wfile.write(chunk)
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                        return
 
         def _range_error(self, size: int):
             self.send_response(416)
@@ -136,7 +142,10 @@ def create_preview_server(
                     chunk = handle.read(min(64 * 1024, remaining))
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                        return
                     remaining -= len(chunk)
 
         def _catalog(self):
@@ -157,6 +166,7 @@ def create_preview_server(
                         "asset_id": active.asset_id,
                         "run_id": active.run_id,
                         "metadata_url": active.metadata_url,
+                        "source_name": manifest.get("source_name"),
                         "source_point_count": manifest.get("source_point_count"),
                         "source_unit": manifest.get("source_unit"),
                         "rgb_available": manifest.get("rgb_available"),

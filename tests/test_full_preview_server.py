@@ -133,3 +133,33 @@ def test_reparse_static_root_is_rejected_at_startup(tmp_path):
         pytest.skip("当前 Windows 环境未允许创建测试符号链接")
     with pytest.raises(ValueError, match="重解析|符号"):
         create_preview_server(project, linked)
+
+
+def test_client_disconnect_during_range_stream_is_normal(preview_server):
+    server, run = preview_server
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = {"Range": "bytes=0-99"}
+    handler.send_response = lambda *args: None
+    handler.send_header = lambda *args: None
+    handler.end_headers = lambda: None
+
+    class Disconnected:
+        def write(self, _data):
+            raise ConnectionAbortedError("browser closed the request")
+
+    handler.wfile = Disconnected()
+    handler._serve_range(run / "octree.bin")
+
+
+def test_unverified_viewer_bundle_is_rejected_at_startup(tmp_path):
+    from pc_system.full_preview_server import create_preview_server
+
+    project = tmp_path / "project"
+    frontend = tmp_path / "frontend"
+    viewer = tmp_path / "viewer"
+    project.mkdir()
+    frontend.mkdir()
+    (viewer / "build/potree").mkdir(parents=True)
+    (viewer / "build/potree/potree.js").write_bytes(b"wrong viewer")
+    with pytest.raises(ValueError, match="查看器.*指纹|查看器.*版本"):
+        create_preview_server(project, frontend, viewer_root=viewer)

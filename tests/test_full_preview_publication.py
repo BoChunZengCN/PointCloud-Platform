@@ -7,6 +7,13 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _trust_only_the_fake_converter_for_publication_tests(monkeypatch):
+    import pc_system.full_preview_publication as publication
+
+    monkeypatch.setattr(publication, "verify_converter_binary", lambda _path: "test-converter-sha256")
+
+
 def _small_las() -> bytes:
     header = bytearray(227)
     header[:4] = b"LASF"
@@ -131,3 +138,69 @@ def test_corrupt_manifest_cannot_become_active_after_restart(tmp_path, monkeypat
     manifest.write_text(json.dumps(data), encoding="utf-8")
     assert publication.get_active_preview(project, "machine-zoom") is None
     assert publication.list_preview_versions(project, "machine-zoom") == []
+
+
+def test_failed_status_blocks_even_ready_manifest(tmp_path, monkeypatch):
+    import pc_system.full_preview_publication as publication
+
+    project, source, converter = _inputs(tmp_path)
+    monkeypatch.setattr(publication, "convert_and_validate", _fake_convert)
+    published = publication.prepare_full_preview(project, source, "machine-zoom", converter)
+    (published.run_dir / "status.json").write_text('{"status":"failed"}', encoding="utf-8")
+    assert publication.get_active_preview(project, "machine-zoom") is None
+    assert publication.list_preview_versions(project, "machine-zoom") == []
+
+
+def test_active_write_failure_cannot_leave_ready_version(tmp_path, monkeypatch):
+    import pc_system.full_preview_publication as publication
+
+    project, source, converter = _inputs(tmp_path)
+    monkeypatch.setattr(publication, "convert_and_validate", _fake_convert)
+    first = publication.prepare_full_preview(project, source, "machine-zoom", converter)
+
+    def fail_active(*_args):
+        raise OSError("active replace failed")
+
+    monkeypatch.setattr(publication, "_write_active", fail_active)
+    with pytest.raises(OSError, match="active replace failed"):
+        publication.prepare_full_preview(project, source, "machine-zoom", converter)
+    assert publication.get_active_preview(project, "machine-zoom") == first
+    assert [item.run_id for item in publication.list_preview_versions(project, "machine-zoom")] == [first.run_id]
+    runs = list((project / "workspace/previews/machine-zoom/runs").iterdir())
+    failed = next(item for item in runs if item.name != first.run_id)
+    assert (failed / "status.json").is_file()
+    with pytest.raises(ValueError, match="已完成"):
+        publication.activate_preview_version(project, "machine-zoom", failed.name)
+
+
+def test_unknown_converter_binary_is_rejected_before_run(tmp_path, monkeypatch):
+    import pc_system.full_preview_publication as publication
+    from pc_system.full_preview_dependencies import verify_converter_binary
+
+    project, source, converter = _inputs(tmp_path)
+    monkeypatch.setattr(publication, "verify_converter_binary", verify_converter_binary)
+    with pytest.raises(ValueError, match="转换器.*指纹|转换器.*版本"):
+        publication.prepare_full_preview(project, source, "machine-zoom", converter)
+    assert publication.get_active_preview(project, "machine-zoom") is None
+
+
+def test_ready_manifest_write_failure_restores_previous_active(tmp_path, monkeypatch):
+    import pc_system.full_preview_publication as publication
+
+    project, source, converter = _inputs(tmp_path)
+    monkeypatch.setattr(publication, "convert_and_validate", _fake_convert)
+    first = publication.prepare_full_preview(project, source, "machine-zoom", converter)
+    original_write = publication.write_json
+
+    def fail_ready(data, path):
+        if path.name == "manifest.json" and data.get("status") == "ready":
+            pointer = project / "workspace/previews/machine-zoom/active.json"
+            assert json.loads(pointer.read_text(encoding="utf-8"))["run_id"] != first.run_id
+            raise OSError("manifest commit failed")
+        return original_write(data, path)
+
+    monkeypatch.setattr(publication, "write_json", fail_ready)
+    with pytest.raises(OSError, match="manifest commit failed"):
+        publication.prepare_full_preview(project, source, "machine-zoom", converter)
+    assert publication.get_active_preview(project, "machine-zoom").run_id == first.run_id
+    assert [item.run_id for item in publication.list_preview_versions(project, "machine-zoom")] == [first.run_id]

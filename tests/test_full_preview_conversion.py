@@ -32,11 +32,16 @@ def _write_output(run_dir: Path, **changes: object) -> None:
         "version": "2.0",
         "points": 3,
         "encoding": "DEFAULT",
+        "offset": [1.0, 2.0, 3.0],
+        "scale": [0.001, 0.001, 0.001],
+        "spacing": 0.1,
         "hierarchy": {"firstChunkSize": 22, "stepSize": 4, "depth": 0},
         "boundingBox": {"min": [1.0, 2.0, 3.0], "max": [4.0, 5.0, 6.0]},
         "attributes": [
-            {"name": "position", "size": 12, "numElements": 3, "elementSize": 4},
-            {"name": "rgb", "size": 6, "numElements": 3, "elementSize": 2},
+            {"name": "position", "size": 12, "numElements": 3, "elementSize": 4,
+             "type": "int32", "min": [1, 2, 3], "max": [4, 5, 6]},
+            {"name": "rgb", "size": 6, "numElements": 3, "elementSize": 2,
+             "type": "uint16", "min": [0, 0, 0], "max": [65535, 65535, 65535]},
         ],
     }
     metadata.update(changes)
@@ -139,6 +144,69 @@ def test_empty_inner_node_with_geometry_child_is_accepted(tmp_path, monkeypatch)
         (run_dir / "hierarchy.bin").write_bytes(root + child)
 
     assert _execute(tmp_path, monkeypatch, write_inner).point_count == 3
+
+
+def test_converter_empty_leaf_sentinel_is_accepted(tmp_path, monkeypatch):
+    def write_with_empty_leaf(run_dir):
+        _write_output(run_dir, hierarchy={"firstChunkSize": 44, "stepSize": 4, "depth": 1})
+        root = struct.pack("<BBIQQ", 0, 1, 3, 0, 54)
+        empty_leaf = struct.pack("<BBIQQ", 1, 0, 0, 0, 0)
+        (run_dir / "hierarchy.bin").write_bytes(root + empty_leaf)
+
+    assert _execute(tmp_path, monkeypatch, write_with_empty_leaf).point_count == 3
+
+
+def test_nonempty_leaf_with_zero_bytes_is_rejected(tmp_path, monkeypatch):
+    def write_invalid_leaf(run_dir):
+        _write_output(run_dir)
+        (run_dir / "hierarchy.bin").write_bytes(struct.pack("<BBIQQ", 1, 0, 3, 0, 0))
+
+    with pytest.raises(ValueError, match="节点"):
+        _execute(tmp_path, monkeypatch, write_invalid_leaf)
+
+
+@pytest.mark.parametrize("missing", ["type", "numElements", "min", "max"])
+def test_loader_required_attribute_field_missing_is_rejected(tmp_path, monkeypatch, missing):
+    def write_invalid(run_dir):
+        _write_output(run_dir)
+        path = run_dir / "metadata.json"
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        del metadata["attributes"][0][missing]
+        path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="属性"):
+        _execute(tmp_path, monkeypatch, write_invalid)
+
+
+@pytest.mark.parametrize("missing", ["offset", "scale", "spacing"])
+def test_loader_required_geometry_metadata_missing_is_rejected(tmp_path, monkeypatch, missing):
+    def write_invalid(run_dir):
+        _write_output(run_dir)
+        path = run_dir / "metadata.json"
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        del metadata[missing]
+        path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Potree"):
+        _execute(tmp_path, monkeypatch, write_invalid)
+
+
+def test_hierarchy_child_mask_without_child_record_is_rejected(tmp_path, monkeypatch):
+    def write_invalid(run_dir):
+        _write_output(run_dir)
+        (run_dir / "hierarchy.bin").write_bytes(struct.pack("<BBIQQ", 0, 1, 3, 0, 54))
+
+    with pytest.raises(ValueError, match="层级"):
+        _execute(tmp_path, monkeypatch, write_invalid)
+
+
+def test_converter_unreferenced_hierarchy_record_does_not_invalidate_reachable_tree(tmp_path, monkeypatch):
+    def write_with_padding(run_dir):
+        _write_output(run_dir)
+        extra = struct.pack("<BBIQQ", 1, 0, 0, 0, 0)
+        (run_dir / "hierarchy.bin").write_bytes(struct.pack("<BBIQQ", 1, 0, 3, 0, 54) + extra)
+
+    assert _execute(tmp_path, monkeypatch, write_with_padding).point_count == 3
 
 
 def test_source_change_during_conversion_rejected(tmp_path, monkeypatch):

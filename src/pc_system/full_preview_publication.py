@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -13,6 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pc_system.full_preview_conversion import convert_and_validate
+from pc_system.full_preview_dependencies import (
+    CONVERTER_VERSION,
+    VIEWER_SHA256,
+    VIEWER_VERSION,
+    verify_converter_binary,
+)
 from pc_system.full_preview_source import inspect_las_source
 from pc_system.identifiers import validate_identifier
 from pc_system.json_io import write_json
@@ -72,14 +77,6 @@ def _audit(root: Path, event: str, run_id: str, **details: object) -> None:
         os.fsync(handle.fileno())
 
 
-def _fingerprint(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(4 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _manifest_path(root: Path, run_id: str) -> Path:
     validate_identifier(run_id, "run_id")
     return root / "runs" / run_id / "manifest.json"
@@ -88,6 +85,8 @@ def _manifest_path(root: Path, run_id: str) -> Path:
 def _load_published(root: Path, asset_id: str, run_id: str) -> PublishedPreview | None:
     path = _manifest_path(root, run_id)
     if _is_reparse(root / "runs") or _is_reparse(path.parent):
+        return None
+    if (path.parent / "status.json").exists() or _is_reparse(path.parent / "status.json"):
         return None
     if _is_reparse(path) or not path.is_file() or path.stat().st_size > 1024 * 1024:
         return None
@@ -136,11 +135,9 @@ def prepare_full_preview(
         raise RuntimeError(f"资产 {asset_id} 正在准备完整预览；请等待或人工检查残留锁。") from exc
     try:
         source = inspect_las_source(source_path, asset_id)
-        if not Path(converter_path).is_file():
-            raise ValueError("转换器路径无效。")
+        converter_sha256 = verify_converter_binary(Path(converter_path))
         if shutil.disk_usage(root).free < source.size * 3:
             raise RuntimeError("预览工作盘空间不足：至少需要来源大小的三倍空闲容量。")
-        converter_sha256 = _fingerprint(Path(converter_path))
         run_id = uuid.uuid4().hex
         runs = root / "runs"
         if _is_reparse(runs):
@@ -148,12 +145,14 @@ def prepare_full_preview(
         runs.mkdir(exist_ok=True)
         run_dir = runs / run_id
         _audit(root, "prepare_started", run_id, source_sha256=source.sha256, converter_sha256=converter_sha256)
+        active_changed = False
+        previous = get_active_preview(project_root, asset_id)
         try:
             output = convert_and_validate(source, converter_path, run_dir)
             metadata_url = f"/previews/{asset_id}/runs/{run_id}/metadata.json"
             manifest = {
-                "schema": 1,
-                "status": "ready",
+                "schema": 2,
+                "status": "preparing",
                 "asset_id": asset_id,
                 "run_id": run_id,
                 "created_at": _now(),
@@ -166,6 +165,9 @@ def prepare_full_preview(
                 "source_point_count": source.point_count,
                 "source_unit": source.unit,
                 "converter_sha256": converter_sha256,
+                "converter_version": CONVERTER_VERSION,
+                "viewer_version": VIEWER_VERSION,
+                "viewer_sha256": VIEWER_SHA256,
                 "metadata_url": metadata_url,
                 "bounds": output.bounds,
                 "rgb_available": output.rgb_available,
@@ -173,11 +175,22 @@ def prepare_full_preview(
             write_json(manifest, run_dir / "manifest.json")
             _audit(root, "publish_intent", run_id, source_sha256=source.sha256)
             _write_active(root, asset_id, run_id, "publish")
+            active_changed = True
+            manifest["status"] = "ready"
+            write_json(manifest, run_dir / "manifest.json")
             return PublishedPreview(asset_id, run_id, run_dir, metadata_url, manifest)
         except Exception as exc:
-            if run_dir.exists() and not (run_dir / "manifest.json").exists():
+            if active_changed:
+                if previous is None:
+                    (root / "active.json").unlink(missing_ok=True)
+                else:
+                    _write_active(root, asset_id, previous.run_id, "recover")
+            if run_dir.exists():
                 write_json({"status": "failed", "run_id": run_id, "reason": str(exc)[:500]}, run_dir / "status.json")
-            _audit(root, "prepare_failed", run_id, reason=str(exc)[:500])
+            try:
+                _audit(root, "prepare_failed", run_id, reason=str(exc)[:500])
+            except OSError:
+                pass
             raise
     finally:
         lock.rmdir()

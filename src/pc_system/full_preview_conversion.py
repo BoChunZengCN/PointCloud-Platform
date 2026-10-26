@@ -87,22 +87,47 @@ def _verify_hierarchy(path: Path, octree_size: int, first_chunk_size: int) -> No
     if first_chunk_size < _NODE.size or first_chunk_size > size or first_chunk_size % _NODE.size:
         raise ValueError("Potree 首层级块无效。")
     geometry_nodes = 0
+    proxy_chunks: list[tuple[int, int]] = [(0, first_chunk_size)]
+    visited_chunks: set[tuple[int, int]] = set()
+    visited_records: set[int] = set()
     with path.open("rb") as handle:
-        while record := handle.read(_NODE.size):
-            if len(record) != _NODE.size:
+        while proxy_chunks:
+            chunk_offset, chunk_size = proxy_chunks.pop()
+            if (chunk_offset, chunk_size) in visited_chunks:
+                raise ValueError("Potree 层级代理形成重复引用。")
+            visited_chunks.add((chunk_offset, chunk_size))
+            if chunk_offset % _NODE.size or chunk_size % _NODE.size or chunk_size < _NODE.size or chunk_offset + chunk_size > size:
+                raise ValueError("Potree 层级块越界。")
+            handle.seek(chunk_offset)
+            records = handle.read(chunk_size)
+            if len(records) != chunk_size:
                 raise ValueError("Potree 层级记录截断。")
-            node_type, children, points, offset, byte_size = _NODE.unpack(record)
-            empty_inner = node_type == 0 and children != 0 and points == 0 and byte_size == 0
-            if node_type not in (0, 1, 2) or (not empty_inner and (points == 0 or byte_size == 0)):
-                raise ValueError("Potree 层级节点无效。")
-            if node_type == 2:
-                if offset % _NODE.size or byte_size % _NODE.size or offset + byte_size > size:
-                    raise ValueError("Potree 层级代理偏移越界。")
-            else:
-                if offset + byte_size > octree_size:
-                    raise ValueError("Potree 八叉树数据偏移越界。")
-                if byte_size:
-                    geometry_nodes += 1
+            expected_nodes = 1
+            for index in range(0, chunk_size, _NODE.size):
+                address = chunk_offset + index
+                if address in visited_records:
+                    raise ValueError("Potree 层级块重叠。")
+                visited_records.add(address)
+                if expected_nodes == 0:
+                    raise ValueError("Potree 层级存在孤立节点。")
+                expected_nodes -= 1
+                node_type, children, points, offset, byte_size = _NODE.unpack_from(records, index)
+                empty_inner = node_type == 0 and children != 0 and points == 0 and byte_size == 0
+                empty_leaf = node_type == 1 and children == 0 and points == 0 and offset == 0 and byte_size == 0
+                if node_type not in (0, 1, 2) or (not (empty_inner or empty_leaf) and (points == 0 or byte_size == 0)):
+                    raise ValueError("Potree 层级节点无效。")
+                if node_type == 2:
+                    if offset % _NODE.size or byte_size % _NODE.size or byte_size < _NODE.size or offset + byte_size > size:
+                        raise ValueError("Potree 层级代理偏移越界。")
+                    proxy_chunks.append((offset, byte_size))
+                else:
+                    expected_nodes += children.bit_count()
+                    if offset + byte_size > octree_size:
+                        raise ValueError("Potree 八叉树数据偏移越界。")
+                    if byte_size:
+                        geometry_nodes += 1
+            if expected_nodes:
+                raise ValueError("Potree 层级子节点缺失。")
     if geometry_nodes == 0:
         raise ValueError("Potree 层级没有可加载的点数据。")
 
@@ -125,18 +150,48 @@ def _validate_output(source: LasSource, run_dir: Path) -> ValidatedPotreeOutput:
         raise ValueError("Potree 点数与来源不符。")
     if metadata.get("encoding") not in ("DEFAULT", "BROTLI"):
         raise ValueError("Potree 编码不受支持。")
+    for name in ("offset", "scale"):
+        values = metadata.get(name)
+        if not isinstance(values, list) or len(values) != 3 or any(
+            not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+            or (name == "scale" and value <= 0)
+            for value in values
+        ):
+            raise ValueError(f"Potree {name} 元数据无效。")
+    spacing = metadata.get("spacing")
+    if not isinstance(spacing, (int, float)) or isinstance(spacing, bool) or not math.isfinite(spacing) or spacing <= 0:
+        raise ValueError("Potree spacing 元数据无效。")
     attributes = metadata.get("attributes")
-    if not isinstance(attributes, list) or not any(
-        isinstance(item, dict) and item.get("name") == "position" for item in attributes
-    ):
+    if not isinstance(attributes, list) or not attributes:
+        raise ValueError("Potree 属性列表缺失。")
+    type_sizes = {"int8": 1, "uint8": 1, "int16": 2, "uint16": 2, "int32": 4, "uint32": 4, "float": 4, "double": 8}
+    for item in attributes:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"]:
+            raise ValueError("Potree 属性名称无效。")
+        count = item.get("numElements")
+        element_size = item.get("elementSize")
+        value_type = item.get("type")
+        if (
+            not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 4
+            or not isinstance(value_type, str) or not isinstance(element_size, int)
+            or element_size != type_sizes.get(value_type)
+            or item.get("size") != count * element_size
+        ):
+            raise ValueError("Potree 属性布局无效。")
+        for edge in ("min", "max"):
+            values = item.get(edge)
+            if not isinstance(values, list) or len(values) != count or any(
+                not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+                for value in values
+            ):
+                raise ValueError("Potree 属性范围无效。")
+        if any(low > high for low, high in zip(item["min"], item["max"])):
+            raise ValueError("Potree 属性范围无效。")
+    position = next((item for item in attributes if item["name"] == "position"), None)
+    if position is None or position["type"] != "int32" or position["numElements"] != 3:
         raise ValueError("Potree 位置属性缺失。")
-    if not any(
-        isinstance(item, dict)
-        and item.get("name") in ("rgb", "rgba")
-        and isinstance(item.get("size"), int)
-        and item["size"] >= 3
-        for item in attributes
-    ):
+    if not any(item["name"] in ("rgb", "rgba") and item["numElements"] in (3, 4)
+               and item["type"] in ("uint8", "uint16") for item in attributes):
         raise ValueError("Potree RGB 属性缺失。")
     bounds = _bounds(metadata, source)
     hierarchy = metadata.get("hierarchy")
