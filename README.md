@@ -181,6 +181,8 @@ The current workbench includes project summary, asset facts, a canvas point-clou
 .\frontend\viewer.html
 ```
 
+候选 LAS 直接预览入口：在展示页点击“直接预览 LAS”，或打开 `frontend/las-preview.html`。选择本机一个或多个 `.las` 文件后，可以在平台内旋转、缩放、切换顶视/正视/侧视；文件只在浏览器本地读取，不经过 API 上传，也不会修改源文件。第一版仅支持未压缩 LAS 1.2/1.3、带 RGB 的点格式 2/3，单文件不得超过 128 MiB 或 750,000 点；合格文件显示全部原始点，不做隐式抽样。大场景和 LAZ 应走后续分层转换/发布路径。此预览用于观察形状，不等于分割准确率或 Mesh 精度验收。
+
 最小 API 服务 / Minimal API service:
 
 ```powershell
