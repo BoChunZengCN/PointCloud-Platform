@@ -25,6 +25,8 @@ a {
   color: inherit;
 }
 
+[hidden] { display: none !important; }
+
 .viewer-shell {
   min-height: 100vh;
   display: grid;

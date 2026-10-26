@@ -75,6 +75,12 @@ from pc_system.commands.scan_to_mesh import (
     run_release_mesh,
     run_show_mesh_run,
 )
+from pc_system.commands.full_preview import (
+    run_activate_full_preview_version,
+    run_list_full_preview_versions,
+    run_prepare_full_preview,
+    run_serve_full_preview,
+)
 from pc_system.mesh_worker_deployment import resolve_admin_mesh_worker
 from pc_system.commands.phase3 import (
     run_check_deployment_package,
@@ -640,6 +646,14 @@ def main(
                 request_id=args.request_id,
                 idempotency_key=args.idempotency_key,
             )
+        if args.command == "prepare-full-preview":
+            return run_prepare_full_preview(args.project_root, args.source_las, args.asset_id, args.converter_path)
+        if args.command == "list-full-preview-versions":
+            return run_list_full_preview_versions(args.project_root, args.asset_id)
+        if args.command == "activate-full-preview-version":
+            return run_activate_full_preview_version(args.project_root, args.asset_id, args.run_id)
+        if args.command == "serve-full-preview":
+            return run_serve_full_preview(args.project_root, args.frontend_root, args.viewer_root, args.port)
         if args.command in {"list-model-decision-items", "show-model-decision-item", "decide-model-match",
                             "list-model-bindings", "supersede-model-binding", "restore-model-binding"}:
             return run_phase15d_command(**vars(args))

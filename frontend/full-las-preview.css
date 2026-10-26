@@ -1,0 +1,30 @@
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { color: #eef5ef; background: #0c1113; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+.potree_container, #potree_render_area { position: absolute; inset: 0; width: 100%; height: 100%; }
+#potree_render_area { background: radial-gradient(circle at center, #26383b, #0c1113 64%); }
+#potree_sidebar_container { display: none; }
+.preview-toolbar {
+  position: absolute; z-index: 20; top: 16px; left: 16px; width: min(470px, calc(100vw - 32px));
+  padding: 16px; border: 1px solid #405457; border-radius: 14px;
+  background: rgba(12, 20, 23, .92); box-shadow: 0 12px 36px rgba(0, 0, 0, .32);
+  backdrop-filter: blur(12px);
+}
+.preview-heading { display: flex; gap: 18px; align-items: center; }
+.preview-heading a { color: #8fdfc5; white-space: nowrap; text-decoration: none; }
+.preview-heading strong, .preview-heading span { display: block; }
+.preview-heading strong { font-size: 18px; }
+.preview-heading span { margin-top: 3px; color: #afc4c5; font-size: 13px; }
+.preview-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 15px 0; }
+.preview-facts span { padding: 8px 10px; border-radius: 8px; background: #203035; font-size: 12px; }
+.preview-facts strong { display: block; margin-top: 3px; color: #fff; font-size: 16px; }
+.preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.preview-controls label { width: 100%; font-size: 13px; }
+.preview-controls input { width: 100%; accent-color: #75caaa; }
+.preview-controls button { padding: 7px 10px; border: 1px solid #46605d; border-radius: 7px; color: #eef5ef; background: #273d3d; cursor: pointer; }
+.preview-controls button:hover { background: #37605a; }
+#load-status { margin: 15px 0 8px; font-size: 13px; }
+#load-status[data-state="error"] { color: #ff9c8f; }
+#load-status[data-state="ready"] { color: #9ee6bd; }
+.preview-toolbar small { color: #abc1be; line-height: 1.4; }
+.preview-toolbar code { overflow-wrap: anywhere; }
+@media (max-width: 580px) { .preview-toolbar { top: 8px; left: 8px; width: calc(100vw - 16px); padding: 12px; } }

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LAS 点云直接预览 · 点云平台</title>
+    <link rel="stylesheet" href="las-preview.css" />
+  </head>
+  <body>
+    <main class="preview-shell">
+      <nav class="top-nav" aria-label="平台导航">
+        <a href="index.html">项目驾驶舱</a>
+        <a href="viewer.html">项目展示页</a>
+        <span>LAS 点云直接预览</span>
+      </nav>
+
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">POINT CLOUD PLATFORM · LOCAL REVIEW</p>
+          <h1>LAS 点云直接预览</h1>
+          <p>选择本机候选 LAS，在平台内旋转、缩放和检查真实原始点。文件不会上传或修改。</p>
+        </div>
+        <span class="scope-chip">实验性质量检查</span>
+      </header>
+
+      <div class="workbench">
+        <aside class="controls" aria-label="点云文件与视角控制">
+          <section class="control-card">
+            <h2>选择点云</h2>
+            <label class="file-pick" for="las-files">选择一个或多个 LAS 文件</label>
+            <input id="las-files" type="file" accept=".las" multiple />
+            <p class="hint">支持 LAS 1.2/1.3、点格式 2/3。每个文件最多 128 MiB、750,000 点；候选点在限额内全部显示，不做抽样。</p>
+            <label class="field-label" for="las-file-list">当前文件</label>
+            <select id="las-file-list" disabled aria-label="切换已选择的 LAS 文件">
+              <option>尚未选择文件</option>
+            </select>
+          </section>
+
+          <section class="control-card">
+            <h2>观察视角</h2>
+            <div class="view-buttons" role="group" aria-label="观察视角">
+              <button type="button" data-view="free">自由</button>
+              <button type="button" data-view="top">顶视 XY</button>
+              <button type="button" data-view="front">正视 XZ</button>
+              <button type="button" data-view="side">侧视 YZ</button>
+            </div>
+            <label class="field-label" for="point-size">点大小 <output id="point-size-value">2</output></label>
+            <input id="point-size" type="range" min="1" max="6" step="1" value="2" />
+            <p class="hint">拖动旋转；Shift + 拖动平移；滚轮缩放。</p>
+          </section>
+
+          <section class="control-card">
+            <h2>当前点云</h2>
+            <dl id="cloud-facts" class="facts">
+              <dt>状态</dt><dd>等待文件</dd>
+            </dl>
+            <p class="quality-note">此页只验证点云可视化和局部形状，不代表已完成管线/设备分割或 Mesh 精度验收。</p>
+          </section>
+        </aside>
+
+        <section class="stage" aria-label="三维点云画布">
+          <div class="stage-bar">
+            <span class="live-indicator" aria-hidden="true"></span>
+            <strong id="preview-status" role="status" aria-live="polite">请选择 LAS 文件</strong>
+            <span id="point-counter">0 点</span>
+          </div>
+          <canvas id="las-canvas" aria-label="可交互的三维 LAS 点云"></canvas>
+          <div class="stage-footer">
+            <span>坐标单位按 m 显示；仅解析文件中记录的 XYZ 与 RGB。</span>
+            <span id="view-name">自由视角</span>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="las-preview-core.js" defer></script>
+    <script src="las-preview.js" defer></script>
+  </body>
+</html>

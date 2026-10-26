@@ -28,6 +28,25 @@ let activeDeliveryId = "";
 
 async function loadRegistry() {
   try {
+    const response = await fetch("/api/full-previews", { cache: "no-store" });
+    if (response.ok) {
+      const catalog = await response.json();
+      if (Array.isArray(catalog.previews)) {
+        const assets = catalog.previews.map((item) => ({
+          asset_id: item.asset_id,
+          file_name: item.source_name || item.asset_id,
+          point_count: item.source_point_count,
+          has_rgb: item.rgb_available,
+          full_preview_url: `full-las-preview.html?asset_id=${encodeURIComponent(item.asset_id)}`,
+          local_full_preview: true,
+        }));
+        return { asset_count: assets.length, assets, local_full_preview: true };
+      }
+    }
+  } catch (_error) {
+    // 非本机分层预览服务时，继续使用原有成果登记。
+  }
+  try {
     const response = await fetch(REGISTRY_URL, { cache: "no-store" });
     if (!response.ok) {
       throw new Error("asset_index.json unavailable");
@@ -59,7 +78,7 @@ function viewerUrlForAssetId(assetId) {
 }
 
 function selectShowcaseAsset(registry, selectedAssetId) {
-  return registry.assets?.find((asset) => asset.asset_id === selectedAssetId) || registry.assets?.[0] || FALLBACK_ASSET;
+  return registry.assets?.find((asset) => asset.asset_id === selectedAssetId) || registry.assets?.[0] || (registry.local_full_preview ? null : FALLBACK_ASSET);
 }
 
 function switchShowcaseAsset(assetId) {
@@ -74,6 +93,10 @@ function workspaceHref(path) {
 }
 
 function deliveryLinks(asset) {
+  if (asset.local_full_preview) {
+    return [{ id: "potree", outputKey: "metadata_url", kind: "potree", title: "完整分层点云",
+      label: "已发布点云查看器", href: asset.full_preview_url }];
+  }
   const viewerPaths = asset.viewer_paths || {};
   const previewPaths = asset.preview_paths || {};
   const reportPaths = asset.report_paths || {};
@@ -171,7 +194,10 @@ function deliveryItemStatus(item) {
   return { status: "openable", label: "可打开", note: "该链接会在新页面打开。" };
 }
 
-function layerItems() {
+function layerItems(localPreview = false) {
+  if (localPreview) {
+    return [{ id: "rgb", label: "RGB 点云", enabled: true }];
+  }
   return [
     { id: "rgb", label: "RGB 点云", enabled: true },
     { id: "segment", label: "分割类别", enabled: true },
@@ -181,6 +207,9 @@ function layerItems() {
 }
 
 function viewerTasks(asset) {
+  if (asset.local_full_preview) {
+    return [{ status: "done", label: "分层预览已发布", note: "点击完整点云入口查看当前版本" }];
+  }
   return [
     { status: "done", label: "QA 完成", note: asset.report_paths?.quality_report ? "质量报告可打开" : "等待质量报告" },
     { status: "active", label: "Viewer 发布", note: asset.viewer_paths?.viewer_url || asset.preview_paths?.phase2_viewer ? "展示入口可用" : "等待 Phase 2 Viewer" },
@@ -249,7 +278,7 @@ function hideViewerEmptyState() {
 
 function renderShowcaseAssetSwitcher(registry, selectedAsset) {
   const list = document.getElementById("showcase-asset-switcher");
-  const assets = registry.assets?.length ? registry.assets : [FALLBACK_ASSET];
+  const assets = registry.assets?.length ? registry.assets : (registry.local_full_preview ? [] : [FALLBACK_ASSET]);
   const buttons = assets.map((asset) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -265,9 +294,9 @@ function renderShowcaseAssetSwitcher(registry, selectedAsset) {
   list.replaceChildren(...buttons);
 }
 
-function renderLayerControls() {
+function renderLayerControls(localPreview = false) {
   const list = document.getElementById("layer-controls");
-  const controls = layerItems().map((item) => {
+  const controls = layerItems(localPreview).map((item) => {
     const label = document.createElement("label");
     const input = document.createElement("input");
     input.type = "checkbox";
@@ -356,6 +385,10 @@ function statusElement(state) {
 }
 
 function renderInitialEmbeddedViewer(asset, deliveryStatus = null) {
+  if (asset.local_full_preview) {
+    clearEmbeddedViewer("点击“完整点云分层预览”进入查看器。");
+    return;
+  }
   const initial = applyDeliveryStatus(deliveryLinks(asset), deliveryStatus).find((item) => deliveryItemStatus(item).status === "embeddable");
   if (initial) {
     renderEmbeddedViewer(initial);
@@ -367,15 +400,46 @@ function renderInitialEmbeddedViewer(asset, deliveryStatus = null) {
 async function renderShowcase(registry, selectedAssetId = selectedAssetIdFromUrl()) {
   activeRegistry = registry;
   const asset = selectShowcaseAsset(registry, selectedAssetId);
+  if (!asset) {
+    document.getElementById("viewer-title").textContent = "暂无已发布完整点云";
+    document.getElementById("showcase-summary").textContent = "本机服务尚无可查看的完整点云版本。";
+    renderShowcaseAssetSwitcher(registry, null);
+    renderLayerControls(true);
+    document.getElementById("asset-facts").replaceChildren();
+    document.getElementById("viewer-task-list").replaceChildren();
+    document.getElementById("showcase-links").replaceChildren();
+    clearEmbeddedViewer("先在本机准备并发布完整点云版本。");
+    document.getElementById("full-las-nav").hidden = true;
+    return;
+  }
   const deliveryStatus = await fetchDeliveryStatus(asset.asset_id);
   document.getElementById("viewer-title").textContent = `${asset.asset_id} 三维成果查看器`;
   document.getElementById("showcase-summary").textContent = `${asset.asset_id} · ${asset.file_name || asset.asset_id} · ${registry.asset_count} 个资产可展示`;
   renderShowcaseAssetSwitcher(registry, asset);
-  renderLayerControls();
+  renderLayerControls(registry.local_full_preview);
   renderAssetFacts(asset);
   renderViewerTasks(asset);
   renderShowcaseLinks(asset, deliveryStatus);
   renderInitialEmbeddedViewer(asset, deliveryStatus);
+  void refreshFullPreviewEntry(asset.asset_id);
+}
+
+async function refreshFullPreviewEntry(assetId) {
+  const link = document.getElementById("full-las-nav");
+  if (!link) return;
+  link.hidden = true;
+  try {
+    const response = await fetch("/api/full-previews", { cache: "no-store" });
+    if (!response.ok) return;
+    const catalog = await response.json();
+    const published = catalog.previews?.find((item) => item.asset_id === assetId);
+    if (!published?.run_id) return;
+    link.href = `full-las-preview.html?asset_id=${encodeURIComponent(published.asset_id)}`;
+    link.textContent = `完整点云分层预览 · ${published.asset_id}`;
+    link.hidden = false;
+  } catch (_error) {
+    // 旧的静态展示模式没有本机完整预览服务时，入口保持隐藏。
+  }
 }
 
 function textElement(tagName, text) {

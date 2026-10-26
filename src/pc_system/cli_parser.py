@@ -712,6 +712,34 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_release.add_argument("--operation-id", required=True)
     mesh_release.add_argument("--request-id", required=True)
     mesh_release.add_argument("--idempotency-key", required=True)
+    full_prepare = subparsers.add_parser(
+        "prepare-full-preview", help="从完整 LAS 准备可回滚的本机分层预览。"
+    )
+    full_prepare.add_argument("--project-root", required=True, type=Path)
+    full_prepare.add_argument("--source-las", required=True, type=Path)
+    full_prepare.add_argument("--asset-id", required=True)
+    full_prepare.add_argument("--converter-path", required=True, type=Path)
+
+    full_list = subparsers.add_parser(
+        "list-full-preview-versions", help="列出完整 LAS 预览的已完成版本。"
+    )
+    full_list.add_argument("--project-root", required=True, type=Path)
+    full_list.add_argument("--asset-id", required=True)
+
+    full_activate = subparsers.add_parser(
+        "activate-full-preview-version", help="切换到既有完整 LAS 预览版本。"
+    )
+    full_activate.add_argument("--project-root", required=True, type=Path)
+    full_activate.add_argument("--asset-id", required=True)
+    full_activate.add_argument("--run-id", required=True)
+
+    full_serve = subparsers.add_parser(
+        "serve-full-preview", help="在 127.0.0.1 启动完整点云只读预览服务。"
+    )
+    full_serve.add_argument("--project-root", required=True, type=Path)
+    full_serve.add_argument("--frontend-root", required=True, type=Path)
+    full_serve.add_argument("--viewer-root", required=True, type=Path)
+    full_serve.add_argument("--port", type=int, default=8765)
     return parser
 
 
