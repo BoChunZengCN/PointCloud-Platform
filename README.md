@@ -181,7 +181,40 @@ The current workbench includes project summary, asset facts, a canvas point-clou
 .\frontend\viewer.html
 ```
 
-候选 LAS 直接预览入口：在展示页点击“直接预览 LAS”，或打开 `frontend/las-preview.html`。选择本机一个或多个 `.las` 文件后，可以在平台内旋转、缩放、切换顶视/正视/侧视；文件只在浏览器本地读取，不经过 API 上传，也不会修改源文件。第一版仅支持未压缩 LAS 1.2/1.3、带 RGB 的点格式 2/3，单文件不得超过 128 MiB 或 750,000 点；合格文件显示全部原始点，不做隐式抽样。大场景和 LAZ 应走后续分层转换/发布路径。此预览用于观察形状，不等于分割准确率或 Mesh 精度验收。
+候选 LAS 直接预览入口：在展示页点击“直接预览 LAS”，或打开 `frontend/las-preview.html`。选择本机一个或多个 `.las` 文件后，可以在平台内旋转、缩放、切换顶视/正视/侧视；文件只在浏览器本地读取，不经过 API 上传，也不会修改源文件。第一版仅支持未压缩 LAS 1.2/1.3、带 RGB 的点格式 2/3，单文件不得超过 128 MiB 或 750,000 点；合格文件显示全部原始点，不做隐式抽样。大场景 LAS 请走下述完整分层预览路径；LAZ 仍待后续适配。此预览用于观察形状，不等于分割准确率或 Mesh 精度验收。
+
+### 完整 LAS 分层预览（本机）
+
+针对超过直读上限的完整彩色 LAS，平台现可只读检查源文件，以 PotreeConverter 2.1.1 生成版本化分层表示，并经 `127.0.0.1` 只读服务按 HTTP Range 加载。原始文件不复制、不上传、不改写；浏览器的“当前显示点”受点预算限制，与“源文件总点数”分别显示。已用 47,899,752 点的 `machine zoom.las` 完整文件完成真实转换与 Chromium 查看验证，见[中文验收记录](docs/2026-10-26-full-las-preview-validation.md)。
+
+先从[PotreeConverter 官方发布](https://github.com/potree/PotreeConverter/releases/tag/2.1.1)和[Potree 查看器官方发布](https://github.com/potree/potree/releases/tag/1.8.2)下载固定版本，记录并核对本机 SHA-256（本次探针值见[兼容性记录](docs/2026-10-26-potree-compatibility-probe.md)），分别解压到 Git 忽略的 `workspace/potree-converter-2.1.1/`、`workspace/potree-viewer-1.8.2/`。程序会在转换前校验执行文件指纹、服务启动时校验查看器脚本指纹；不匹配时拒绝运行。在仓库代码目录执行：
+
+```powershell
+$projectRoot = "D:\01_Codex Project\point-cloud-system"
+$frontendRoot = (Resolve-Path .\frontend).Path
+$env:PYTHONPATH = "src"
+python -m pc_system.cli prepare-full-preview `
+  --project-root "$projectRoot" `
+  --source-las "D:\PointCloud Test Sample\machine zoom.las" `
+  --asset-id machine-zoom-full `
+  --converter-path "$projectRoot\workspace\potree-converter-2.1.1\PotreeConverter_windows_x64\PotreeConverter.exe"
+python -m pc_system.cli serve-full-preview `
+  --project-root "$projectRoot" `
+  --frontend-root "$frontendRoot" `
+  --viewer-root "$projectRoot\workspace\potree-viewer-1.8.2\Potree_1.8.2" `
+  --port 8765
+```
+
+如果资产已经有成功发布的活动版本，只执行 `serve-full-preview` 即可；不要为了查看而重复执行耗时的完整转换。只有首次准备或显式创建新版本时才运行 `prepare-full-preview`。
+
+服务启动后，在浏览器打开 `http://127.0.0.1:8765/frontend/viewer.html`，点击仅在成功发布后出现的“完整点云分层预览”；也可打开 `http://127.0.0.1:8765/frontend/full-las-preview.html?asset_id=machine-zoom-full`。用 Ctrl+C 停止服务。列出历史与回滚：
+
+```powershell
+python -m pc_system.cli list-full-preview-versions --project-root "$projectRoot" --asset-id machine-zoom-full
+python -m pc_system.cli activate-full-preview-version --project-root "$projectRoot" --asset-id machine-zoom-full --run-id <已完成的运行 ID>
+```
+
+活动版本切换不会删除旧运行；已打开的页面固定在原 run-id。失败运行保留诊断记录，不自动删除。若异常退出留下 `.prepare-lock`，先确认没有转换进程仍在运行，再人工处理锁目录；不要盲目清理其他运行产物。本功能是完整点云可视化，不代表设备/管道分割、Mesh 或 CAD 已通过验收。当前大文件路径仅支持未压缩 RGB LAS 1.2/1.3 点格式 2/3；其他输入格式按后续适配器阶段实施。
 
 最小 API 服务 / Minimal API service:
 
