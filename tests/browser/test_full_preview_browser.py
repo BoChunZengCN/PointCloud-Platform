@@ -70,7 +70,10 @@ def test_real_full_scan_is_browsable_without_requesting_original_las(page):
     seen = []
     page.on("response", lambda response: seen.append((response.url, response.status)))
     try:
-        page.goto(f"http://127.0.0.1:{server.server_port}/frontend/viewer.html")
+        page.goto(
+            f"http://127.0.0.1:{server.server_port}/frontend/viewer.html"
+            "?asset_id=machine-zoom-full"
+        )
         expect(page.locator("#full-las-nav")).to_be_visible(timeout=10000)
         expect(page.locator("#asset-facts")).to_contain_text("machine-zoom-full")
         expect(page.locator("#asset-facts")).to_contain_text("47,899,752")

@@ -216,6 +216,14 @@ python -m pc_system.cli activate-full-preview-version --project-root "$projectRo
 
 活动版本切换不会删除旧运行；已打开的页面固定在原 run-id。失败运行保留诊断记录，不自动删除。若异常退出留下 `.prepare-lock`，先确认没有转换进程仍在运行，再人工处理锁目录；不要盲目清理其他运行产物。本功能是完整点云可视化，不代表设备/管道分割、Mesh 或 CAD 已通过验收。当前大文件路径仅支持未压缩 RGB LAS 1.2/1.3 点格式 2/3；其他输入格式按后续适配器阶段实施。
 
+### 私有真实 LAS 的 CI 验收
+
+公开仓库的普通 PR 检查不下载机电房数据。独立工作流 `私有真实 LAS 验收` 只在 `main` 更新或从 `main` 手动触发时，使用 GitHub 托管的 Windows 运行器读取独立私有仓库 `BoChunZengCN/PointCloud-Platform-Private-Fixtures` 的 Release `real-las-v1` 附件 `filtered-points-v1.las`。这是一项**合并后真实数据验收**，不是 PR 合并前门禁；不能把普通 PR 绿色状态解释为机电房样本已通过。
+
+配置时先核对样本仓库保持 `PRIVATE`，LAS 只作为 Release 附件，不进入任何仓库 Git 历史。为该私有仓库创建有到期日的细粒度令牌，仅授予 `Contents: read`，在公开平台仓库的 Actions 环境 `private-real-las` 中保存为 `PRIVATE_FIXTURE_READ_TOKEN`。不要把令牌发到聊天、写进仓库文件或复用个人宽权限令牌。到期前在 GitHub 设置中轮换；缺少或失效时，私有作业应明确失败，不会跳过。
+
+工作流会核对下载文件的固定大小、SHA-256 和 8,394,852 点，再完整转换为 Potree2，最后用 Chromium 验证 RGB、可见点、`hierarchy.bin` 与 `octree.bin` 的 HTTP 206 Range 请求，以及浏览器未读取原始 `.las`。原始样本、转换产物、截图和 trace 不上传为公开 Artifacts。手动复验请在 Actions 中选择 `私有真实 LAS 验收`，从 `main` 运行；若失败，先按步骤确认私有仓库权限、令牌有效期、附件指纹及固定版本 Potree 工具，不要为求通过而取消哈希校验或改成 `skip`。完整边界见[中文设计规格](docs/superpowers/specs/2026-10-28-private-real-las-ci-design.md)。
+
 最小 API 服务 / Minimal API service:
 
 ```powershell

@@ -1,0 +1,87 @@
+name: 私有真实 LAS 验收
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-real-las:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: private-real-las
+    env:
+      PRIVATE_REAL_LAS_PROJECT_ROOT: ${{ github.workspace }}
+      PRIVATE_REAL_LAS_ASSET_ID: private-real-las
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: 安装平台与浏览器依赖
+        shell: pwsh
+        run: |
+          python -m pip install -e '.[test,browser-test,scanned-reference]'
+          if ($LASTEXITCODE -ne 0) { throw 'Python 依赖安装失败。' }
+          python -m playwright install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium 安装失败。' }
+      - name: 下载并核对固定版本 Potree 工具
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'potree-tools'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          gh release download 2.1.1 --repo potree/PotreeConverter --pattern 'PotreeConverter_2.1.1_x64_windows.zip' --dir $tools
+          if ($LASTEXITCODE -ne 0) { throw '固定版本转换器下载失败。' }
+          gh release download 1.8.2 --repo potree/potree --pattern 'Potree_1.8.2.zip' --dir $tools
+          if ($LASTEXITCODE -ne 0) { throw '固定版本查看器下载失败。' }
+          $converterZip = Join-Path $tools 'PotreeConverter_2.1.1_x64_windows.zip'
+          $viewerZip = Join-Path $tools 'Potree_1.8.2.zip'
+          if ((Get-FileHash -LiteralPath $converterZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '8b4a70194fa85ceafa51e017b58e455cf3539edc9ab212b2c92b4a1f2b15e887') { throw '转换器下载包指纹不符。' }
+          if ((Get-FileHash -LiteralPath $viewerZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'c140a8bce0ce129de762fbc0fd3ba7c21120ffd36d423dd2755abb39f32aebe5') { throw '查看器下载包指纹不符。' }
+          $converterBase = Join-Path $tools 'converter'
+          $viewerBase = Join-Path $tools 'viewer'
+          Expand-Archive -LiteralPath $converterZip -DestinationPath $converterBase
+          Expand-Archive -LiteralPath $viewerZip -DestinationPath $viewerBase
+          $converter = Join-Path $converterBase 'PotreeConverter_windows_x64\PotreeConverter.exe'
+          $viewer = Join-Path $viewerBase 'Potree_1.8.2'
+          python -c 'import sys; from pathlib import Path; from pc_system.full_preview_dependencies import verify_converter_binary, verify_viewer_bundle; verify_converter_binary(Path(sys.argv[1])); verify_viewer_bundle(Path(sys.argv[2]))' $converter $viewer
+          if ($LASTEXITCODE -ne 0) { throw '解压后的 Potree 文件指纹不符。' }
+          "PRIVATE_REAL_LAS_CONVERTER_PATH=$converter" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+          "PRIVATE_REAL_LAS_VIEWER_ROOT=$viewer" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: 从私有 Release 下载真实样本
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_FIXTURE_READ_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw '私有样本只读凭据缺失。' }
+          $sampleDir = Join-Path $env:RUNNER_TEMP 'private-las'
+          New-Item -ItemType Directory -Path $sampleDir | Out-Null
+          gh release download real-las-v1 --repo BoChunZengCN/PointCloud-Platform-Private-Fixtures --pattern 'filtered-points-v1.las' --dir $sampleDir
+          if ($LASTEXITCODE -ne 0) { throw '私有样本下载失败。' }
+          $sample = Join-Path $sampleDir 'filtered-points-v1.las'
+          if (-not (Test-Path -LiteralPath $sample -PathType Leaf)) { throw '私有样本附件缺失。' }
+          "PRIVATE_REAL_LAS_SAMPLE_PATH=$sample" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: 核对原始 LAS 大小、指纹和点数
+        shell: pwsh
+        run: |
+          python scripts/verify_private_real_las.py $env:PRIVATE_REAL_LAS_SAMPLE_PATH
+          if ($LASTEXITCODE -ne 0) { throw '私有样本校验失败。' }
+      - name: 完整转换并发布 8394852 点预览
+        shell: pwsh
+        run: |
+          python -m pc_system.cli prepare-full-preview --project-root $env:GITHUB_WORKSPACE --source-las $env:PRIVATE_REAL_LAS_SAMPLE_PATH --asset-id private-real-las --converter-path $env:PRIVATE_REAL_LAS_CONVERTER_PATH
+          if ($LASTEXITCODE -ne 0) { throw '真实样本转换或发布失败。' }
+      - name: Chromium 验证完整点云和 HTTP Range
+        shell: pwsh
+        run: |
+          python -m pytest ci_private/test_real_las_browser.py -q --browser chromium --tracing off --screenshot off -p no:cacheprovider
+          if ($LASTEXITCODE -ne 0) { throw '真实样本浏览器验收失败。' }
