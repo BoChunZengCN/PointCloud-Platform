@@ -1,6 +1,7 @@
 """有本机官方资源和真实小样本时验证 Potree 页面与 Range 请求。"""
 
 import threading
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,11 +11,24 @@ from pc_system.full_preview_server import create_preview_server
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT.parents[1]
+PROJECT = Path(
+    subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        text=True,
+    ).strip()
+).parent
 VIEWER = PROJECT / "workspace/potree-viewer-1.8.2/Potree_1.8.2"
 RUN_ID = "8ad306aee5a34274a4733a0b02e86991"
 ASSET_ID = "machine-zoom-s50"
 FULL_RUN_ID = "c2f11101312e404d986dcad02e69c05e"
+
+
+def test_real_preview_assets_use_shared_repository_root():
+    common_dir = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        text=True,
+    ).strip()
+    assert PROJECT == Path(common_dir).parent
 
 
 def test_real_small_preview_renders_rgb_with_range_requests(page):
