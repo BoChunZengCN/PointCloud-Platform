@@ -3,33 +3,18 @@
 import os
 import threading
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import pytest
 from playwright.sync_api import expect
 
 from pc_system.full_preview_publication import get_active_preview
 from pc_system.full_preview_server import create_preview_server
+from ci_private.original_las_guard import OriginalLasRequestGuard
 
 
 SOURCE_POINTS = 8_394_852
 SOURCE_SHA256 = "ee1ac0dc4f49f9634d803d4a62313fda903d4d07d08dc86c5bd4afd040bffb69"
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
-
-
-class OriginalLasRequestGuard:
-    """按请求事件检查原始 LAS，包括失败或中止的请求。"""
-
-    def __init__(self):
-        self.paths = []
-
-    def observe(self, request):
-        path = unquote(urlsplit(request.url).path)
-        if path.casefold().endswith(".las"):
-            self.paths.append(path)
-
-    def assert_none(self):
-        assert not self.paths, f"浏览器请求了原始 LAS：{', '.join(self.paths)}"
 
 
 def _private_preview():

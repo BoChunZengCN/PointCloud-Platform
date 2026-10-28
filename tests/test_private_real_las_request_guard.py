@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ci_private.test_real_las_browser import OriginalLasRequestGuard
+from ci_private.original_las_guard import OriginalLasRequestGuard
 
 
 def test_guard_rejects_las_request_with_query_and_mixed_case():

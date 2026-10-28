@@ -24,6 +24,7 @@
 - 新增 `scripts/verify_private_real_las.py`：验证下载文件的大小、SHA-256、LAS 格式和点数；作为专用 CI 前置门禁。
 - 新增 `tests/test_verify_private_real_las.py`：小型合成 LAS 的成功和错误输入回归。
 - 新增 `ci_private/test_real_las_browser.py`：位于常规 `tests/` 收集树之外，仅专用 CI 调用的真实页面、Range 和原始 LAS 不外传断言。
+- 新增 `ci_private/original_las_guard.py`：不依赖 Playwright 的请求事件门禁，供专用浏览器验收与公开单元测试共用。
 - 新增 `.github/workflows/private-real-las.yml`：受控 Windows 作业，下载固定工具与私有附件，执行转换及专用浏览器测试。
 - 新增 `tests/test_private_real_las_workflow.py`：静态检查工作流事件、凭据边界和禁用工件上传。
 - 更新 `README.md`：中文操作说明、手动触发、凭据轮换和“PR 未覆盖私有样本”的边界。
