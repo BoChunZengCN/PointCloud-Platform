@@ -2,6 +2,10 @@
 
 import hashlib
 import importlib
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import laspy
 import pytest
@@ -28,6 +32,32 @@ def _las(tmp_path, *, point_format=2):
 def test_valid_rgb_las_passes_exact_size_hash_and_count(tmp_path):
     path, size, digest = _las(tmp_path)
     assert _verify_fixture()(path, expected_size=size, expected_sha256=digest, expected_points=3) is None
+
+
+def test_cli_success_survives_windows_cp1252_console(tmp_path):
+    path, size, digest = _las(tmp_path)
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import sys; "
+        f"sys.path.insert(0, {str(root / 'src')!r}); "
+        "from scripts import verify_private_real_las as verifier; "
+        f"verifier.EXPECTED_SIZE={size}; "
+        f"verifier.EXPECTED_SHA256={digest!r}; "
+        "verifier.EXPECTED_POINTS=3; "
+        "raise SystemExit(verifier.main(sys.argv[1:]))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(path)],
+        cwd=root,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SHA-256" in result.stdout
 
 
 def test_missing_las_is_rejected(tmp_path):

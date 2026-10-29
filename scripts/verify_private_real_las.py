@@ -34,6 +34,9 @@ def verify_fixture(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows 托管运行器的默认控制台编码可能是 cp1252，不能输出中文。
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="校验受控 CI 的私有真实 LAS 样本")
     parser.add_argument("path", type=Path)
     args = parser.parse_args(argv)
